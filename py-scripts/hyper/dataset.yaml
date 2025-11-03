@@ -1,0 +1,8 @@
+path: ./data/color
+train: train/images
+val: valid/images
+test: test/images
+
+# 类别定义（根据实际情况修改）
+names:
+  0: person

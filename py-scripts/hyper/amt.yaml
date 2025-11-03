@@ -1,0 +1,24 @@
+# 数据增强参数配置
+augment:
+  # HSV色彩空间调整
+  hsv_h: 0.015  # 色调调整 (Hue)
+  hsv_s: 0.7    # 饱和度调整 (Saturation)
+  hsv_v: 0.4    # 明度调整 (Value)
+  
+  # 几何变换
+  degrees: 0.0      # 旋转角度
+  translate: 0.1    # 平移比例
+  scale: 0.5        # 缩放比例
+  shear: 0.0        # 剪切变换
+  perspective: 0.0  # 透视变换
+  
+  # 翻转概率
+  flipud: 0.0   # 垂直翻转概率
+  fliplr: 0.6   # 水平翻转概率
+  
+  # 其他增强技术
+  mosaic: 1.0       # 马赛克增强概率
+  mixup: 0.0        # MixUp增强概率
+  copy_paste: 0.0   # 复制粘贴增强概率
+  auto_augment: randaugment  # 自动增强策略
+  erasing: 0.4      # 随机擦除概率

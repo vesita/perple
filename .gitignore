@@ -1,4 +1,4 @@
-# Python-generated files
+# python 忽略项
 __pycache__/
 *.py[oc]
 build/
@@ -6,10 +6,18 @@ dist/
 wheels/
 *.egg-info
 
-# Virtual environments
+# python 虚拟环境
 .venv
 
 
-# Added by cargo
-
+# rust 忽略项
 /target
+
+
+# yolo 忽略项
+/runs
+
+# 项目忽略项
+/data/color
+/data/depth
+/data/lidar

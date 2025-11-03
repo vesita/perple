@@ -1,30 +1,136 @@
-from ultralytics import YOLO
-import torch
-
-import numpy as np
-import pandas as pd
-import yaml
-import cv2
+#!/usr/bin/env python3
+"""
+YOLO 模型训练脚本
+用于训练自定义数据集的目标检测模型
+"""
 
 import os
+from pathlib import Path
+import sys
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+import torch
+from ultralytics import YOLO
+import yaml
 
-# 
-optimizer_hyper = yaml.safe_load("optimizer.yaml")
-# 
-loss_hyper = yaml.safe_load("loss.yaml")
-# 
-amt_hyper = yaml.safe_load("amt.yaml")
+# 添加项目根目录和py-scripts目录到Python路径
+project_root = Path(__file__).parent.parent.parent.absolute()
+py_scripts_path = project_root / "py-scripts"
+sys.path.insert(0, str(project_root))
+sys.path.insert(0, str(py_scripts_path))
 
-model = YOLO("yolov11n.pt")
+# 导入自定义工具
+from utils import archive_training_results
 
-# 
-match optimizer_hyper["optimizer"]:
-    case "Adam":
-        optimizer = torch.optim.Adam(model.parameters(), lr=optimizer_hyper["lr"])
-    case "SGD":
-        optimizer = torch.optim.SGD(model.parameters(), lr=optimizer_hyper["lr"])
-    case "AdamW":
-        optimizer = torch.optim.AdamW(model.parameters(), lr=optimizer_hyper["lr"])
+
+def find_latest_model_weights(model_records_path):
+    """
+    查找最新的模型权重文件
+    按字典序排序，选择最新的目录中的best.pt文件
+    """
+    # 获取所有训练记录目录
+    record_dirs = [d for d in model_records_path.iterdir() if d.is_dir()]
+    
+    if not record_dirs:
+        return None
+    
+    # 按字典序排序，获取最新的目录
+    latest_dir = sorted(record_dirs, reverse=True)[0]
+    best_pt_path = latest_dir / "weights" / "best.pt"
+    
+    # 检查best.pt是否存在
+    if best_pt_path.exists():
+        return best_pt_path
+    
+    return None
+
+
+def main():
+    """主训练函数"""
+    # 设备选择
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"使用设备: {device}")
+
+    # 路径设置
+    script_dir = Path(__file__).parent.absolute()
+    root_dir = script_dir.parent
+    
+    hyper_path = root_dir / "hyper"
+    model_path = root_dir / "model"
+    
+    # 配置文件路径
+    data_config = hyper_path / "dataset.yaml"
+    train_config_path = hyper_path / "train.yaml"
+    optimizer_config_path = hyper_path / "optimizer.yaml"
+    augment_config_path = hyper_path / "amt.yaml"
+    
+    # 加载训练配置
+    with open(train_config_path, "r") as f:
+        train_config = yaml.safe_load(f)
+    
+    # 加载优化器配置
+    with open(optimizer_config_path, "r") as f:
+        optimizer_hyper = yaml.safe_load(f)
         
+    # 加载数据增强配置
+    with open(augment_config_path, "r") as f:
+        augment_config = yaml.safe_load(f)
+    
+    # 初始化模型 - 优先使用最新的best.pt，备选使用original下的yolo11n.pt
+    model_records_path = model_path / "records"
+    original_model_path = model_path / "original" / "yolo11n.pt"
+    
+    # 尝试查找最新的best.pt
+    latest_model_file = find_latest_model_weights(model_records_path)
+    
+    if latest_model_file and latest_model_file.exists():
+        model_file = latest_model_file
+        print(f"使用最新的模型权重: {model_file}")
+    elif original_model_path.exists():
+        model_file = original_model_path
+        print(f"使用原始模型权重: {model_file}")
+    else:
+        raise FileNotFoundError(f"未找到任何可用的模型文件")
+    
+    model = YOLO(str(model_file))
+    
+    # 准备数据增强参数
+    augment_params = augment_config.get("augment", {})
+    
+    # 执行训练
+    print("开始训练...")
+    results = model.train(
+        data=str(data_config),
+        epochs=train_config["epochs"],
+        imgsz=train_config["image_size"],
+        workers=train_config["workers"],
+        batch=train_config["batch"],
+        optimizer=optimizer_hyper["optimizer"],  # 传递优化器名称而非实例
+        device=device,
+        pretrained=True,
+        name="yolo11n",
+        save=True,
+        save_period=train_config["save_period"],
+        cos_lr=train_config.get("cos_lr", False),  # 启用余弦退火学习率调度
+        **augment_params  # 将数据增强参数传递给训练函数
+    )
+    
+    # 训练完成后自动归档结果
+    print("训练完成，正在归档结果...")
+    try:
+        if archive_training_results():
+            print("训练结果归档成功")
+        else:
+            print("训练结果归档失败")
+    except Exception as e:
+        print(f"归档过程中发生错误: {e}")
+    
+    return results
+
+
+if __name__ == "__main__":
+    try:
+        training_results = main()
+        print("训练成功完成！")
+    except Exception as e:
+        print(f"训练过程中发生错误: {e}")
+        raise
