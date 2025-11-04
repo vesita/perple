@@ -44,6 +44,62 @@ def find_latest_model_weights(model_records_path):
     return None
 
 
+def list_available_models(model_records_path, original_model_path):
+    """
+    列出所有可用的模型供用户选择
+    """
+    models = []
+    
+    # 添加原始模型
+    if original_model_path.exists():
+        models.append(("original", str(original_model_path)))
+    
+    # 添加训练记录中的模型
+    if model_records_path.exists():
+        record_dirs = [d for d in model_records_path.iterdir() if d.is_dir()]
+        # 按修改时间排序，最新的在前面
+        record_dirs.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+        
+        for i, record_dir in enumerate(record_dirs):
+            best_pt_path = record_dir / "weights" / "best.pt"
+            if best_pt_path.exists():
+                models.append((record_dir.name, str(best_pt_path)))
+    
+    return models
+
+
+def select_model_interactive(models):
+    """
+    交互式选择模型
+    """
+    if not models:
+        return None
+    
+    print("\n可用的模型:")
+    print("0. 自动选择 (默认，使用最新的模型)")
+    for i, (name, path) in enumerate(models, 1):
+        print(f"{i}. {name} ({path})")
+    
+    print("\n请选择要使用的模型 (按Enter使用默认选择): ", end="")
+    try:
+        choice = input().strip()
+        if not choice:  # 按Enter键使用默认选择
+            return None  # 返回None表示使用默认逻辑
+        
+        choice_idx = int(choice)
+        if choice_idx == 0:
+            return None  # 使用默认逻辑
+        elif 1 <= choice_idx <= len(models):
+            return models[choice_idx - 1][1]  # 返回模型路径
+        else:
+            print("无效选择，使用默认逻辑")
+            return None
+    except (ValueError, IndexError):
+        print("输入无效，使用默认逻辑")
+        return None
+
+
+
 def main():
     """主训练函数"""
     # 设备选择
@@ -77,19 +133,28 @@ def main():
     
     # 初始化模型 - 优先使用最新的best.pt，备选使用original下的yolo11n.pt
     model_records_path = model_path / "records"
-    original_model_path = model_path / "original" / "yolo11n.pt"
+    original_model_path = model_path / "original" / "yolo11n.yaml"
     
-    # 尝试查找最新的best.pt
-    latest_model_file = find_latest_model_weights(model_records_path)
+    # 获取所有可用模型并让用户选择
+    available_models = list_available_models(model_records_path, original_model_path)
+    selected_model_path = select_model_interactive(available_models)
     
-    if latest_model_file and latest_model_file.exists():
-        model_file = latest_model_file
-        print(f"使用最新的模型权重: {model_file}")
-    elif original_model_path.exists():
-        model_file = original_model_path
-        print(f"使用原始模型权重: {model_file}")
+    # 根据用户选择或默认逻辑确定模型文件
+    if selected_model_path:
+        model_file = selected_model_path
+        print(f"使用用户选择的模型权重: {model_file}")
     else:
-        raise FileNotFoundError(f"未找到任何可用的模型文件")
+        # 尝试查找最新的best.pt
+        latest_model_file = find_latest_model_weights(model_records_path)
+        
+        if latest_model_file and latest_model_file.exists():
+            model_file = latest_model_file
+            print(f"使用最新的模型权重: {model_file}")
+        elif original_model_path.exists():
+            model_file = original_model_path
+            print(f"使用原始模型权重: {model_file}")
+        else:
+            raise FileNotFoundError(f"未找到任何可用的模型文件")
     
     model = YOLO(str(model_file))
     
@@ -111,6 +176,7 @@ def main():
         save=True,
         save_period=train_config["save_period"],
         cos_lr=train_config.get("cos_lr", False),  # 启用余弦退火学习率调度
+        patience=train_config.get("patience", 100),  # 早停耐心值
         **augment_params  # 将数据增强参数传递给训练函数
     )
     
