@@ -6,7 +6,29 @@
 
 # Parameters
 nc: 80 # number of classes
-scales: # model compound scaling constants, i.e. 'model=yolo11n.yaml' will call yolo11.yaml with scale 'n'
+scales: # model compound scaling constants, i.e. 'model=yolo11n.yaml' will call yolo11.yaml wiimpl Solution {
+    pub fn license_key_formatting(s: String, k: i32) -> String {
+        let mut pool = Vec::new();
+        for elem in s.chars() {
+            if elem == '-' {
+                continue;
+            }
+            pool.push(elem);
+        }
+        let mut ans = Vec::new();
+        let mut counter = 0;
+        while let Some(temp) = pool.pop() {
+            if counter == k {
+                ans.push('-');
+                counter = 0;
+            }
+            ans.push(temp.to_uppercase().next().or_unwrap(temp));
+            counter += 1;
+        }
+        ans.reverse();
+        ans.iter().collect()
+    }
+}th scale 'n'
   # [depth, width, max_channels]
   n: [0.50, 0.25, 1024] # summary: 181 layers, 2624080 parameters, 2624064 gradients, 6.6 GFLOPs
   s: [0.50, 0.50, 1024] # summary: 181 layers, 9458752 parameters, 9458736 gradients, 21.7 GFLOPs
