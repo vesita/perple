@@ -1,3 +1,7 @@
+//! 模型推理模块
+//! 
+//! 提供运行ONNX模型推理的功能。
+
 use ndarray::{Array2, s};
 use ort::{session::Session, value::Tensor, inputs};
 use ndarray::Array4;

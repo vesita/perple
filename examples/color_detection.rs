@@ -1,4 +1,5 @@
 use perple::{load_image, load_model, YoloDetector, draw_detections};
+use std::time::Instant;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Perple 颜色检测示例");
@@ -19,7 +20,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_nms_threshold(0.7);
     
     println!("正在执行目标检测...");
+    let start_total = Instant::now();
     let detections = detector.detect(&image)?;
+    let total_duration = start_total.elapsed();
+    println!("总检测耗时: {:?}", total_duration);
     println!("检测到 {} 个目标", detections.len());
     
     // 打印每个检测到的目标的详细信息

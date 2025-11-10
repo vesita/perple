@@ -1,10 +1,10 @@
-use ort::session::Session;
+use ort::session::{Session, input};
 use image::{DynamicImage, GenericImageView};
 use raqote::{DrawOptions, DrawTarget, LineJoin, PathBuilder, SolidSource, Source, StrokeStyle};
 use std::time::Instant;
-use crate::color::prevs::{resize_image, image_to_tensor};
-use crate::color::infer::run_inference;
-use crate::color::posts::{Detection, process_detections};
+use crate::{color::{array::to_input, bounds::{Detection, process_detections, to_bounds}, image::{ScaleMessage, input_image}}, image_to_tensor, resize_image};
+use ndarray::{Array2, Array4, s};
+use ort::{value::Tensor, inputs};
 
 /// YOLO目标检测器
 /// 
@@ -118,14 +118,101 @@ impl YoloDetector {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn detect(&mut self, img: &DynamicImage) -> Result<Vec<Detection>, Box<dyn std::error::Error>> {
+    pub fn detect(&mut self, img: &DynamicImage) -> Result<Vec<Detection>, Box<dyn std::error::Error>> { 
+        let message = ScaleMessage {
+            o_width: img.width(),
+            o_height: img.height(),
+            s_width: self.input_width as u32,
+            s_height: self.input_height as u32,
+        };
+
+        let input = input_image(img, self.input_height, self.input_width);
+        let start_time = Instant::now();
+        let output = self.model.run(inputs!["images" => input])?;
+        let duration = start_time.elapsed();
+        println!("模型推理耗时: {:?}", duration);
+        let detections = to_bounds(
+            &output,
+            &message,
+            self.confidence_threshold,
+            self.nms_threshold
+        );
+        Ok(detections)
+    }
+
+    /// 运行模型推理
+    /// 
+    /// 使用ONNX模型对输入张量进行推理，返回处理后的结果。
+    /// 
+    /// # 参数
+    /// * `input` - 输入张量，形状应为(1, 3, height, width)
+    /// 
+    /// # 返回值
+    /// 返回处理后的模型输出，形状为(num_boxes, 5)，包含[x, y, w, h, conf]
+    /// 
+    /// # 错误处理
+    /// 如果推理过程中发生错误会返回Err
+    pub fn infer(&mut self, input: &Array4<f32>) -> Result<Array2<f32>, Box<dyn std::error::Error>> {
+        // 运行模型推理
+        let input_tensor = to_input(input);
+        let outputs = self.model.run(inputs!["images" => input_tensor])?;
+        
+        // 提取输出并处理
+        let output = outputs[0].try_extract_tensor::<f32>()?;
+        let shape = output.0.clone();
+        
+        // 验证输出形状
+        if shape.len() != 3 || shape[0] != 1 {
+            return Err("模型输出形状不符合预期".into());
+        }
+        
+        // YOLO模型输出形状为 [1, num_boxes, num_params]
+        // 其中num_params通常为6: [x, y, w, h, conf, class_conf] 
+        let data = output.1.to_vec();
+        
+        // 将数据重塑为二维数组 [num_boxes, num_params]
+        let array_2d = Array2::from_shape_vec((shape[1] as usize, shape[2] as usize), data)?;
+        
+        // 只取前5列 [x, y, w, h, conf]
+        let array = array_2d.slice(s![.., 0..5]).to_owned();
+        
+        Ok(array)
+    }
+
+    /// 完整的检测流程：从图像到检测结果（旧版）
+    /// 
+    /// 执行完整的检测流程，包括图像预处理、模型推理和结果后处理。
+    /// 
+    /// # 参数
+    /// * `img` - 待检测的图像
+    /// 
+    /// # 返回值
+    /// 返回检测结果列表
+    /// 
+    /// # 错误处理
+    /// 如果检测过程中发生错误会返回Err
+    /// 
+    /// # 示例
+    /// 
+    /// ```
+    /// use perple::{YoloDetector, load_model, load_image};
+    /// 
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let model = load_model("path/to/model.onnx")?;
+    /// let image = load_image("path/to/image.jpg")?;
+    /// let mut detector = YoloDetector::new(model, 640, 640);
+    /// let detections = detector.detect_old(&image)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn detect_old(&mut self, img: &DynamicImage) -> Result<Vec<Detection>, Box<dyn std::error::Error>> {
         let (img_width, img_height) = (img.width() as f32, img.height() as f32);
         let resized_img = resize_image(img, self.input_width as u32, self.input_height as u32);
         let input_tensor = image_to_tensor(&resized_img, self.input_height, self.input_width);
         
         // 为模型推理添加计时
         let start_time = Instant::now();
-        let output = run_inference(&mut self.model, &input_tensor)?;
+        let output = self.infer(&input_tensor)?;
         let duration = start_time.elapsed();
         println!("模型推理耗时: {:?}", duration);
         
@@ -140,6 +227,8 @@ impl YoloDetector {
         );
         Ok(detections)
     }
+
+    
 }
 
 /// 在图像上绘制检测结果

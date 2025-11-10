@@ -44,12 +44,12 @@
 pub mod model;
 pub mod image;
 pub mod detect;
-pub mod prevs;
 pub mod infer;
-pub mod posts;
+pub mod bounds;
+pub mod array;
 
 // 重新导出常用类型和函数
 pub use detect::{YoloDetector, draw_detections};
 pub use model::load_model;
 pub use image::{load_image, resize_image, image_to_tensor};
-pub use posts::{Detection, BoundingBox};
+pub use bounds::{Detection, BoundingBox};
