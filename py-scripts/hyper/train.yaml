@@ -1,8 +1,0 @@
-epochs: 100
-workers: 4
-batch: 8
-
-image_size: 640
-save_period: 10
-cos_lr: true
-patience: 50

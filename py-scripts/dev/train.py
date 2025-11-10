@@ -25,7 +25,7 @@ from utils import archive_training_results
 def find_latest_model_weights(model_records_path):
     """
     查找最新的模型权重文件
-    按字典序排序，选择最新的目录中的best.pt文件
+    按修改时间排序，选择最新的目录中的best.pt文件
     """
     # 获取所有训练记录目录
     record_dirs = [d for d in model_records_path.iterdir() if d.is_dir()]
@@ -33,8 +33,8 @@ def find_latest_model_weights(model_records_path):
     if not record_dirs:
         return None
     
-    # 按字典序排序，获取最新的目录
-    latest_dir = sorted(record_dirs, reverse=True)[0]
+    # 按修改时间排序，获取最新的目录
+    latest_dir = max(record_dirs, key=lambda x: x.stat().st_mtime)
     best_pt_path = latest_dir / "weights" / "best.pt"
     
     # 检查best.pt是否存在
@@ -99,7 +99,6 @@ def select_model_interactive(models):
         return None
 
 
-
 def main():
     """主训练函数"""
     # 设备选择
@@ -115,25 +114,15 @@ def main():
     
     # 配置文件路径
     data_config = hyper_path / "dataset.yaml"
-    train_config_path = hyper_path / "train.yaml"
-    optimizer_config_path = hyper_path / "optimizer.yaml"
-    augment_config_path = hyper_path / "amt.yaml"
+    hyp_config_path = hyper_path / "hyp.yaml"  # 使用统一的超参数配置文件
     
-    # 加载训练配置
-    with open(train_config_path, "r") as f:
-        train_config = yaml.safe_load(f)
-    
-    # 加载优化器配置
-    with open(optimizer_config_path, "r") as f:
-        optimizer_hyper = yaml.safe_load(f)
-        
-    # 加载数据增强配置
-    with open(augment_config_path, "r") as f:
-        augment_config = yaml.safe_load(f)
+    # 加载超参数配置
+    with open(hyp_config_path, "r") as f:
+        hyp_config = yaml.safe_load(f)
     
     # 初始化模型 - 优先使用最新的best.pt，备选使用original下的yolo11n.pt
     model_records_path = model_path / "records"
-    original_model_path = model_path / "original" / "yolo11n.yaml"
+    original_model_path = model_path / "original" / "yolo11n.pt"
     
     # 获取所有可用模型并让用户选择
     available_models = list_available_models(model_records_path, original_model_path)
@@ -159,25 +148,31 @@ def main():
     model = YOLO(str(model_file))
     
     # 准备数据增强参数
-    augment_params = augment_config.get("augment", {})
+    augment_params = hyp_config.get("augment", {})
+    
+    # 准备优化器参数
+    optimizer_name = hyp_config["optimizer"]
+    optimizer_params = hyp_config.get(optimizer_name, {})
+    
+    # 合并所有训练参数，避免重复传递
+    train_params = {}
+    # 添加训练参数（除了优化器相关）
+    for key, value in hyp_config.items():
+        if key not in ["optimizer", "Adam", "SGD", "AdamW", "augment"]:
+            train_params[key] = value
+    train_params.update(augment_params)  # 数据增强参数
+    train_params.update(optimizer_params)  # 优化器参数
     
     # 执行训练
     print("开始训练...")
     results = model.train(
         data=str(data_config),
-        epochs=train_config["epochs"],
-        imgsz=train_config["image_size"],
-        workers=train_config["workers"],
-        batch=train_config["batch"],
-        optimizer=optimizer_hyper["optimizer"],  # 传递优化器名称而非实例
+        optimizer=optimizer_name,  # 传递优化器名称
         device=device,
         pretrained=True,
         name="yolo11n",
         save=True,
-        save_period=train_config["save_period"],
-        cos_lr=train_config.get("cos_lr", False),  # 启用余弦退火学习率调度
-        patience=train_config.get("patience", 100),  # 早停耐心值
-        **augment_params  # 将数据增强参数传递给训练函数
+        **train_params  # 传递合并后的所有参数
     )
     
     # 训练完成后自动归档结果

@@ -21,3 +21,5 @@ wheels/
 /data/color
 /data/depth
 /data/lidar
+/data/test
+/results

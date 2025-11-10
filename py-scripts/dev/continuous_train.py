@@ -128,11 +128,11 @@ def evaluate_training_progress(results_dir):
         if len(last_line) >= 5:
             # 假设mAP50在第5列（索引4）
             try:
-                map50 = float(last_line[4])
+                map50 = float(last_line[7])  # 根据CSV结构调整列索引
                 print(f"当前mAP50值: {map50}")
                 
                 # 如果mAP50还没有达到满意的水平，继续训练
-                if map50 < 0.85:  # 可以根据需求调整这个阈值
+                if map50 < 0.92:  # 提高阈值以获得更好的性能
                     return True
                 else:
                     return False
@@ -172,21 +172,11 @@ def continuous_train(max_cycles=3):
         
         # 配置文件路径
         data_config = hyper_path / "dataset.yaml"
-        train_config_path = hyper_path / "train.yaml"
-        optimizer_config_path = hyper_path / "optimizer.yaml"
-        augment_config_path = hyper_path / "amt.yaml"
+        hyp_config_path = hyper_path / "hyp.yaml"  # 使用统一的超参数配置文件
         
-        # 加载训练配置
-        with open(train_config_path, "r") as f:
-            train_config = yaml.safe_load(f)
-        
-        # 加载优化器配置
-        with open(optimizer_config_path, "r") as f:
-            optimizer_hyper = yaml.safe_load(f)
-            
-        # 加载数据增强配置
-        with open(augment_config_path, "r") as f:
-            augment_config = yaml.safe_load(f)
+        # 加载超参数配置
+        with open(hyp_config_path, "r") as f:
+            hyp_config = yaml.safe_load(f)
         
         # 初始化模型 - 优先使用最新的best.pt，备选使用original下的yolo11n.pt
         model_records_path = model_path / "records"
@@ -220,25 +210,31 @@ def continuous_train(max_cycles=3):
         model = YOLO(str(model_file))
         
         # 准备数据增强参数
-        augment_params = augment_config.get("augment", {})
+        augment_params = hyp_config.get("augment", {})
+        
+        # 准备优化器参数
+        optimizer_name = hyp_config["optimizer"]
+        optimizer_params = hyp_config.get(optimizer_name, {})
+        
+        # 合并所有训练参数，避免重复传递
+        train_params = {}
+        # 添加训练参数（除了优化器相关）
+        for key, value in hyp_config.items():
+            if key not in ["optimizer", "Adam", "SGD", "AdamW", "augment"]:
+                train_params[key] = value
+        train_params.update(augment_params)  # 数据增强参数
+        train_params.update(optimizer_params)  # 优化器参数
         
         # 执行训练
         print("开始训练...")
         results = model.train(
             data=str(data_config),
-            epochs=train_config["epochs"],
-            imgsz=train_config["image_size"],
-            workers=train_config["workers"],
-            batch=train_config["batch"],
-            optimizer=optimizer_hyper["optimizer"],  # 传递优化器名称而非实例
+            optimizer=optimizer_name,  # 传递优化器名称
             device=device,
             pretrained=True,
             name=train_name,
             save=True,
-            save_period=train_config["save_period"],
-            cos_lr=train_config.get("cos_lr", False),  # 启用余弦退火学习率调度
-            patience=train_config.get("patience", 100),  # 早停耐心值
-            **augment_params  # 将数据增强参数传递给训练函数
+            **train_params  # 传递合并后的所有参数
         )
         
         # 检查训练结果目录
