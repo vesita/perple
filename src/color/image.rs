@@ -2,7 +2,7 @@
 //! 
 //! 提供图像加载、调整大小、转换为张量等图像处理功能。
 
-use image::{DynamicImage, GenericImageView, imageops::FilterType};
+use image::{DynamicImage, imageops::FilterType};
 use ndarray::{Array, Array4};
 use ort::value::{Tensor, TensorValueType, Value};
 use std::path::Path;

@@ -3,7 +3,6 @@
 //! 提供加载ONNX格式YOLO模型的功能。
 
 use ort::session::{builder::GraphOptimizationLevel, Session};
-use std::io::Cursor;
 
 /// 加载YOLO模型（只检测person类别）
 /// 

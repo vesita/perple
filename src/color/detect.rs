@@ -1,8 +1,8 @@
-use ort::session::{Session, input};
+use ort::{session::{Session, input}, value::{TensorValueType, Value}};
 use image::{DynamicImage, GenericImageView};
 use raqote::{DrawOptions, DrawTarget, LineJoin, PathBuilder, SolidSource, Source, StrokeStyle};
 use std::time::Instant;
-use crate::{color::{array::to_input, bounds::{Detection, process_detections, to_bounds}, image::{ScaleMessage, input_image}}, image_to_tensor, resize_image};
+use crate::{color::{array::to_input, bounds::{Bounds, Detection}, image::{ScaleMessage, input_image, resize_image, image_to_tensor}, utils::{nms_tensor}}, config::DETECTIONS_CAPACITY, load_model};
 use ndarray::{Array2, Array4, s};
 use ort::{value::Tensor, inputs};
 
@@ -13,7 +13,7 @@ use ort::{value::Tensor, inputs};
 /// # 示例
 /// 
 /// ```
-/// use perple::{YoloDetector, load_model};
+/// use perple::color::{YoloDetector, load_model};
 /// 
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let model = load_model("path/to/model.onnx")?;
@@ -34,6 +34,8 @@ pub struct YoloDetector {
     confidence_threshold: f32,
     /// NMS（非极大值抑制）阈值，用于去除重复检测
     nms_threshold: f32,
+    /// NMS处理中使用的缓存数组，避免重复分配内存
+    picked_indices: [bool; DETECTIONS_CAPACITY],
 }
 
 impl YoloDetector {
@@ -50,7 +52,7 @@ impl YoloDetector {
     /// # 示例
     /// 
     /// ```
-    /// use perple::{YoloDetector, load_model};
+    /// use perple::color::{YoloDetector, load_model};
     /// 
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let model = load_model("path/to/model.onnx")?;
@@ -58,15 +60,38 @@ impl YoloDetector {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn new(model: Session, input_width: usize, input_height: usize) -> Self {
+    pub fn new(model_path: &str, input_width: usize, input_height: usize) -> Self {
+        let model = load_model(model_path).expect("模型加载失败");
         Self {
             model,
             input_width,
             input_height,
-            confidence_threshold: 0.5,
+            confidence_threshold: 0.6,
             nms_threshold: 0.7,
+            picked_indices: [false; DETECTIONS_CAPACITY],
         }
     }
+
+    /// 执行模型推理
+    /// 
+    /// # 参数
+    /// * `input` - 输入张量
+    /// * `outputs` - 输出结果容器
+    /// * `message` - 图像缩放信息
+    /// 
+    /// # 返回值
+    /// 返回推理结果
+    pub fn infer(&mut self,
+        input: &Value<TensorValueType<f32>>,
+        outputs: &mut Bounds,
+        message: &ScaleMessage,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        outputs.clear();
+        let mut result = self.model.run(inputs!["images" => input])?;
+        nms_tensor(&mut result, outputs, message, &mut self.picked_indices, self.confidence_threshold, self.nms_threshold);
+        Ok(())
+    }
+
 
     /// 设置置信度阈值
     /// 
@@ -91,53 +116,25 @@ impl YoloDetector {
         self.nms_threshold = threshold;
         self
     }
-
-    /// 完整的检测流程：从图像到检测结果
-    /// 
-    /// 执行完整的检测流程，包括图像预处理、模型推理和结果后处理。
-    /// 
-    /// # 参数
-    /// * `img` - 待检测的图像
-    /// 
-    /// # 返回值
-    /// 返回检测结果列表
-    /// 
-    /// # 错误处理
-    /// 如果检测过程中发生错误会返回Err
-    /// 
-    /// # 示例
-    /// 
-    /// ```
-    /// use perple::{YoloDetector, load_model, load_image};
-    /// 
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let model = load_model("path/to/model.onnx")?;
-    /// let image = load_image("path/to/image.jpg")?;
-    /// let mut detector = YoloDetector::new(model, 640, 640);
-    /// let detections = detector.detect(&image)?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn detect(&mut self, img: &DynamicImage) -> Result<Vec<Detection>, Box<dyn std::error::Error>> { 
-        let message = ScaleMessage {
-            o_width: img.width(),
-            o_height: img.height(),
-            s_width: self.input_width as u32,
-            s_height: self.input_height as u32,
-        };
-
-        let input = input_image(img, self.input_height, self.input_width);
-        let start_time = Instant::now();
-        let output = self.model.run(inputs!["images" => input])?;
-        let duration = start_time.elapsed();
-        println!("模型推理耗时: {:?}", duration);
-        let detections = to_bounds(
-            &output,
-            &message,
-            self.confidence_threshold,
-            self.nms_threshold
-        );
-        Ok(detections)
+    
+    /// 获取当前置信度阈值
+    pub fn confidence_threshold(&self) -> f32 {
+        self.confidence_threshold
+    }
+    
+    /// 获取当前NMS阈值
+    pub fn nms_threshold(&self) -> f32 {
+        self.nms_threshold
+    }
+    
+    /// 获取模型输入宽度
+    pub fn input_width(&self) -> usize {
+        self.input_width
+    }
+    
+    /// 获取模型输入高度
+    pub fn input_height(&self) -> usize {
+        self.input_height
     }
 
     /// 运行模型推理
@@ -152,7 +149,7 @@ impl YoloDetector {
     /// 
     /// # 错误处理
     /// 如果推理过程中发生错误会返回Err
-    pub fn infer(&mut self, input: &Array4<f32>) -> Result<Array2<f32>, Box<dyn std::error::Error>> {
+    pub fn infer_old(&mut self, input: &Array4<f32>) -> Result<Array2<f32>, Box<dyn std::error::Error>> {
         // 运行模型推理
         let input_tensor = to_input(input);
         let outputs = self.model.run(inputs!["images" => input_tensor])?;
@@ -181,140 +178,65 @@ impl YoloDetector {
 
     /// 完整的检测流程：从图像到检测结果（旧版）
     /// 
-    /// 执行完整的检测流程，包括图像预处理、模型推理和结果后处理。
+    /// 对输入图像执行完整的检测流程，包括预处理、推理和后处理。
     /// 
     /// # 参数
-    /// * `img` - 待检测的图像
+    /// * `image` - 输入图像
     /// 
     /// # 返回值
     /// 返回检测结果列表
     /// 
     /// # 错误处理
     /// 如果检测过程中发生错误会返回Err
-    /// 
-    /// # 示例
-    /// 
-    /// ```
-    /// use perple::{YoloDetector, load_model, load_image};
-    /// 
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let model = load_model("path/to/model.onnx")?;
-    /// let image = load_image("path/to/image.jpg")?;
-    /// let mut detector = YoloDetector::new(model, 640, 640);
-    /// let detections = detector.detect_old(&image)?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn detect_old(&mut self, img: &DynamicImage) -> Result<Vec<Detection>, Box<dyn std::error::Error>> {
-        let (img_width, img_height) = (img.width() as f32, img.height() as f32);
-        let resized_img = resize_image(img, self.input_width as u32, self.input_height as u32);
-        let input_tensor = image_to_tensor(&resized_img, self.input_height, self.input_width);
+    pub fn detect(&mut self, image: &DynamicImage) -> Result<Bounds, Box<dyn std::error::Error>> {
+        // 调整图像大小
+        let resized = resize_image(image, self.input_width as u32, self.input_height as u32);
         
-        // 为模型推理添加计时
-        let start_time = Instant::now();
-        let output = self.infer(&input_tensor)?;
-        let duration = start_time.elapsed();
-        println!("模型推理耗时: {:?}", duration);
+        // 转换为张量
+        let tensor = image_to_tensor(&resized, self.input_height, self.input_width);
         
-        let detections = process_detections(
-            output,
-            img_width,
-            img_height,
-            self.input_width,
-            self.input_height,
-            self.confidence_threshold,
-            self.nms_threshold
-        );
-        Ok(detections)
-    }
-
-    
-}
-
-/// 在图像上绘制检测结果
-/// 
-/// 使用不同颜色绘制检测框，person类别使用青色，其他类别使用红色。
-/// 
-/// # 参数
-/// * `image` - 原始图像
-/// * `detections` - 检测结果列表
-/// 
-/// # 返回值
-/// 返回绘制了检测框的图像
-/// 
-/// # 示例
-/// 
-/// ```
-/// use perple::{load_image, draw_detections};
-/// 
-/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// let image = load_image("path/to/image.jpg")?;
-/// // 假设已有检测结果
-/// // let result_image = draw_detections(&image, &detections);
-/// # Ok(())
-/// # }
-/// ```
-pub fn draw_detections(image: &DynamicImage, detections: &[Detection]) -> DynamicImage {
-    let (img_width, img_height) = image.dimensions();
-    let mut dt = DrawTarget::new(img_width as i32, img_height as i32);
-    
-    // 将原始图像绘制到DrawTarget上
-    let rgba_image = image.to_rgba8();
-    let image_data: Vec<u32> = rgba_image.chunks(4).map(|pixel| {
-        let b = pixel[2];
-        let g = pixel[1];
-        let r = pixel[0];
-        let a = pixel[3];
-        u32::from_le_bytes([b, g, r, a])
-    }).collect();
-    
-    let img = raqote::Image {
-        width: img_width as i32,
-        height: img_height as i32,
-        data: &image_data,
-    };
-    
-    dt.draw_image_at(0.0, 0.0, &img, &DrawOptions::new());
-
-    for detection in detections {
-        let bbox = &detection.bbox;
-
-        let mut pb = PathBuilder::new();
-        let width = bbox.x2 - bbox.x1;
-        let height = bbox.y2 - bbox.y1;
-
-        pb.rect(bbox.x1, bbox.y1, width, height);
-        let path = pb.finish();
-        
-        // 根据类别设置不同颜色
-        let color = match detection.class_id {
-            0 => SolidSource { r: 0x00, g: 0xFF, b: 0xFF, a: 0xFF }, // 青色 - person类别
-            _ => SolidSource { r: 0xFF, g: 0x00, b: 0x00, a: 0xFF }, // 红色 - 其他类别
+        // 运行推理
+        let input_tensor = to_input(&tensor);
+        let mut outputs = Bounds::new();
+        let scale_message = ScaleMessage {
+            o_width: image.width(),
+            o_height: image.height(),
+            s_width: self.input_width as u32,
+            s_height: self.input_height as u32,
         };
         
-        dt.stroke(
-            &path,
-            &Source::Solid(color),
-            &StrokeStyle {
-                join: LineJoin::Round,
-                width: 2.0,
-                ..StrokeStyle::default()
-            },
-            &DrawOptions::default()
-        );
+        self.infer(&input_tensor, &mut outputs, &scale_message)?;
         
-        // 可以添加文本标签显示类别和置信度
-        // 这里暂时省略，如需要可后续添加
+        Ok(outputs)
     }
-
-    // 将DrawTarget转换回图像
-    let pixels: Vec<u8> = dt.get_data().iter().flat_map(|&pixel| {
-        let bytes = pixel.to_le_bytes();
-        vec![bytes[2], bytes[1], bytes[0], bytes[3]] // BGRA to RGBA
-    }).collect();
     
-    DynamicImage::ImageRgba8(
-        image::ImageBuffer::from_raw(img_width, img_height, pixels)
-            .expect("Failed to create image from rendered data")
-    )
+    /// 对一批图像执行检测
+    /// 
+    /// # 参数
+    /// * `images` - 图像数组
+    /// 
+    /// # 返回值
+    /// 返回每张图像的检测结果
+    pub fn detect_batch(&mut self, images: &[DynamicImage]) -> Result<Vec<Bounds>, Box<dyn std::error::Error>> {
+        let mut results = Vec::with_capacity(images.len());
+        
+        for image in images {
+            let result = self.detect(image)?;
+            results.push(result);
+        }
+        
+        Ok(results)
+    }
+}
+
+// 为YoloDetector实现Debug trait
+impl std::fmt::Debug for YoloDetector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("YoloDetector")
+            .field("input_width", &self.input_width)
+            .field("input_height", &self.input_height)
+            .field("confidence_threshold", &self.confidence_threshold)
+            .field("nms_threshold", &self.nms_threshold)
+            .finish()
+    }
 }
