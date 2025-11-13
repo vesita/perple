@@ -20,6 +20,10 @@ wheels/
 # 项目忽略项
 /data/color
 /data/depth
-/data/lidar
 /data/test
 /results
+
+
+# 缓存
+flamegraph.svg
+perf.data

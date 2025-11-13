@@ -1,4 +1,5 @@
 use perple::perple::Perple;
+use perple::LoopMode;
 use perple::{
     color::Bounds, draw_detections, load_image
 };
@@ -33,17 +34,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 更新图像到流中
     perple.update_image(image.clone());
     
-    println!("启动多线程循环处理模式...");
+    println!("启动单次处理模式...");
     let start_total = Instant::now();
     
-    // 启动color模块的循环运行模式
-    perple.start_color_loop();
+    // 启动一次处理循环模式
+    perple.start_color_loop_count(1)?;
     
-    // 等待一段时间让处理完成
-    thread::sleep(Duration::from_millis(1000)); // 增加等待时间到1秒
+    // 等待处理完成或超时
+    if perple.wait_for_result(5000) {
+        println!("处理完成");
+    } else {
+        println!("处理超时");
+        perple.stop_color_loop();
+    }
     
-    // 停止color模块的循环运行模式
-    perple.stop_color_loop();
+    // 等待线程结束
+    perple.join_color_thread()?;
     
     let total_duration = start_total.elapsed();
     println!("总处理耗时: {:?}", total_duration);

@@ -1,9 +1,11 @@
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 use image::DynamicImage;
 
 use crate::color::{Bounds, core::Color};
 use crate::utils::stream::Stream;
+use crate::utils::muloop::{MultiLoop, LoopMode};
 
 pub struct Perple {
     /// 公用数据流，由上级管理
@@ -12,8 +14,7 @@ pub struct Perple {
 
     /// 内部模块私有数据
     color: Arc<Mutex<Color>>,
-    color_thread: Option<thread::JoinHandle<()>>,
-    color_running: Arc<Mutex<bool>>,
+    color_loop: MultiLoop,
 }
 
 impl Perple {
@@ -33,48 +34,44 @@ impl Perple {
             img_stream,
             bounds_stream,
             color: Arc::new(Mutex::new(color)),
-            color_thread: None,
-            color_running: Arc::new(Mutex::new(false)),
+            color_loop: MultiLoop::new(),
         }
     }
 
-    /// 启动color模块一次性动作
-    pub fn act(&mut self) {
-        let mut color = self.color.lock().unwrap();
-        color.act();
+    /// 启动color模块的循环运行模式
+    /// 支持按次数、按时间或持续循环
+    pub fn start_color_loop_with_mode(&mut self, mode: LoopMode) -> Result<(), String> {
+        // 创建闭包，捕获color的引用
+        let color = Arc::clone(&self.color);
+        self.color_loop.start(mode, move || {
+            let mut color_guard = color.lock().unwrap();
+            color_guard.act();
+        }, 100) // 100ms间隔
     }
     
-    /// 启动color模块的循环运行模式
-    pub fn start_color_loop(&mut self) {
-        let mut running = self.color_running.lock().unwrap();
-        if !*running {
-            *running = true;
-            drop(running); // 释放锁
-            
-            let color_running = Arc::clone(&self.color_running);
-            let color = Arc::clone(&self.color);
-            
-            self.color_thread = Some(thread::spawn(move || {
-                while *color_running.lock().unwrap() {
-                    {
-                        let mut color = color.lock().unwrap();
-                        color.act();
-                    }
-                    thread::sleep(std::time::Duration::from_millis(100)); // 控制处理频率
-                }
-            }));
-        }
+    /// 启动color模块的循环运行模式（默认持续循环）
+    pub fn start_color_loop(&mut self) -> Result<(), String> {
+        self.start_color_loop_with_mode(LoopMode::Continuous)
+    }
+    
+    /// 启动指定次数的循环运行模式
+    pub fn start_color_loop_count(&mut self, count: usize) -> Result<(), String> {
+        self.start_color_loop_with_mode(LoopMode::Count(count))
+    }
+    
+    /// 启动指定时间的循环运行模式（毫秒）
+    pub fn start_color_loop_duration(&mut self, duration_ms: u64) -> Result<(), String> {
+        self.start_color_loop_with_mode(LoopMode::Duration(duration_ms))
     }
     
     /// 停止color模块的循环运行模式
     pub fn stop_color_loop(&mut self) {
-        let mut running = self.color_running.lock().unwrap();
-        *running = false;
+        self.color_loop.stop();
     }
     
     /// 检查color模块是否正在运行
     pub fn is_color_running(&self) -> bool {
-        *self.color_running.lock().unwrap()
+        self.color_loop.is_running()
     }
 
     /// 更新图像流（推荐外部统一管理）
@@ -84,9 +81,22 @@ impl Perple {
     }
     
     /// 等待颜色处理线程结束
-    pub fn join_color_thread(&mut self) {
-        if let Some(handle) = self.color_thread.take() {
-            let _ = handle.join();
+    pub fn join_color_thread(&mut self) -> Result<(), String> {
+        self.color_loop.join()
+    }
+    
+    /// 等待直到有检测结果可用
+    pub fn wait_for_result(&self, timeout_ms: u64) -> bool {
+        let start = std::time::Instant::now();
+        while start.elapsed().as_millis() < timeout_ms as u128 {
+            {
+                let bounds_stream = self.bounds_stream.lock().unwrap();
+                if bounds_stream.has_data() {
+                    return true;
+                }
+            }
+            thread::sleep(Duration::from_millis(10));
         }
+        false
     }
 }

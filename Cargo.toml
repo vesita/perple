@@ -9,3 +9,4 @@ ort = "=2.0.0-rc.10"
 image = { version = "0.*" }
 ndarray = { version = "0.*", features = ["rayon"] }
 raqote = "0.*"
+pcd-rs = "0.*"

@@ -15,7 +15,6 @@ pub struct ScaleMessage {
     pub s_height: u32,
 }
 
-
 /// 加载图像文件
 /// 
 /// 从指定路径加载图像文件。
@@ -154,4 +153,50 @@ pub fn input_image(img: &DynamicImage, input_height: usize, input_width: usize) 
     
     // 创建 ONNX Tensor
     Tensor::from_array(([1, 3, input_height, input_width], nchw_data)).unwrap()
+}
+
+/// 填充预创建的Value<TensorValueType<f32>>对象，避免返回时的拷贝
+/// 
+/// # 参数
+/// * `img` - 输入图像
+/// * `input_height` - 输入图像高度
+/// * `input_width` - 输入图像宽度
+/// * `tensor_value` - 预创建的Tensor Value对象，会被直接填充
+pub fn fill_input_image(
+    img: &DynamicImage, 
+    input_height: usize, 
+    input_width: usize,
+    tensor_value: &mut Value<TensorValueType<f32>>
+) {
+    // 调整图像大小以适应模型输入
+    let resized_img = resize_image(img, input_width as u32, input_height as u32);
+    
+    // 预分配准确大小的向量并初始化为0
+    let mut nchw_data = vec![0.0f32; input_height * input_width * 3];
+    
+    // 获取RGB图像数据
+    let rgb_img = resized_img.to_rgb8();
+    
+    // 一次性遍历所有像素，并直接按NCHW格式写入
+    for (y, row) in rgb_img.rows().enumerate() {
+        for (x, pixel) in row.enumerate() {
+            let [r, g, b] = pixel.0;
+            
+            // 直接按照NCHW格式写入数据
+            // R 通道 (channel 0)
+            let r_index = y * input_width + x;
+            nchw_data[r_index] = r as f32 / 255.0;
+            
+            // G 通道 (channel 1)
+            let g_index = input_height * input_width + y * input_width + x;
+            nchw_data[g_index] = g as f32 / 255.0;
+            
+            // B 通道 (channel 2)
+            let b_index = 2 * input_height * input_width + y * input_width + x;
+            nchw_data[b_index] = b as f32 / 255.0;
+        }
+    }
+    
+    // 更新 ONNX Tensor 的值
+    *tensor_value = Tensor::from_array(([1, 3, input_height, input_width], nchw_data)).unwrap();
 }

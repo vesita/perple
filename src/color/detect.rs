@@ -2,7 +2,7 @@ use ort::{session::{Session, input}, value::{TensorValueType, Value}};
 use image::{DynamicImage, GenericImageView};
 use raqote::{DrawOptions, DrawTarget, LineJoin, PathBuilder, SolidSource, Source, StrokeStyle};
 use std::time::Instant;
-use crate::{color::{array::to_input, bounds::{Bounds, Detection}, image::{ScaleMessage, input_image, resize_image, image_to_tensor}, utils::{nms_tensor}}, config::DETECTIONS_CAPACITY, load_model};
+use crate::{color::{array::to_input, bounds::{Bounds, Detection}, image::{ScaleMessage, input_image, resize_image, image_to_tensor}, utils::{nms_tensor}}, config::{DETECTIONS_CAPACITY, DEFAULT_INPUT_WIDTH, DEFAULT_INPUT_HEIGHT, DEFAULT_CONFIDENCE_THRESHOLD, DEFAULT_NMS_THRESHOLD}, load_model};
 use ndarray::{Array2, Array4, s};
 use ort::{value::Tensor, inputs};
 
@@ -66,10 +66,21 @@ impl YoloDetector {
             model,
             input_width,
             input_height,
-            confidence_threshold: 0.6,
-            nms_threshold: 0.7,
+            confidence_threshold: DEFAULT_CONFIDENCE_THRESHOLD,
+            nms_threshold: DEFAULT_NMS_THRESHOLD,
             picked_indices: [false; DETECTIONS_CAPACITY],
         }
+    }
+
+    /// 创建新的YoloDetector实例，使用默认输入尺寸
+    /// 
+    /// # 参数
+    /// * `model_path` - 模型文件路径
+    /// 
+    /// # 返回值
+    /// 返回新的YoloDetector实例
+    pub fn with_default_size(model_path: &str) -> Self {
+        Self::new(model_path, DEFAULT_INPUT_WIDTH, DEFAULT_INPUT_HEIGHT)
     }
 
     /// 执行模型推理
@@ -91,7 +102,6 @@ impl YoloDetector {
         nms_tensor(&mut result, outputs, message, &mut self.picked_indices, self.confidence_threshold, self.nms_threshold);
         Ok(())
     }
-
 
     /// 设置置信度阈值
     /// 
@@ -115,6 +125,16 @@ impl YoloDetector {
     pub fn with_nms_threshold(mut self, threshold: f32) -> Self {
         self.nms_threshold = threshold;
         self
+    }
+    
+    /// 设置置信度阈值（可变引用版本）
+    pub fn set_confidence_threshold(&mut self, threshold: f32) {
+        self.confidence_threshold = threshold;
+    }
+    
+    /// 设置NMS阈值（可变引用版本）
+    pub fn set_nms_threshold(&mut self, threshold: f32) {
+        self.nms_threshold = threshold;
     }
     
     /// 获取当前置信度阈值

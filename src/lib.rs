@@ -1,7 +1,11 @@
 pub mod utils;
 pub mod color;
+pub mod lidar;
 pub mod perple;
 pub mod config;
+
+pub use perple::Perple;
+pub use utils::muloop::LoopMode;
 
 // 重新导出color模块中的常用类型和函数
 pub use color::{YoloDetector, Detection, BoundingBox, process_detections, to_bounds, draw_detections};
