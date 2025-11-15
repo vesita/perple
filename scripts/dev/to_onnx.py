@@ -1,3 +1,4 @@
+#.venv/bin/python3
 """
 YOLO 模型导出到 ONNX 格式脚本
 自动选择最佳模型权重进行导出

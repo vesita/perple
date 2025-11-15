@@ -1,10 +1,9 @@
-#!/usr/bin/env python3
+#.venv/bin/python3
 """
 YOLO 模型训练脚本
 用于训练自定义数据集的目标检测模型
 """
 
-import os
 from pathlib import Path
 import sys
 
@@ -12,14 +11,13 @@ import torch
 from ultralytics import YOLO
 import yaml
 
-# 添加项目根目录和py-scripts目录到Python路径
+# 使用统一的路径处理方法
+# 添加项目根目录到Python路径
 project_root = Path(__file__).parent.parent.parent.absolute()
-py_scripts_path = project_root / "py-scripts"
 sys.path.insert(0, str(project_root))
-sys.path.insert(0, str(py_scripts_path))
 
 # 导入自定义工具
-from utils import archive_training_results
+from scripts.dev.archive import archive_training_results
 
 
 def find_latest_model_weights(model_records_path):
@@ -103,14 +101,9 @@ def main():
     """主训练函数"""
     # 设备选择
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"使用设备: {device}")
-
-    # 路径设置
-    script_dir = Path(__file__).parent.absolute()
-    root_dir = script_dir.parent
-    
-    hyper_path = root_dir / "hyper"
-    model_path = root_dir / "model"
+    print(f"使用设备: {device}")    
+    hyper_path = Path("scripts/hyper")
+    model_path = Path("scripts/model")
     
     # 配置文件路径
     data_config = hyper_path / "dataset.yaml"

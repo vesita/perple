@@ -1,12 +1,12 @@
-#!/usr/bin/env python3
+#.venv/bin/python3
 # -*- coding: utf-8 -*-
 """
 自动归档脚本
 将训练结果从runs目录归档到records目录下
 """
 
-import os
 import shutil
+import sys
 from pathlib import Path
 from datetime import datetime
 
@@ -14,18 +14,14 @@ from datetime import datetime
 def archive_training_results():
     """
     自动归档训练结果
-    将runs/detect目录下的最新训练结果归档到py-scripts/model/records目录下
+    将runs/detect目录下的最新训练结果归档到scripts/model/records目录下
     只保留best.pt权重文件以节省空间
     命名格式为：年月日-顺序编号
     """
-    try:
-        # 获取项目根目录
-        script_dir = Path(__file__).parent.parent.absolute()
-        project_root = script_dir.parent
-        
+    try:        
         # 定义源目录和目标目录
-        runs_detect_dir = project_root / "runs" / "detect"
-        records_dir = script_dir / "model" / "records"
+        runs_detect_dir = Path("runs/detect")
+        records_dir = Path("scripts/model/records")
         
         # 确保目标目录存在
         records_dir.mkdir(parents=True, exist_ok=True)
@@ -42,7 +38,7 @@ def archive_training_results():
             return False
             
         # 按修改时间排序，获取最新的训练目录
-        latest_train_dir = max(train_dirs, key=os.path.getmtime)
+        latest_train_dir = max(train_dirs, key=lambda p: p.stat().st_mtime)
         print(f"找到最新训练目录: {latest_train_dir.name}")
         
         # 生成归档目录名称：年月日-顺序编号

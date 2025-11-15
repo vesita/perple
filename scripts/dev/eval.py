@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#.venv/bin/python3
 """
 YOLO 模型评估脚本
 用于评估训练完成的目标检测模型性能
@@ -17,20 +17,16 @@ def main():
     # 设备选择
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"使用设备: {device}")
-
-    # 路径设置
-    script_dir = Path(__file__).parent.absolute()
-    root_dir = script_dir.parent
     
-    hyper_path = root_dir / "hyper"
-    model_path = root_dir / "model"
+    hyper_path = "scripts/hyper"
+    model_path = "scripts/model"
     
     # 配置文件路径
     data_config = hyper_path / "dataset.yaml"
     
     # 查找最佳模型权重文件
     best_model_path = None
-    weights_dir = Path(root_dir.parent / "runs" / "detect")
+    weights_dir = Path("runs" / "detect")
     
     # 遍历所有训练运行目录，找到最新的yolo11n5运行
     yolo11n5_runs = list(weights_dir.glob("yolo11n5*"))

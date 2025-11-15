@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#.venv/bin/python3
 """
 YOLO 模型持续训练脚本
 用于实现更好的训练策略，避免反复重启训练
@@ -14,14 +14,7 @@ from datetime import datetime
 import torch
 from ultralytics import YOLO
 
-# 添加项目根目录和py-scripts目录到Python路径
-project_root = Path(__file__).parent.parent.parent.absolute()
-py_scripts_path = project_root / "py-scripts"
-sys.path.insert(0, str(project_root))
-sys.path.insert(0, str(py_scripts_path))
-
-# 导入自定义工具
-from utils import archive_training_results
+from archive import archive_training_results
 
 
 def find_latest_model_weights(model_records_path):
@@ -51,6 +44,12 @@ def list_available_models(model_records_path, original_model_path):
     列出所有可用的模型供用户选择
     """
     models = []
+    
+    # 确保参数是Path对象
+    if isinstance(model_records_path, str):
+        model_records_path = Path(model_records_path)
+    if isinstance(original_model_path, str):
+        original_model_path = Path(original_model_path)
     
     # 添加原始模型
     if original_model_path.exists():
@@ -162,25 +161,18 @@ def continuous_train(max_cycles=3):
         # 设备选择
         device = "cuda" if torch.cuda.is_available() else "cpu"
         print(f"使用设备: {device}")
-
-        # 路径设置
-        script_dir = Path(__file__).parent.absolute()
-        root_dir = script_dir.parent
-        
-        hyper_path = root_dir / "hyper"
-        model_path = root_dir / "model"
-        
+        model_path = "scripts/model"
         # 配置文件路径
-        data_config = hyper_path / "dataset.yaml"
-        hyp_config_path = hyper_path / "hyp.yaml"  # 使用统一的超参数配置文件
+        data_config = "scripts/hyper/dataset.yaml"
+        hyp_config_path = "scripts/hyper/hyp.yaml"  # 使用统一的超参数配置文件
         
         # 加载超参数配置
         with open(hyp_config_path, "r") as f:
             hyp_config = yaml.safe_load(f)
         
         # 初始化模型 - 优先使用最新的best.pt，备选使用original下的yolo11n.pt
-        model_records_path = model_path / "records"
-        original_model_path = model_path / "original" / "yolo11n.pt"
+        model_records_path = Path("scripts/model/records")
+        original_model_path = Path("scripts/model/original/yolo11n.pt")
         
         # 获取所有可用模型并让用户选择
         available_models = list_available_models(model_records_path, original_model_path)
@@ -238,7 +230,7 @@ def continuous_train(max_cycles=3):
         )
         
         # 检查训练结果目录
-        runs_dir = project_root / "runs" / "detect" / train_name
+        runs_dir = "runs" / "detect" / train_name
         if evaluate_training_progress(runs_dir):
             print("模型还需要继续训练，准备下一轮训练...")
             
