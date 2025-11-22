@@ -4,7 +4,7 @@ use crate::config::DETECTIONS_CAPACITY;
 /// 
 /// 表示一个矩形边界框，用于包围检测到的目标。
 #[derive(Debug, Clone, Default, Copy, PartialEq)]
-pub struct BoundingBox {
+pub struct Box2D {
     /// 左上角x坐标
     pub x1: f32,
     /// 左上角y坐标
@@ -15,7 +15,7 @@ pub struct BoundingBox {
     pub y2: f32,
 }
 
-impl BoundingBox {
+impl Box2D {
     /// 创建一个新的边界框
     pub fn new(x1: f32, y1: f32, x2: f32, y2: f32) -> Self {
         Self { x1, y1, x2, y2 }
@@ -54,7 +54,7 @@ impl BoundingBox {
 #[derive(Debug, Clone, Default)]
 pub struct Detection {
     /// 目标的边界框
-    pub bbox: BoundingBox,
+    pub bbox: Box2D,
     /// 类别ID
     pub class_id: usize,
     /// 类别名称
@@ -65,14 +65,14 @@ pub struct Detection {
 
 impl Detection {
     /// 创建一个新的检测结果
-    pub fn new(bbox: BoundingBox, class_id: usize, class_name: String, confidence: f32) -> Self {
+    pub fn new(bbox: Box2D, class_id: usize, class_name: String, confidence: f32) -> Self {
         Self { bbox, class_id, class_name, confidence }
     }
     
     /// 创建一个默认的检测结果
     pub fn default() -> Self {
         Self { 
-            bbox: BoundingBox::default(), 
+            bbox: Box2D::default(), 
             class_id: 0, 
             class_name: String::new(), 
             confidence: 0.0 

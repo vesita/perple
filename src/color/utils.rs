@@ -7,7 +7,7 @@ use ndarray::Array2;
 use ndarray::Axis;
 use ort::session::SessionOutputs;
 
-use crate::color::bounds::BoundingBox;
+use crate::color::bounds::Box2D;
 use crate::color::bounds::Bounds;
 use crate::color::bounds::Detection;
 use crate::color::image::ScaleMessage;
@@ -92,7 +92,7 @@ pub fn process_detections(
         let s_y2 = y2 * scale_y;
 
         detections.push(Detection {
-            bbox: BoundingBox {
+            bbox: Box2D {
                 x1: s_x1,
                 y1: s_y1,
                 x2: s_x2,
@@ -158,7 +158,7 @@ pub fn to_bounds(
         let scaled_y2 = y2 * scale_y;
         
         detections.push(Detection {
-            bbox: BoundingBox {
+            bbox: Box2D {
                 x1: scaled_x1,
                 y1: scaled_y1,
                 x2: scaled_x2,
@@ -300,7 +300,7 @@ pub fn nms_tensor(
 
         // 将未被抑制的边界框添加到bounds中
         bounds.push(Detection {
-            bbox: BoundingBox {
+            bbox: Box2D {
                 x1: i_x1 * width_scale,
                 y1: i_y1 * height_scale,
                 x2: i_x2 * width_scale,
@@ -368,7 +368,7 @@ pub fn nms_tensor(
 /// 
 /// # 返回值
 /// 返回交集面积
-fn intersection(box1: &BoundingBox, box2: &BoundingBox) -> f32 {
+fn intersection(box1: &Box2D, box2: &Box2D) -> f32 {
     let x_left = box1.x1.max(box2.x1);
     let y_top = box1.y1.max(box2.y1);
     let x_right = box1.x2.min(box2.x2);
@@ -389,7 +389,7 @@ fn intersection(box1: &BoundingBox, box2: &BoundingBox) -> f32 {
 /// 
 /// # 返回值
 /// 返回并集面积
-fn union(box1: &BoundingBox, box2: &BoundingBox) -> f32 {
+fn union(box1: &Box2D, box2: &Box2D) -> f32 {
     let area1 = (box1.x2 - box1.x1) * (box1.y2 - box1.y1);
     let area2 = (box2.x2 - box2.x1) * (box2.y2 - box2.y1);
     area1 + area2 - intersection(box1, box2)

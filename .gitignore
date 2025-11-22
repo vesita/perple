@@ -21,6 +21,7 @@ wheels/
 /data/color
 /data/depth
 /data/test
+/data/analyze
 /results
 
 
