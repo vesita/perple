@@ -1,12 +1,12 @@
 use perple::perple::Perple;
 use perple::LoopMode;
 use perple::{
-    color::Bounds, load_image
+    color::ImgBud, load_image
 };
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, Duration};
 use std::thread;
-use perple::utils::stream::Stream;
+use perple::swapl::Swapl;
 use image::DynamicImage;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -18,14 +18,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     println!("1. 按次数循环模式（执行3次）");
     {
-        // 创建数据流
-        let img_stream = Arc::new(Mutex::new(Stream::new()));
-        let bounds_stream = Arc::new(Mutex::new(Stream::new()));
+        // 创建数据池
+        let mut pool = Swapl::new();
         
         // 创建Perple实例
         let mut perple = Perple::new(
-            Arc::clone(&img_stream),
-            Arc::clone(&bounds_stream),
+            &pool,
             "module/color/yolo11n.onnx",
         );
         
@@ -45,22 +43,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         
         // 检查结果
         let bounds = {
-            let mut bounds_stream = bounds_stream.lock().unwrap();
-            bounds_stream.read().unwrap_or_else(|| Bounds::new())
+            let mut bounds_stream = perple.img_bud_stream.lock().unwrap();
+            bounds_stream.read().unwrap_or_else(|| ImgBud::new())
         };
         println!("  检测到 {} 个目标", bounds.len());
     }
     
     println!("\n2. 按时间循环模式（执行2秒）");
     {
-        // 创建数据流
-        let img_stream = Arc::new(Mutex::new(Stream::new()));
-        let bounds_stream = Arc::new(Mutex::new(Stream::new()));
+        // 创建数据池
+        let mut pool = Swapl::new();
         
         // 创建Perple实例
         let mut perple = Perple::new(
-            Arc::clone(&img_stream),
-            Arc::clone(&bounds_stream),
+            &pool,
             "module/color/yolo11n.onnx",
         );
         
@@ -80,22 +76,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         
         // 检查结果
         let bounds = {
-            let mut bounds_stream = bounds_stream.lock().unwrap();
-            bounds_stream.read().unwrap_or_else(|| Bounds::new())
+            let mut bounds_stream = perple.img_bud_stream.lock().unwrap();
+            bounds_stream.read().unwrap_or_else(|| ImgBud::new())
         };
         println!("  检测到 {} 个目标", bounds.len());
     }
     
-    println!("\n3. 持续循环模式（手动停止）");
+    println!("\n3. 信号控制循环模式（手动停止）");
     {
-        // 创建数据流
-        let img_stream = Arc::new(Mutex::new(Stream::new()));
-        let bounds_stream = Arc::new(Mutex::new(Stream::new()));
+        // 创建数据池
+        let mut pool = Swapl::new();
         
         // 创建Perple实例
         let mut perple = Perple::new(
-            Arc::clone(&img_stream),
-            Arc::clone(&bounds_stream),
+            &pool,
             "module/color/yolo11n.onnx",
         );
         
@@ -104,7 +98,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         
         let start = Instant::now();
         
-        // 启动持续循环处理
+        // 启动信号控制循环处理
         perple.start_color_loop()?;
         
         // 等待一段时间后手动停止
@@ -115,26 +109,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         perple.join_color_thread()?;
         
         let duration = start.elapsed();
-        println!("  持续循环处理耗时: {:?}", duration);
+        println!("  信号控制循环处理耗时: {:?}", duration);
         
         // 检查结果
         let bounds = {
-            let mut bounds_stream = bounds_stream.lock().unwrap();
-            bounds_stream.read().unwrap_or_else(|| Bounds::new())
+            let mut bounds_stream = perple.img_bud_stream.lock().unwrap();
+            bounds_stream.read().unwrap_or_else(|| ImgBud::new())
         };
         println!("  检测到 {} 个目标", bounds.len());
     }
     
     println!("\n4. 等待结果模式（获得结果后立即停止）");
     {
-        // 创建数据流
-        let img_stream = Arc::new(Mutex::new(Stream::new()));
-        let bounds_stream = Arc::new(Mutex::new(Stream::new()));
+        // 创建数据池
+        let mut pool = Swapl::new();
         
         // 创建Perple实例
         let mut perple = Perple::new(
-            Arc::clone(&img_stream),
-            Arc::clone(&bounds_stream),
+            &pool,
             "module/color/yolo11n.onnx",
         );
         
@@ -143,7 +135,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         
         let start = Instant::now();
         
-        // 启动持续循环处理
+        // 启动信号控制循环处理
         perple.start_color_loop()?;
         
         // 等待结果或超时
@@ -162,8 +154,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         
         // 检查结果
         let bounds = {
-            let mut bounds_stream = bounds_stream.lock().unwrap();
-            bounds_stream.read().unwrap_or_else(|| Bounds::new())
+            let mut bounds_stream = perple.img_bud_stream.lock().unwrap();
+            bounds_stream.read().unwrap_or_else(|| ImgBud::new())
         };
         println!("  检测到 {} 个目标", bounds.len());
     }

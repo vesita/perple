@@ -41,13 +41,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  在 {:?} 内执行了 {} 次", duration, final_count);
     }
     
-    println!("\n3. 持续循环模式");
+    println!("\n3. 信号控制循环模式");
     {
         let counter = Arc::new(Mutex::new(0));
         let counter_clone = Arc::clone(&counter);
         let mut muloop = MultiLoop::new();
         
-        muloop.start(LoopMode::Continuous, move || {
+        muloop.start(LoopMode::Signal, move || {
             let mut cnt = counter_clone.lock().unwrap();
             *cnt += 1;
         }, 100)?; // 100ms间隔

@@ -4,8 +4,9 @@ use pcd_rs::DynReader;
 
 use crate::config::*;
 
+#[derive(Clone)]
 pub struct Lifra {
-    points: [[f32; 3]; POINTS_CAPACITY],
+    points: Vec<[f32; 3]>,
     count: usize,
 }
 
@@ -13,7 +14,7 @@ impl Lifra {
 
     pub fn new() -> Self {
         Lifra {
-            points: [[0.0; 3]; POINTS_CAPACITY],
+            points: Vec::with_capacity(POINTS_CAPACITY),
             count: 0,
         }
     }
@@ -34,10 +35,11 @@ impl Lifra {
         }
     }
 
-    pub fn reject(&mut self, point: &[f32; 3]) -> bool {
-        point[0] == 0.0 && 
-        point[1] == 0.0 && 
-        point[2] == 0.0
+    /// 拒绝无效点
+    /// 
+    /// 过滤掉包含NaN或无穷大的点
+    pub fn reject(&self, point: &[f32; 3]) -> bool {
+        point.iter().any(|&x| x.is_nan() || x.is_infinite())
     }
 
     pub fn len(&self) -> usize {
@@ -48,10 +50,21 @@ impl Lifra {
         self.count == 0
     }
 
+    /// 将点添加到点云中
+    /// 
+    /// 如果点云已满，则不会添加新点
     pub fn push(&mut self, point: [f32; 3]) {
         if self.count < POINTS_CAPACITY {
-            self.points[self.count] = point;
+            self.points.push(point);
             self.count += 1;
+        }
+    }
+    
+    /// 从另一个Lifra实例更新数据
+    pub fn update_from_lifra(&mut self, other: &Lifra) {
+        self.count = 0;
+        for point in other.iter().take(other.len()) {
+            self.push(*point);
         }
     }
 
@@ -64,13 +77,19 @@ impl Lifra {
     pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, [f32; 3]> {
         self.points.iter_mut()
     }
+
+    /// 清空点云数据
+    pub fn clear(&mut self) {
+        self.points.clear();
+        self.count = 0;
+    }
 }
 
 // 实现IntoIterator，支持所有权转移的迭代
 impl IntoIterator for Lifra {
     type Item = [f32; 3];
-    type IntoIter = std::array::IntoIter<[f32; 3], POINTS_CAPACITY>;
-
+    type IntoIter = std::vec::IntoIter<[f32; 3]>;
+    
     fn into_iter(self) -> Self::IntoIter {
         self.points.into_iter()
     }
@@ -101,5 +120,12 @@ impl Index<usize> for Lifra {
 
     fn index(&self, index: usize) -> &Self::Output {
         &self.points[index]
+    }
+}
+
+// 实现Default trait
+impl Default for Lifra {
+    fn default() -> Self {
+        Self::new()
     }
 }

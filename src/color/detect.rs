@@ -2,7 +2,7 @@ use ort::{session::{Session, input}, value::{TensorValueType, Value}};
 use image::{DynamicImage, GenericImageView};
 use raqote::{DrawOptions, DrawTarget, LineJoin, PathBuilder, SolidSource, Source, StrokeStyle};
 use std::time::Instant;
-use crate::{color::{array::to_input, bounds::{Bounds, Detection}, image::{ScaleMessage, input_image, resize_image, image_to_tensor}, utils::{nms_tensor}}, config::{DETECTIONS_CAPACITY, DEFAULT_INPUT_WIDTH, DEFAULT_INPUT_HEIGHT, DEFAULT_CONFIDENCE_THRESHOLD, DEFAULT_NMS_THRESHOLD}, load_model};
+use crate::{color::{array::to_input, bounds::{ImgBud, Detection}, image::{ScaleMessage, input_image, resize_image, image_to_tensor}, utils::{nms_tensor}}, config::{DETECTIONS_CAPACITY, DEFAULT_INPUT_WIDTH, DEFAULT_INPUT_HEIGHT, DEFAULT_CONFIDENCE_THRESHOLD, DEFAULT_NMS_THRESHOLD}, load_model};
 use ndarray::{Array2, Array4, s};
 use ort::{value::Tensor, inputs};
 
@@ -30,12 +30,12 @@ pub struct YoloDetector {
     input_width: usize,
     /// 模型输入高度
     input_height: usize,
-    /// 置信度阈值，低于此值的检测结果将被过滤
+    /// 置信度阈值
     confidence_threshold: f32,
-    /// NMS（非极大值抑制）阈值，用于去除重复检测
+    /// NMS阈值
     nms_threshold: f32,
-    /// NMS处理中使用的缓存数组，避免重复分配内存
-    picked_indices: [bool; DETECTIONS_CAPACITY],
+    /// 用于NMS的临时索引数组
+    picked_indices: Vec<bool>,
 }
 
 impl YoloDetector {
@@ -61,14 +61,19 @@ impl YoloDetector {
     /// # }
     /// ```
     pub fn new(model_path: &str, input_width: usize, input_height: usize) -> Self {
-        let model = load_model(model_path).expect("模型加载失败");
+        let model = load_model(model_path).expect("无法加载模型");
+        
         Self {
             model,
             input_width,
             input_height,
             confidence_threshold: DEFAULT_CONFIDENCE_THRESHOLD,
             nms_threshold: DEFAULT_NMS_THRESHOLD,
-            picked_indices: [false; DETECTIONS_CAPACITY],
+            picked_indices: {
+                let mut indices = Vec::with_capacity(DETECTIONS_CAPACITY);
+                indices.resize(DETECTIONS_CAPACITY, false);
+                indices
+            },
         }
     }
 
@@ -94,7 +99,7 @@ impl YoloDetector {
     /// 返回推理结果
     pub fn infer(&mut self,
         input: &Value<TensorValueType<f32>>,
-        outputs: &mut Bounds,
+        outputs: &mut ImgBud,
         message: &ScaleMessage,
     ) -> Result<(), Box<dyn std::error::Error>> {
         outputs.clear();
@@ -208,7 +213,7 @@ impl YoloDetector {
     /// 
     /// # 错误处理
     /// 如果检测过程中发生错误会返回Err
-    pub fn detect(&mut self, image: &DynamicImage) -> Result<Bounds, Box<dyn std::error::Error>> {
+    pub fn detect(&mut self, image: &DynamicImage) -> Result<ImgBud, Box<dyn std::error::Error>> {
         // 调整图像大小
         let resized = resize_image(image, self.input_width as u32, self.input_height as u32);
         
@@ -217,7 +222,7 @@ impl YoloDetector {
         
         // 运行推理
         let input_tensor = to_input(&tensor);
-        let mut outputs = Bounds::new();
+        let mut outputs = ImgBud::new();
         let scale_message = ScaleMessage {
             o_width: image.width(),
             o_height: image.height(),
@@ -237,7 +242,7 @@ impl YoloDetector {
     /// 
     /// # 返回值
     /// 返回每张图像的检测结果
-    pub fn detect_batch(&mut self, images: &[DynamicImage]) -> Result<Vec<Bounds>, Box<dyn std::error::Error>> {
+    pub fn detect_batch(&mut self, images: &[DynamicImage]) -> Result<Vec<ImgBud>, Box<dyn std::error::Error>> {
         let mut results = Vec::with_capacity(images.len());
         
         for image in images {

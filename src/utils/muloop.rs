@@ -9,8 +9,8 @@ pub enum LoopMode {
     Count(usize),
     /// 按时间循环（毫秒）
     Duration(u64),
-    /// 持续循环直到手动停止
-    Continuous,
+    /// 基于信号控制的循环模式
+    Signal,
 }
 
 /// 循环控制结构体
@@ -73,7 +73,7 @@ impl MultiLoop {
                     let mut running = loop_running.lock().unwrap();
                     *running = false;
                 },
-                LoopMode::Continuous => {
+                LoopMode::Signal => {
                     while *loop_running.lock().unwrap() {
                         callback();
                         // 控制处理频率
@@ -83,6 +83,78 @@ impl MultiLoop {
             }
         }));
         
+        Ok(())
+    }
+    
+    /// 启动对象方法循环执行
+    /// 
+    /// # 参数
+    /// * `mode` - 循环模式
+    /// * `object` - 实现了特定方法的对象引用
+    /// * `method` - 要执行的方法（通常是一个闭包，调用对象的方法）
+    /// * `interval_ms` - 每次循环之间的间隔（毫秒）
+    pub fn start_with_method<T, F>(
+        &mut self,
+        mode: LoopMode,
+        object: Arc<Mutex<T>>,
+        method: F,
+        interval_ms: u64,
+    ) -> Result<(), String>
+    where
+        T: Send + 'static,
+        F: Fn(&mut T) + Send + 'static,
+    {
+        let mut running = self.running.lock().unwrap();
+        if *running {
+            return Err("Loop is already running".to_string());
+        }
+
+        *running = true;
+        drop(running); // 释放锁
+
+        let loop_running = Arc::clone(&self.running);
+
+        self.thread_handle = Some(thread::spawn(move || {
+            match mode {
+                LoopMode::Count(count) => {
+                    let mut counter = 0;
+                    while *loop_running.lock().unwrap() && counter < count {
+                        {
+                            let mut obj = object.lock().unwrap();
+                            method(&mut *obj);
+                        }
+                        counter += 1;
+                        thread::sleep(Duration::from_millis(interval_ms));
+                    }
+                    let mut running = loop_running.lock().unwrap();
+                    *running = false;
+                }
+                LoopMode::Duration(duration_ms) => {
+                    let start_time = std::time::Instant::now();
+                    while *loop_running.lock().unwrap()
+                        && start_time.elapsed().as_millis() < duration_ms as u128
+                    {
+                        {
+                            let mut obj = object.lock().unwrap();
+                            method(&mut *obj);
+                        }
+                        thread::sleep(Duration::from_millis(interval_ms));
+                    }
+                    let mut running = loop_running.lock().unwrap();
+                    *running = false;
+                }
+                LoopMode::Signal => {
+                    while *loop_running.lock().unwrap() {
+                        {
+                            let mut obj = object.lock().unwrap();
+                            method(&mut *obj);
+                        }
+                        thread::sleep(Duration::from_millis(interval_ms));
+                    }
+                }
+            }
+        }));
+
         Ok(())
     }
     

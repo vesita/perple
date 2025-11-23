@@ -1,76 +1,142 @@
-# Perple - YOLO 模型训练项目
+# Perple 相机+雷达联合检测工具
 
 ## 项目介绍
 
-本项目是一个基于 YOLO 的目标检测模型训练系统，使用 Rust 作为主框架，Python 脚本进行模型训练和评估。
+本项目是一个基于相机与雷达的障碍物检测工具，基于 Rust 实现。
+
+开发于linux环境
+
+### 项目特点
+
+- **高性能数据处理**: 使用 Rust 实现图像和点云数据的高效处理
+- **灵活训练控制**: Python 脚本提供灵活的训练流程控制
+- **持续训练机制**: 自动化的训练-评估-归档闭环，解决数据增强导致的初期性能波动问题
+- **多模态支持**: 同时支持图像和 LiDAR 点云数据处理
+- **模型导出**: 支持将训练好的模型导出为 ONNX 格式便于部署
+- **可视化工具**: 使用 rerun 进行 3D 数据可视化
 
 ## 目录结构
 
 ```
 .
 ├── examples
-│   └── counter.rs
-├── py-scripts
+│   ├── image_test.rs
+│   ├── lidar_reader.rs
+│   ├── loop_modes.rs
+│   └── muloop_example.rs
+├── scripts
+│   ├── ana
+│   │   └── pcd_analyzer.py
 │   ├── configs
 │   │   └── model.yaml
 │   ├── dev
+│   │   ├── archive.py
+│   │   ├── continuous_train.py
 │   │   ├── eval.py
+│   │   ├── to_onnx.py
 │   │   └── train.py
 │   ├── hyper
-│   │   ├── amt.yaml
 │   │   ├── dataset.yaml
-│   │   ├── optimizer.yaml
-│   │   └── train.yaml
-│   ├── model
-│   │   └── records
-│   ├── utils
-│   │   ├── __init__.py
-│   │   └── archive.py
-│   └── __init__.py
+│   │   ├── hyp.yaml
+│   │   └── my.yaml
+│   └── model
+│       ├── original
+│       │   └── yolo11.yaml
+│       └── records
+│           ├── 25_11_03_00
+│           │   └── args.yaml
+│           ├── 25_11_03_01
+│           │   └── args.yaml
+│           └── ...
 ├── src
+│   ├── color
+│   │   ├── array.rs
+│   │   ├── bounds.rs
+│   │   ├── core.rs
+│   │   ├── detect.rs
+│   │   ├── image.rs
+│   │   ├── model.rs
+│   │   └── utils.rs
+│   ├── lidar
+│   │   ├── bounds.rs
+│   │   ├── claster.rs
+│   │   ├── core.rs
+│   │   ├── lifra.rs
+│   │   └── tag.rs
+│   ├── utils
+│   │   ├── muloop.rs
+│   │   ├── sort.rs
+│   │   └── stream.rs
+│   ├── color.rs
+│   ├── config.rs
 │   ├── lib.rs
+│   ├── lidar.rs
 │   ├── main.rs
-│   └── utils.rs
+│   ├── perple.rs
+│   ├── swapl.rs
+│   ├── utils.rs
+│   └── world.rs
 ├── Cargo.toml
 ├── README.md
 └── pyproject.toml
 ```
 
-## 训练策略优化
+## 环境搭建与部署
 
-### 传统训练方式
+### 必需工具
 
-使用 `py-scripts/dev/train.py` 进行标准训练。
+- Rust toolchain (edition 2024)
+- Python 3.8+
+- pip / pip-tools
+- ONNX Runtime
+- PyTorch
 
-### 持续训练策略
+### 安装步骤
 
-为了克服数据增强带来的初始性能波动问题，我们引入了持续训练策略：
+1. 安装Rust
+    推荐先配置rust镜像源，然后安装Rust
+    1.1 配置rustup镜像源
+        rustup源: <https://mirrors.tuna.tsinghua.edu.cn/help/rustup/>
+    1.2 安装rust编译器
+        ```bash
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+        ```
+    1.3 配置cargo源
+        cargo源: <https://mirrors.tuna.tsinghua.edu.cn/help/crates.io-index/>
+2. 安装Python
+    本项目使用uv管理虚拟环境
 
-1. 使用 `py-scripts/dev/continuous_train.py` 脚本
-2. 该脚本会自动评估每轮训练的结果
-3. 如果模型未达到预期性能，则继续下一轮训练
-4. 每轮训练的结果都会被自动归档
+    ```bash
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    ```
 
-### 配置优化
-
-1. 增加了训练轮数 (epochs) 从 32 到 100
-2. 增加了批次大小 (batch) 从 8 到 16
-3. 增加了早停耐心值 (patience) 从 20 到 50
-4. 优化了数据增强参数，特别是 copy_paste 从 0.2 提高到 0.3
-
-### 使用方法
+### 构建项目
 
 ```bash
-# 标准训练
-python py-scripts/dev/train.py
-
-# 持续训练（推荐）
-python py-scripts/dev/continuous_train.py
+# 开发构建
+cargo build
 ```
 
-### 训练建议
+### 配置python环境
 
-1. **首次训练**：使用标准训练方式直到模型收敛
-2. **持续优化**：使用持续训练策略进一步提升模型性能
-3. **监控指标**：关注 mAP50 和 mAP50-95 指标，确保模型性能提升
-4. **资源管理**：持续训练会自动归档每轮结果，便于回溯和管理
+```bash
+uv sync
+```
+
+### 运行示例
+
+```bash
+# 运行示例程序
+cargo run --example lidar_reader
+cargo run --example image_test
+
+# 运行Python训练脚本
+python scripts/dev/train.py
+python scripts/dev/continuous_train.py
+```
+
+## 需要预先安装的依赖包
+
+1. libssl-dev
+2. pkg-config
+3. libfontconfig1-dev

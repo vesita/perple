@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::thread;
 
-use crate::{YoloDetector, color::{bounds::Bounds, image::{ScaleMessage}}, config::{DEFAULT_INPUT_WIDTH, DEFAULT_INPUT_HEIGHT}, utils::stream::Stream};
+use crate::{YoloDetector, color::{bounds::ImgBud, image::{ScaleMessage}}, config::{DETECTIONS_CAPACITY, DEFAULT_INPUT_WIDTH, DEFAULT_INPUT_HEIGHT}, utils::stream::Stream};
 use ort::value::{TensorValueType, Value, Tensor};
 
 /// Color模块的核心结构，用于执行目标检测
@@ -16,13 +16,11 @@ pub struct Color {
     /// 输入图像流（线程安全）
     input_stream: Arc<Mutex<Stream<DynamicImage>>>,
     /// 输出检测结果流（线程安全）
-    output_stream: Arc<Mutex<Stream<Bounds>>>,
+    output_stream: Arc<Mutex<Stream<ImgBud>>>,
     /// YOLO检测器
     model: YoloDetector,
     /// 图像缩放信息
     message: ScaleMessage,
-    /// 控制循环运行的标志
-    running: bool,
     /// Tensor Value缓存，用于避免拷贝
     tensor_value: Value<TensorValueType<f32>>,
 }
@@ -42,7 +40,7 @@ impl Color {
     /// 返回新的Color实例
     pub fn new(
         input_stream: Arc<Mutex<Stream<DynamicImage>>>,
-        output_stream: Arc<Mutex<Stream<Bounds>>>,
+        output_stream: Arc<Mutex<Stream<ImgBud>>>,
         model_path: &str,
     ) -> Self {
         let input_width = DEFAULT_INPUT_WIDTH;
@@ -64,7 +62,6 @@ impl Color {
                 s_width: input_width as u32,
                 s_height: input_height as u32,
             },
-            running: false,
             tensor_value,
         }
     }
@@ -99,7 +96,7 @@ impl Color {
             let mut output_stream = self.output_stream.lock().unwrap();
             if let Ok(slot) = output_stream.get_write_mut() {
                 // 初始化或获取Bounds对象
-                let bounds = slot.get_or_insert_with(Bounds::new);
+                let bounds = slot.get_or_insert_with(ImgBud::new);
                 bounds.clear(); // 清空之前的数据
                 
                 // 执行推理
@@ -120,38 +117,6 @@ impl Color {
         }
     }
     
-    /// 循环执行检测操作，直到停止信号
-    /// 
-    /// 此方法会在每次检测后休眠一小段时间，避免过度占用CPU
-    pub fn run_loop(&mut self) {
-        self.running = true;
-        while self.running {
-            // 执行检测
-            self.act();
-            
-            // 等待一段时间再进行下一次检测
-            // 这里设置为100ms，可以根据需要调整
-            thread::sleep(Duration::from_millis(100));
-        }
-    }
-
-    // 控制方法
-    // ------------------------------------------------------------------------
-
-    /// 启动循环检测
-    pub fn start(&mut self) {
-        self.running = true;
-    }
-    
-    /// 停止循环检测
-    pub fn stop(&mut self) {
-        self.running = false;
-    }
-    
-    /// 检查是否正在运行
-    pub fn is_running(&self) -> bool {
-        self.running
-    }
 
     // Getter方法
     // ------------------------------------------------------------------------

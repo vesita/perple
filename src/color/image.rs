@@ -171,7 +171,7 @@ pub fn fill_input_image(
     // 调整图像大小以适应模型输入
     let resized_img = resize_image(img, input_width as u32, input_height as u32);
     
-    // 预分配准确大小的向量并初始化为0
+    // 在堆上分配准确大小的向量并初始化为0，避免栈溢出
     let mut nchw_data = vec![0.0f32; input_height * input_width * 3];
     
     // 获取RGB图像数据

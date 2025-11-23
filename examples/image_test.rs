@@ -1,13 +1,11 @@
 use perple::perple::Perple;
 use perple::LoopMode;
 use perple::{
-    color::Bounds, draw_detections, load_image
+    color::ImgBud, draw_detections, load_image
 };
-use std::sync::{Arc, Mutex};
-use std::time::{Instant, Duration};
-use std::thread;
-use perple::utils::stream::Stream;
-use image::DynamicImage;
+use std::time::Instant;
+// 添加Swapl导入
+use perple::swapl::Swapl;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Perple 图像测试示例");
@@ -20,14 +18,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 打印图像信息
     println!("原始图像尺寸: {}x{}", image.width(), image.height());
     
-    // 创建数据流
-    let img_stream = Arc::new(Mutex::new(Stream::new()));
-    let bounds_stream = Arc::new(Mutex::new(Stream::new()));
+    // 创建Swapl数据中枢
+    let pool = Swapl::new();
     
     // 创建Perple实例
     let mut perple = Perple::new(
-        Arc::clone(&img_stream),
-        Arc::clone(&bounds_stream),
+        &pool,
         "module/color/yolo11n.onnx",
     );
     
@@ -49,15 +45,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     
     // 等待线程结束
-    perple.join_color_thread()?;
+    if let Err(e) = perple.join_color_thread() {
+        eprintln!("等待线程结束时出错: {}", e);
+    }
     
     let total_duration = start_total.elapsed();
     println!("总处理耗时: {:?}", total_duration);
     
     // 从结果流中获取检测结果
     let bounds = {
-        let mut bounds_stream = bounds_stream.lock().unwrap();
-        bounds_stream.read().unwrap_or_else(|| Bounds::new())
+        let mut bounds_stream = perple.img_bud_stream.lock().unwrap();
+        bounds_stream.read().unwrap_or_else(|| ImgBud::new())
     };
     
     println!("检测到 {} 个目标", bounds.len());

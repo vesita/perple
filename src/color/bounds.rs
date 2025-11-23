@@ -21,10 +21,6 @@ impl Box2D {
         Self { x1, y1, x2, y2 }
     }
     
-    /// 创建一个默认的边界框
-    pub fn default() -> Self {
-        Self { x1: 0.0, y1: 0.0, x2: 0.0, y2: 0.0 }
-    }
     
     /// 计算边界框的宽度
     pub fn width(&self) -> f32 {
@@ -48,205 +44,123 @@ impl Box2D {
 }
 
 
-/// 检测结果结构
+/// 目标检测结果
 /// 
-/// 包含检测到的目标的完整信息。
+/// 表示一个检测到的对象，包括边界框、类别ID、类别名称和置信度。
 #[derive(Debug, Clone, Default)]
 pub struct Detection {
-    /// 目标的边界框
     pub bbox: Box2D,
-    /// 类别ID
-    pub class_id: usize,
-    /// 类别名称
+    pub class_id: u32,
     pub class_name: String,
-    /// 置信度
     pub confidence: f32,
 }
 
 impl Detection {
     /// 创建一个新的检测结果
-    pub fn new(bbox: Box2D, class_id: usize, class_name: String, confidence: f32) -> Self {
+    /// 
+    /// # 参数
+    /// * `bbox` - 边界框
+    /// * `class_id` - 类别ID
+    /// * `class_name` - 类别名称
+    /// * `confidence` - 置信度
+    pub fn new(bbox: Box2D, class_id: u32, class_name: String, confidence: f32) -> Self {
         Self { bbox, class_id, class_name, confidence }
-    }
-    
-    /// 创建一个默认的检测结果
-    pub fn default() -> Self {
-        Self { 
-            bbox: Box2D::default(), 
-            class_id: 0, 
-            class_name: String::new(), 
-            confidence: 0.0 
-        }
     }
 }
 
 /// 固定容量的检测结果容器
 /// 
-/// 这是一个类似于Vec的容器，但具有固定的最大容量，避免了动态分配内存的开销。
+/// 这是一个带有预分配容量的容器，用于存储检测到的对象。
 /// 它实现了常用的集合操作，如push、clear、len等，并支持迭代器。
-pub struct Bounds {
-    bounds: [Detection; DETECTIONS_CAPACITY],
-    len: usize,
+#[derive(Clone)]
+pub struct ImgBud {
+    bounds: Vec<Detection>,
 }
 
-impl Bounds {
-    /// 创建一个新的空Bounds容器
+impl ImgBud {
+    /// 创建一个新的空检测结果容器
+    /// 
+    /// 容量被预设为配置文件中定义的 `DETECTIONS_CAPACITY`。
     pub fn new() -> Self {
         Self {
-            bounds: std::array::from_fn(|_| Detection::default()),
-            len: 0,
+            bounds: Vec::with_capacity(DETECTIONS_CAPACITY),
         }
     }
     
     /// 向容器中添加一个新的检测结果
     /// 
-    /// 如果容器已满，则不会添加新元素
+    /// 如果容器已满 (达到 `DETECTIONS_CAPACITY`)，则不会添加新元素。
     pub fn push(&mut self, detection: Detection) {
-        if self.len < DETECTIONS_CAPACITY {
-            self.bounds[self.len] = detection;
-            self.len += 1;
+        if self.bounds.len() < DETECTIONS_CAPACITY {
+            self.bounds.push(detection);
         }
     }
     
     /// 清空容器中的所有检测结果
     pub fn clear(&mut self) {
-        self.len = 0;
+        self.bounds.clear();
     }
     
-    /// 返回容器中检测结果的数量
+    /// 获取容器中检测结果的数量
     pub fn len(&self) -> usize {
-        self.len
+        self.bounds.len()
     }
     
     /// 检查容器是否为空
     pub fn is_empty(&self) -> bool {
-        self.len == 0
+        self.bounds.is_empty()
     }
     
-    /// 获取容器中所有检测结果的切片引用
+    /// 获取容器的切片引用
     pub fn as_slice(&self) -> &[Detection] {
-        &self.bounds[..self.len]
+        &self.bounds
     }
     
-    /// 获取容器中所有检测结果的可变切片引用
+    /// 获取容器的可变切片引用
     pub fn as_mut_slice(&mut self) -> &mut [Detection] {
-        &mut self.bounds[..self.len]
+        &mut self.bounds
     }
     
-    /// 根据索引获取检测结果的引用
-    pub fn get(&self, index: usize) -> Option<&Detection> {
-        if index < self.len {
-            Some(&self.bounds[index])
-        } else {
-            None
-        }
+    /// 提供只读引用迭代器
+    pub fn iter(&self) -> std::slice::Iter<Detection> {
+        self.bounds.iter()
     }
     
-    /// 根据索引获取检测结果的可变引用
-    pub fn get_mut(&mut self, index: usize) -> Option<&mut Detection> {
-        if index < self.len {
-            Some(&mut self.bounds[index])
-        } else {
-            None
-        }
-    }
-    
-    /// 获取第一个检测结果的引用
-    pub fn first(&self) -> Option<&Detection> {
-        if self.len > 0 {
-            Some(&self.bounds[0])
-        } else {
-            None
-        }
-    }
-    
-    /// 获取最后一个检测结果的引用
-    pub fn last(&self) -> Option<&Detection> {
-        if self.len > 0 {
-            Some(&self.bounds[self.len - 1])
-        } else {
-            None
-        }
-    }
-    
-    /// 对检测结果按置信度进行排序（降序）
-    pub fn sort_by_confidence(&mut self) {
-        let slice = self.as_mut_slice();
-        slice.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap());
-    }
-    
-    /// 对检测结果按指定比较函数进行排序
-    pub fn sort_by<F>(&mut self, compare: F) 
-    where 
-        F: FnMut(&Detection, &Detection) -> std::cmp::Ordering,
-    {
-        let slice = self.as_mut_slice();
-        slice.sort_by(compare);
-    }
-    
-    /// 提供只读迭代器
-    pub fn iter(&self) -> std::slice::Iter<'_, Detection> {
-        self.as_slice().iter()
-    }
-    
-    /// 提供可变迭代器
-    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, Detection> {
-        self.as_mut_slice().iter_mut()
-    }
-    
-    /// 保留满足条件的检测结果
-    pub fn retain<F>(&mut self, mut f: F) 
-    where 
-        F: FnMut(&Detection) -> bool,
-    {
-        let mut i = 0;
-        while i < self.len {
-            if !f(&self.bounds[i]) {
-                // 移动后续元素
-                for j in i..(self.len - 1) {
-                    self.bounds[j] = self.bounds[j + 1].clone();
-                }
-                self.len -= 1;
-            } else {
-                i += 1;
-            }
-        }
+    /// 提供可变引用迭代器
+    pub fn iter_mut(&mut self) -> std::slice::IterMut<Detection> {
+        self.bounds.iter_mut()
     }
 }
 
-// 实现只读迭代器支持
-impl<'a> IntoIterator for &'a Bounds {
-    type Item = &'a Detection;
-    type IntoIter = std::slice::Iter<'a, Detection>;
-    
-    fn into_iter(self) -> Self::IntoIter {
-        self.as_slice().iter()
-    }
-}
-
-// 实现可变迭代器支持
-impl<'a> IntoIterator for &'a mut Bounds {
-    type Item = &'a mut Detection;
-    type IntoIter = std::slice::IterMut<'a, Detection>;
-    
-    fn into_iter(self) -> Self::IntoIter {
-        self.as_mut_slice().iter_mut()
-    }
-}
-
-// 实现默认trait
-impl Default for Bounds {
+impl Default for ImgBud {
     fn default() -> Self {
         Self::new()
     }
 }
 
-// 实现Debug trait
-impl std::fmt::Debug for Bounds {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Bounds")
-            .field("len", &self.len)
-            .field("bounds", &self.as_slice())
-            .finish()
+impl IntoIterator for ImgBud {
+    type Item = Detection;
+    type IntoIter = std::vec::IntoIter<Detection>;
+    
+    fn into_iter(self) -> Self::IntoIter {
+        self.bounds.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a ImgBud {
+    type Item = &'a Detection;
+    type IntoIter = std::slice::Iter<'a, Detection>;
+    
+    fn into_iter(self) -> Self::IntoIter {
+        self.bounds.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut ImgBud {
+    type Item = &'a mut Detection;
+    type IntoIter = std::slice::IterMut<'a, Detection>;
+    
+    fn into_iter(self) -> Self::IntoIter {
+        self.bounds.iter_mut()
     }
 }

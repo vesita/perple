@@ -28,6 +28,16 @@ pub struct Lidar {
     position: Matrix4<f32>,
 }
 
+impl World { 
+    pub fn new() -> Self {
+        Self {
+            equips: vec![],
+            equip_id: HashMap::new(),
+            points: vec![],
+        }
+    }
+}
+
 impl Location for Camera {
     fn on_world(&self) -> Matrix4<f32> {
         self.position

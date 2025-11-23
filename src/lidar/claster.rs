@@ -1,4 +1,4 @@
-use crate::lidar::{bounds::Box3D, tag::Tag3D};
+use crate::lidar::{bounds::Box3D, tag::Tag3D, lifra::Lifra};
 use std::cmp::Ordering;
 
 pub struct Claster {
@@ -14,6 +14,11 @@ impl Claster {
             patience: 0.500,
             merge_threshold: 0.6,
         }
+    }
+    
+    /// 清空聚类结果，重置状态
+    pub fn clear(&mut self) {
+        self.objects.clear();
     }
 
     /// 获取聚类对象的不可变引用
@@ -66,6 +71,20 @@ impl Claster {
             }
             self.objects.push(current_box);
         }
+    }
+    
+    /// 直接处理整个Lifra帧数据
+    pub fn claster(&mut self, lifra: &Lifra) {
+        // 清空之前的聚类结果
+        self.clear();
+        
+        // 对所有点进行聚类处理
+        for point in lifra.iter().take(lifra.len()) {
+            self.submit(point);
+        }
+        
+        // 执行最终的聚类合并操作
+        self.merge_box();
     }
     
     

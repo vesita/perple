@@ -8,12 +8,11 @@ use ndarray::Axis;
 use ort::session::SessionOutputs;
 
 use crate::color::bounds::Box2D;
-use crate::color::bounds::Bounds;
+use crate::color::bounds::ImgBud;
 use crate::color::bounds::Detection;
 use crate::color::image::ScaleMessage;
 use crate::config::DETECTIONS_CAPACITY;
 use crate::config::PERSON_CLASS_LABEL;
-use crate::utils::sort::group_sort;
 use crate::utils::sort::group_sort_by;
 
 use image::DynamicImage;
@@ -238,11 +237,22 @@ fn apply_nms(detections: &mut Vec<Detection>, nms_threshold: f32) -> Vec<Detecti
     result
 }
 
+/// 对模型输出应用NMS处理
+/// 
+/// 从模型输出中提取检测结果，并应用置信度阈值和NMS阈值进行过滤
+/// 
+/// # 参数
+/// * `from_model` - 模型输出
+/// * `bounds` - 存储检测结果的容器
+/// * `message` - 图像缩放信息
+/// * `picked_indices` - 用于NMS处理的临时索引数组
+/// * `confidence_threshold` - 置信度阈值
+/// * `nms_threshold` - NMS阈值
 pub fn nms_tensor(
     from_model: &mut SessionOutputs,
-    bounds: &mut Bounds,
+    bounds: &mut ImgBud,
     message: &ScaleMessage,
-    picked_indices: &mut [bool; DETECTIONS_CAPACITY],
+    picked_indices: &mut Vec<bool>,
     confidence_threshold: f32,
     nms_threshold: f32,
 ) {
@@ -267,7 +277,8 @@ pub fn nms_tensor(
         b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
 
     // 初始化picked_indices数组，但不超过DETECTIONS_CAPACITY的大小
-    picked_indices.fill(false);
+    picked_indices.clear();
+    picked_indices.resize(DETECTIONS_CAPACITY, false);
 
     // NMS处理
     for i in 0..num_boxes.min(DETECTIONS_CAPACITY) {
@@ -286,10 +297,10 @@ pub fn nms_tensor(
         }
 
         // 计算当前框的坐标和面积
-        let i_x1 = data[i_start];
-        let i_y1 = data[i_start + 1];
-        let i_x2 = data[i_start + 2];
-        let i_y2 = data[i_start + 3];
+        let i_x1 = data[i_start] * width_scale;
+        let i_y1 = data[i_start + 1] * height_scale;
+        let i_x2 = data[i_start + 2] * width_scale;
+        let i_y2 = data[i_start + 3] * height_scale;
         let i_area = (i_x2 - i_x1) * (i_y2 - i_y1);
 
         // 如果面积为0，标记为已选择并跳过
@@ -301,10 +312,10 @@ pub fn nms_tensor(
         // 将未被抑制的边界框添加到bounds中
         bounds.push(Detection {
             bbox: Box2D {
-                x1: i_x1 * width_scale,
-                y1: i_y1 * height_scale,
-                x2: i_x2 * width_scale,
-                y2: i_y2 * height_scale,
+                x1: i_x1,
+                y1: i_y1,
+                x2: i_x2,
+                y2: i_y2,
             },
             class_id: 0,
             class_name: PERSON_CLASS_LABEL.to_string(),
@@ -326,10 +337,10 @@ pub fn nms_tensor(
                 continue;
             }
 
-            let j_x1 = data[j_start];
-            let j_y1 = data[j_start + 1];
-            let j_x2 = data[j_start + 2];
-            let j_y2 = data[j_start + 3];
+            let j_x1 = data[j_start] * width_scale;
+            let j_y1 = data[j_start + 1] * height_scale;
+            let j_x2 = data[j_start + 2] * width_scale;
+            let j_y2 = data[j_start + 3] * height_scale;
             
             // 计算交集区域
             let x_left = i_x1.max(j_x1);

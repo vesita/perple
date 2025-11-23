@@ -4,6 +4,8 @@ pub mod lidar;
 pub mod perple;
 pub mod config;
 pub mod world;
+pub mod swapl;
+
 
 pub use perple::Perple;
 pub use utils::muloop::LoopMode;
