@@ -4,7 +4,9 @@ use std::time::Instant;
 use nalgebra::{Matrix3, Matrix4, Vector3, Vector4};
 
 use crate::utils::world::OnWorld;
-use crate::{cloud::{bounds::CldBud, claster::Claster, lifra::Lifra}, utils::stream::{Stream, Cream}};
+use crate::{cloud::{CldBud, claster::Claster, lifra::Lifra}, utils::stream::{Stream, Cream}};
+use crate::utils::boxes::Box3D;
+
 
 /// Lidar模块的核心结构，用于执行点云处理
 pub struct Cloud {
@@ -38,7 +40,7 @@ impl Cloud {
     /// 1. 从输入流获取点云数据
     /// 2. 使用Claster直接处理整个帧数据
     /// 3. 将结果写入输出流
-    pub fn act(&mut self) {
+    pub fn fast_act(&mut self) {
         // 从输入流中读取点云数据
         let lifra = match self.read_input() {
             Some(data) => data,
@@ -48,6 +50,44 @@ impl Cloud {
         // 处理点云数据
         let start_time = Instant::now();
         self.process_frame(&lifra);
+        let process_duration = start_time.elapsed();
+        
+        // 将结果写入输出流
+        self.write_output();
+        
+        let duration = start_time.elapsed();
+        println!("点云处理耗时: {:?}", process_duration);
+        println!("点云IO耗时: {:?}", duration - process_duration);
+    }
+    
+    /// 带前置和后置处理函数的执行方法
+    /// 
+    /// 该方法会：
+    /// 1. 执行前置处理函数
+    /// 2. 从输入流获取点云数据
+    /// 3. 使用Claster直接处理整个帧数据
+    /// 4. 将结果写入输出流
+    /// 5. 执行后置处理函数
+    /// 
+    /// # 参数
+    /// * `pre_process` - 前置处理函数，接收并返回Lifra点云数据
+    /// * `post_process` - 后置处理函数，在处理完成后调用
+    pub fn act<F>(&mut self, prep: F) 
+    where 
+        F: FnOnce(Lifra) -> Lifra,
+    {
+        // 从输入流中读取点云数据
+        let lifra = match self.read_input() {
+            Some(data) => data,
+            None => return,
+        };
+        
+        // 执行前置处理
+        let clouds_in_world = prep(lifra);
+        
+        // 处理点云数据
+        let start_time = Instant::now();
+        self.process_frame(&clouds_in_world);
         let process_duration = start_time.elapsed();
         
         // 将结果写入输出流
@@ -101,6 +141,44 @@ impl Cloud {
         &self.cream
     }
 }
+
+impl Lidar {
+    pub fn new(
+        input_stream: Arc<Mutex<Stream<Lifra>>>,
+        output_stream: Arc<Mutex<Stream<Vec<CldBud>>>>,
+    ) -> Self {
+        Self {
+            data: Cloud::new(input_stream, output_stream),
+            extrinsic: Matrix4::identity(),
+        }
+    }
+
+    pub fn act(&mut self) {
+        // 创建一个前置处理函数，将点云从雷达坐标系转换到世界坐标系
+        let extrinsic = self.extrinsic;
+        let pre_process = move |lifra: Lifra| -> Lifra {
+            // 获取点云数据并进行坐标变换
+            let transformed_points: Vec<[f32; 3]> = lifra.points()
+                .iter()
+                .map(|point| {
+                    // 将点转换为齐次坐标
+                    let point_h = Vector4::new(point[0], point[1], point[2], 1.0);
+                    // 应用外参矩阵进行坐标变换
+                    let transformed = extrinsic * point_h;
+                    // 转换回非齐次坐标
+                    [transformed.x, transformed.y, transformed.z]
+                })
+                .collect();
+            
+            // 使用变换后的点创建新的Lifra实例
+            Lifra::from_points(transformed_points)
+        };
+        
+        // 调用带处理器的act方法
+        self.data.act(pre_process);
+    }
+}
+
 
 impl OnWorld for Lidar { 
     fn on_world(&self) -> Matrix4<f32> {

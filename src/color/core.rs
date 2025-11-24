@@ -4,7 +4,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::thread;
 
-use crate::{YoloDetector, color::{bounds::ClrBud, image::{ScaleMessage}}, config::{DETECTIONS_CAPACITY, DEFAULT_INPUT_WIDTH, DEFAULT_INPUT_HEIGHT}, utils::stream::{Stream, Cream}};
+use crate::color::YoloDetector;
+use crate::{color::{ClrBud, image::{ScaleMessage}}, config::{DEFAULT_INPUT_WIDTH, DEFAULT_INPUT_HEIGHT}, utils::stream::{Stream, Cream}};
 use ort::value::{TensorValueType, Value, Tensor};
 use crate::utils::world::OnWorld;
 
@@ -31,19 +32,6 @@ pub struct Camera {
     extrinsic: Matrix4<f32>,
 }
 
-impl Camera {
-    pub fn new(
-        input_stream: Arc<Mutex<Stream<DynamicImage>>>,
-        output_stream: Arc<Mutex<Stream<Vec<ClrBud>>>>,
-        model_path: &str,
-    ) -> Self {
-        Self {
-            data: Color::new(input_stream, output_stream, model_path),
-            intrinsic: Matrix3::identity(),
-            extrinsic: Matrix4::identity(),
-        }
-    }
-}
 
 impl Color { 
     // 构造函数和初始化方法
@@ -166,6 +154,25 @@ impl Color {
     /// 更新模型NMS阈值
     pub fn set_nms_threshold(&mut self, threshold: f32) {
         self.model.set_nms_threshold(threshold);
+    }
+}
+
+impl Camera {
+
+    pub fn new(
+        input_stream: Arc<Mutex<Stream<DynamicImage>>>,
+        output_stream: Arc<Mutex<Stream<Vec<ClrBud>>>>,
+        model_path: &str,
+    ) -> Self {
+        Self {
+            data: Color::new(input_stream, output_stream, model_path),
+            intrinsic: Matrix3::identity(),
+            extrinsic: Matrix4::identity(),
+        }
+    }
+
+    pub fn act(&mut self) {
+        self.data.act();
     }
 }
 

@@ -2,14 +2,16 @@ use perple::perple::Perple;
 use perple::utils::swapl::Swapl;
 use perple::{
     color::ClrBud, 
-    cloud::bounds::CldBud,
-    load_image
+    cloud::CldBud,
+
 };
 use std::time::Instant;
 use pcd_rs::DynReader;
 
 #[cfg(test)]
 mod tests {
+    use perple::color::load_image;
+
     use super::*;
 
     #[test]
@@ -114,7 +116,7 @@ mod tests {
                             
                             // 获取检测结果
                             let bounds = {
-                                let mut bounds_stream = perple.img_bud_stream.lock().unwrap();
+                                let mut bounds_stream = perple.clr_bud_stream.lock().unwrap();
                                 bounds_stream.read().unwrap_or_else(|| Vec::new())
                             };
                             

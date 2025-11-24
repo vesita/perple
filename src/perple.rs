@@ -3,10 +3,11 @@ use std::thread;
 use std::time::Duration;
 use image::DynamicImage;
 
+use crate::color::core::Camera;
 use crate::color::{ClrBud, core::Color};
-use crate::cloud::core::Cloud;
+use crate::cloud::core::{Cloud, Lidar};
 use crate::cloud::lifra::Lifra;
-use crate::cloud::bounds::CldBud;
+use crate::cloud::CldBud;
 use crate::utils::swapl::Swapl;
 use crate::utils::stream::Stream;
 use crate::utils::muloop::{MultiLoop, LoopMode};
@@ -19,18 +20,16 @@ use pcd_rs::DynRecord;
 
 pub struct Perple {
     /// 图像数据流（从Swapl数据中枢获取）
-    pub img_stream: Arc<Mutex<Stream<DynamicImage>>>,
+    pub clr_stream: Arc<Mutex<Stream<DynamicImage>>>,
     /// 图像检测结果流（从Swapl数据中枢获取）
-    pub img_bud_stream: Arc<Mutex<Stream<Vec<ClrBud>>>>,
+    pub clr_bud_stream: Arc<Mutex<Stream<Vec<ClrBud>>>>,
     /// 点云数据流（从Swapl数据中枢获取）
-    pub lid_stream: Arc<Mutex<Stream<Lifra>>>,
+    pub cld_stream: Arc<Mutex<Stream<Lifra>>>,
     /// 点云检测结果流（从Swapl数据中枢获取）
-    pub lid_bud_stream: Arc<Mutex<Stream<Vec<CldBud>>>>,
+    pub cld_bud_stream: Arc<Mutex<Stream<Vec<CldBud>>>>,
 
-    /// 内部模块（私有模块，直接使用成员变量以提升性能）
-    world: World,
-    color: Arc<Mutex<Color>>,
-    lidar: Arc<Mutex<Cloud>>,
+    camera: Arc<Mutex<Camera>>,
+    lidar: Arc<Mutex<Lidar>>,
 
     /// 控制类模块（可能跨线程访问，使用Arc<Mutex<T>>）
     color_loop: Arc<Mutex<MultiLoop>>,
@@ -52,27 +51,26 @@ impl Perple {
         let lid_stream = pool.get_lidars_stream();
         let lid_bud_stream = pool.get_lid_objs_stream();
         
-        // 初始化Color模块，连接到图像数据流
-        let color = Arc::new(Mutex::new(Color::new(
+
+        let camera = Arc::new(Mutex::new(Camera::new(
             Arc::clone(&img_stream),
             Arc::clone(&img_bud_stream),
             model_path,
         )));
         
-        // 初始化Lidar模块，连接到点云数据流
-        let lidar = Arc::new(Mutex::new(Cloud::new(
+
+        let lidar = Arc::new(Mutex::new(Lidar::new(
             Arc::clone(&lid_stream), 
             Arc::clone(&lid_bud_stream)
         )));
         
         Self {
             // 公用数据流，通过Swapl数据中枢进行访问
-            img_stream,
-            img_bud_stream,
-            lid_stream,
-            lid_bud_stream,
-            world: World::new(),
-            color,
+            clr_stream: img_stream,
+            clr_bud_stream: img_bud_stream,
+            cld_stream: lid_stream,
+            cld_bud_stream: lid_bud_stream,
+            camera,
             lidar,
             color_loop: Arc::new(Mutex::new(MultiLoop::new())),
             lidar_loop: Arc::new(Mutex::new(MultiLoop::new())),
@@ -82,8 +80,8 @@ impl Perple {
     pub fn run(&mut self) -> Result<(), String> { 
         
         if let Ok(mut color) = self.color_loop.lock() {
-            let _ = color.start_with_method(LoopMode::Signal, Arc::clone(&self.color), |color| {
-                color.act();
+            let _ = color.start_with_method(LoopMode::Signal, Arc::clone(&self.camera), |camera| {
+                camera.act();
             }, 40);
         }
         if let Ok(mut lidar) = self.lidar_loop.lock() {
@@ -99,9 +97,9 @@ impl Perple {
     pub fn start_color_loop_with_mode(&mut self, mode: LoopMode) -> Result<(), String> {
         // 获取color_loop的锁并启动循环
         let mut color_loop = self.color_loop.lock().unwrap();
-        let color_ref = Arc::clone(&self.color);
-        color_loop.start_with_method(mode, color_ref, |color| {
-            color.act();
+        let camera_ref = Arc::clone(&self.camera);
+        color_loop.start_with_method(mode, camera_ref, |camera| {
+            camera.act();
         }, 100) // 100ms间隔
     }
     
@@ -171,7 +169,7 @@ impl Perple {
 
     /// 更新图像流（推荐外部统一管理）
     pub fn update_image(&self, new_image: DynamicImage) {
-        let mut img_stream = self.img_stream.lock().unwrap();
+        let mut img_stream = self.clr_stream.lock().unwrap();
         let _ = img_stream.write(new_image);
     }
     
@@ -186,7 +184,7 @@ impl Perple {
         let start = std::time::Instant::now();
         while start.elapsed().as_millis() < timeout_ms as u128 {
             {
-                let bounds_stream = self.img_bud_stream.lock().unwrap();
+                let bounds_stream = self.clr_bud_stream.lock().unwrap();
                 if bounds_stream.has_data() {
                     return true;
                 }

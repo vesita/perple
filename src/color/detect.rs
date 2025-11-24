@@ -1,6 +1,6 @@
 use ort::{session::Session, value::{TensorValueType, Value}};
 use image::DynamicImage;
-use crate::{color::{array::to_input, bounds::{ClrBud}, image::{ScaleMessage, resize_image, image_to_tensor}, utils::{nms_tensor}}, config::{DETECTIONS_CAPACITY, DEFAULT_INPUT_WIDTH, DEFAULT_INPUT_HEIGHT, DEFAULT_CONFIDENCE_THRESHOLD, DEFAULT_NMS_THRESHOLD}, load_model};
+use crate::{color::{ClrBud, array::to_input, image::{ScaleMessage, image_to_tensor, resize_image}, load_model, utils::nms_tensor}, config::{DEFAULT_CONFIDENCE_THRESHOLD, DEFAULT_INPUT_HEIGHT, DEFAULT_INPUT_WIDTH, DEFAULT_NMS_THRESHOLD, DETECTIONS_CAPACITY}};
 use ndarray::{Array2, Array4, s};
 use ort::inputs;
 

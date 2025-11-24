@@ -7,8 +7,8 @@ use ndarray::Array2;
 use ndarray::Axis;
 use ort::session::SessionOutputs;
 
-use crate::color::bounds::Box2D;
-use crate::color::bounds::ClrBud;
+use crate::utils::Box2D;
+use crate::color::ClrBud;
 use crate::color::image::ScaleMessage;
 use crate::config::DETECTIONS_CAPACITY;
 use crate::config::PERSON_CLASS_LABEL;

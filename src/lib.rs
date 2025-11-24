@@ -2,13 +2,10 @@ pub mod utils;
 pub mod color;
 pub mod cloud;
 pub mod perple;
+pub mod tracker;
 pub mod config;
 
 
 pub use perple::Perple;
 pub use utils::muloop::LoopMode;
 
-// 重新导出color模块中的常用类型和函数
-pub use color::{YoloDetector, ClrBud, Box2D, process_detections, to_bounds, draw_detections};
-pub use color::{load_image, resize_image, image_to_tensor, input_image};
-pub use color::{load_model, nms_tensor};

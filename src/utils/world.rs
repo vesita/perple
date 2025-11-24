@@ -4,8 +4,10 @@ use na::{Matrix4, Vector3, Vector4};
 use ndarray::{Array3, ArrayD};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use bevy::prelude::*;
 
-use crate::cloud::bounds::CldBud;
+
+use crate::cloud::CldBud;
 use crate::utils::stream::Stream;
 use crate::cloud::lifra::Lifra;
 use crate::color::ClrBud;

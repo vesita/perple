@@ -18,6 +18,13 @@ impl Lifra {
             count: 0,
         }
     }
+    
+    pub fn with_capacity(capacity: usize) -> Self {
+        Lifra {
+            points: Vec::with_capacity(capacity),
+            count: 0,
+        }
+    }
 
     pub fn update<R>(&mut self, reader: &mut DynReader<R>) 
     where 
@@ -76,6 +83,22 @@ impl Lifra {
     /// 提供可变引用迭代器
     pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, [f32; 3]> {
         self.points.iter_mut()
+    }
+
+    /// 获取点云数据的只读引用
+    pub fn points(&self) -> &Vec<[f32; 3]> {
+        &self.points
+    }
+    
+    /// 使用给定的点云数据创建新的Lifra实例
+    pub fn from_points(points: Vec<[f32; 3]>) -> Self {
+        let count = points.len().min(POINTS_CAPACITY);
+        let mut points_vec = Vec::with_capacity(POINTS_CAPACITY);
+        points_vec.extend_from_slice(&points[..count]);
+        Lifra {
+            points: points_vec,
+            count,
+        }
     }
 
     /// 清空点云数据

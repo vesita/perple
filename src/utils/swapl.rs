@@ -3,7 +3,7 @@ use image::DynamicImage;
 
 
 use crate::color::ClrBud;
-use crate::cloud::bounds::CldBud;
+use crate::cloud::CldBud;
 use crate::cloud::lifra::Lifra;
 use crate::utils::stream::Stream;
 

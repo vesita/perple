@@ -1,5 +1,7 @@
-use crate::cloud::{bounds::Box3D, tag::Tag3D, lifra::Lifra};
 use std::cmp::Ordering;
+
+use crate::cloud::{tag::Tag3D, lifra::Lifra};
+use crate::utils::boxes::Box3D;
 
 pub struct Claster {
     objects: Vec<Box3D>,

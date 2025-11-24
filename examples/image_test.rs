@@ -1,7 +1,9 @@
+use perple::color::load_image;
+use perple::color::utils::draw_detections;
 use perple::perple::Perple;
 use perple::LoopMode;
 use perple::{
-    color::ClrBud, draw_detections, load_image
+    color::ClrBud
 };
 use std::time::Instant;
 // 添加Swapl导入
@@ -13,7 +15,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     // 加载图像
     // 注意：确保图像文件路径正确
-    let image = load_image("data/test/images/1562400315184.jpg")?;
+    let image = load_image("data/test/images/000569.jpg")?;
     
     // 打印图像信息
     println!("原始图像尺寸: {}x{}", image.width(), image.height());
@@ -54,7 +56,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     // 从结果流中获取检测结果
     let bounds = {
-        let mut bounds_stream = perple.img_bud_stream.lock().unwrap();
+        let mut bounds_stream = perple.clr_bud_stream.lock().unwrap();
         bounds_stream.read().unwrap_or_else(|| Vec::new())
     };
     
