@@ -140,3 +140,6 @@ python scripts/dev/continuous_train.py
 1. libssl-dev
 2. pkg-config
 3. libfontconfig1-dev
+4. libwayland-dev
+5. libasound2-dev
+6. libudev-dev

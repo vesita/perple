@@ -1,10 +1,8 @@
-use ort::{session::{Session, input}, value::{TensorValueType, Value}};
-use image::{DynamicImage, GenericImageView};
-use raqote::{DrawOptions, DrawTarget, LineJoin, PathBuilder, SolidSource, Source, StrokeStyle};
-use std::time::Instant;
-use crate::{color::{array::to_input, bounds::{ImgBud, Detection}, image::{ScaleMessage, input_image, resize_image, image_to_tensor}, utils::{nms_tensor}}, config::{DETECTIONS_CAPACITY, DEFAULT_INPUT_WIDTH, DEFAULT_INPUT_HEIGHT, DEFAULT_CONFIDENCE_THRESHOLD, DEFAULT_NMS_THRESHOLD}, load_model};
+use ort::{session::Session, value::{TensorValueType, Value}};
+use image::DynamicImage;
+use crate::{color::{array::to_input, bounds::{ClrBud}, image::{ScaleMessage, resize_image, image_to_tensor}, utils::{nms_tensor}}, config::{DETECTIONS_CAPACITY, DEFAULT_INPUT_WIDTH, DEFAULT_INPUT_HEIGHT, DEFAULT_CONFIDENCE_THRESHOLD, DEFAULT_NMS_THRESHOLD}, load_model};
 use ndarray::{Array2, Array4, s};
-use ort::{value::Tensor, inputs};
+use ort::inputs;
 
 /// YOLO目标检测器
 /// 
@@ -99,7 +97,7 @@ impl YoloDetector {
     /// 返回推理结果
     pub fn infer(&mut self,
         input: &Value<TensorValueType<f32>>,
-        outputs: &mut ImgBud,
+        outputs: &mut Vec<ClrBud>,
         message: &ScaleMessage,
     ) -> Result<(), Box<dyn std::error::Error>> {
         outputs.clear();
@@ -213,7 +211,7 @@ impl YoloDetector {
     /// 
     /// # 错误处理
     /// 如果检测过程中发生错误会返回Err
-    pub fn detect(&mut self, image: &DynamicImage) -> Result<ImgBud, Box<dyn std::error::Error>> {
+    pub fn detect(&mut self, image: &DynamicImage) -> Result<Vec<ClrBud>, Box<dyn std::error::Error>> {
         // 调整图像大小
         let resized = resize_image(image, self.input_width as u32, self.input_height as u32);
         
@@ -222,7 +220,7 @@ impl YoloDetector {
         
         // 运行推理
         let input_tensor = to_input(&tensor);
-        let mut outputs = ImgBud::new();
+        let mut outputs = Vec::new();
         let scale_message = ScaleMessage {
             o_width: image.width(),
             o_height: image.height(),
@@ -242,7 +240,7 @@ impl YoloDetector {
     /// 
     /// # 返回值
     /// 返回每张图像的检测结果
-    pub fn detect_batch(&mut self, images: &[DynamicImage]) -> Result<Vec<ImgBud>, Box<dyn std::error::Error>> {
+    pub fn detect_batch(&mut self, images: &[DynamicImage]) -> Result<Vec<Vec<ClrBud>>, Box<dyn std::error::Error>> {
         let mut results = Vec::with_capacity(images.len());
         
         for image in images {

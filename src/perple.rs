@@ -3,14 +3,14 @@ use std::thread;
 use std::time::Duration;
 use image::DynamicImage;
 
-use crate::color::{ImgBud, core::Color};
-use crate::lidar::core::Lidar;
-use crate::lidar::lifra::Lifra;
-use crate::lidar::bounds::LidBud;
-use crate::swapl::Swapl;
+use crate::color::{ClrBud, core::Color};
+use crate::cloud::core::Cloud;
+use crate::cloud::lifra::Lifra;
+use crate::cloud::bounds::CldBud;
+use crate::utils::swapl::Swapl;
 use crate::utils::stream::Stream;
 use crate::utils::muloop::{MultiLoop, LoopMode};
-use crate::world::World;
+use crate::utils::world::World;
 use pcd_rs::DynRecord;
 
 /// Perple主处理模块
@@ -21,16 +21,16 @@ pub struct Perple {
     /// 图像数据流（从Swapl数据中枢获取）
     pub img_stream: Arc<Mutex<Stream<DynamicImage>>>,
     /// 图像检测结果流（从Swapl数据中枢获取）
-    pub img_bud_stream: Arc<Mutex<Stream<ImgBud>>>,
+    pub img_bud_stream: Arc<Mutex<Stream<Vec<ClrBud>>>>,
     /// 点云数据流（从Swapl数据中枢获取）
     pub lid_stream: Arc<Mutex<Stream<Lifra>>>,
     /// 点云检测结果流（从Swapl数据中枢获取）
-    pub lid_bud_stream: Arc<Mutex<Stream<LidBud>>>,
+    pub lid_bud_stream: Arc<Mutex<Stream<Vec<CldBud>>>>,
 
     /// 内部模块（私有模块，直接使用成员变量以提升性能）
     world: World,
     color: Arc<Mutex<Color>>,
-    lidar: Arc<Mutex<Lidar>>,
+    lidar: Arc<Mutex<Cloud>>,
 
     /// 控制类模块（可能跨线程访问，使用Arc<Mutex<T>>）
     color_loop: Arc<Mutex<MultiLoop>>,
@@ -60,7 +60,7 @@ impl Perple {
         )));
         
         // 初始化Lidar模块，连接到点云数据流
-        let lidar = Arc::new(Mutex::new(Lidar::new(
+        let lidar = Arc::new(Mutex::new(Cloud::new(
             Arc::clone(&lid_stream), 
             Arc::clone(&lid_bud_stream)
         )));
@@ -77,6 +77,21 @@ impl Perple {
             color_loop: Arc::new(Mutex::new(MultiLoop::new())),
             lidar_loop: Arc::new(Mutex::new(MultiLoop::new())),
         }
+    }
+
+    pub fn run(&mut self) -> Result<(), String> { 
+        
+        if let Ok(mut color) = self.color_loop.lock() {
+            let _ = color.start_with_method(LoopMode::Signal, Arc::clone(&self.color), |color| {
+                color.act();
+            }, 40);
+        }
+        if let Ok(mut lidar) = self.lidar_loop.lock() {
+            let _ = lidar.start_with_method(LoopMode::Signal, Arc::clone(&self.lidar), |lidar| {
+                lidar.act();
+            }, 40);
+        }
+        Ok(())
     }
 
     /// 启动color模块的循环运行模式

@@ -48,14 +48,14 @@ impl Box2D {
 /// 
 /// 表示一个检测到的对象，包括边界框、类别ID、类别名称和置信度。
 #[derive(Debug, Clone, Default)]
-pub struct Detection {
-    pub bbox: Box2D,
+pub struct ClrBud {
+    pub the_box: Box2D,
     pub class_id: u32,
     pub class_name: String,
     pub confidence: f32,
 }
 
-impl Detection {
+impl ClrBud {
     /// 创建一个新的检测结果
     /// 
     /// # 参数
@@ -63,104 +63,8 @@ impl Detection {
     /// * `class_id` - 类别ID
     /// * `class_name` - 类别名称
     /// * `confidence` - 置信度
-    pub fn new(bbox: Box2D, class_id: u32, class_name: String, confidence: f32) -> Self {
-        Self { bbox, class_id, class_name, confidence }
+    pub fn new(the_box: Box2D, class_id: u32, class_name: String, confidence: f32) -> Self {
+        Self { the_box, class_id, class_name, confidence }
     }
 }
 
-/// 固定容量的检测结果容器
-/// 
-/// 这是一个带有预分配容量的容器，用于存储检测到的对象。
-/// 它实现了常用的集合操作，如push、clear、len等，并支持迭代器。
-#[derive(Clone)]
-pub struct ImgBud {
-    bounds: Vec<Detection>,
-}
-
-impl ImgBud {
-    /// 创建一个新的空检测结果容器
-    /// 
-    /// 容量被预设为配置文件中定义的 `DETECTIONS_CAPACITY`。
-    pub fn new() -> Self {
-        Self {
-            bounds: Vec::with_capacity(DETECTIONS_CAPACITY),
-        }
-    }
-    
-    /// 向容器中添加一个新的检测结果
-    /// 
-    /// 如果容器已满 (达到 `DETECTIONS_CAPACITY`)，则不会添加新元素。
-    pub fn push(&mut self, detection: Detection) {
-        if self.bounds.len() < DETECTIONS_CAPACITY {
-            self.bounds.push(detection);
-        }
-    }
-    
-    /// 清空容器中的所有检测结果
-    pub fn clear(&mut self) {
-        self.bounds.clear();
-    }
-    
-    /// 获取容器中检测结果的数量
-    pub fn len(&self) -> usize {
-        self.bounds.len()
-    }
-    
-    /// 检查容器是否为空
-    pub fn is_empty(&self) -> bool {
-        self.bounds.is_empty()
-    }
-    
-    /// 获取容器的切片引用
-    pub fn as_slice(&self) -> &[Detection] {
-        &self.bounds
-    }
-    
-    /// 获取容器的可变切片引用
-    pub fn as_mut_slice(&mut self) -> &mut [Detection] {
-        &mut self.bounds
-    }
-    
-    /// 提供只读引用迭代器
-    pub fn iter(&self) -> std::slice::Iter<Detection> {
-        self.bounds.iter()
-    }
-    
-    /// 提供可变引用迭代器
-    pub fn iter_mut(&mut self) -> std::slice::IterMut<Detection> {
-        self.bounds.iter_mut()
-    }
-}
-
-impl Default for ImgBud {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl IntoIterator for ImgBud {
-    type Item = Detection;
-    type IntoIter = std::vec::IntoIter<Detection>;
-    
-    fn into_iter(self) -> Self::IntoIter {
-        self.bounds.into_iter()
-    }
-}
-
-impl<'a> IntoIterator for &'a ImgBud {
-    type Item = &'a Detection;
-    type IntoIter = std::slice::Iter<'a, Detection>;
-    
-    fn into_iter(self) -> Self::IntoIter {
-        self.bounds.iter()
-    }
-}
-
-impl<'a> IntoIterator for &'a mut ImgBud {
-    type Item = &'a mut Detection;
-    type IntoIter = std::slice::IterMut<'a, Detection>;
-    
-    fn into_iter(self) -> Self::IntoIter {
-        self.bounds.iter_mut()
-    }
-}

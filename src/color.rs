@@ -53,5 +53,5 @@ pub mod core;
 pub use model::load_model;
 pub use image::{load_image, resize_image, image_to_tensor, input_image, fill_input_image};
 pub use detect::YoloDetector;
-pub use bounds::{ImgBud, Detection, Box2D};
+pub use bounds::{ClrBud, Box2D};
 pub use utils::{nms_tensor, process_detections, to_bounds, draw_detections};

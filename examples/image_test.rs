@@ -1,11 +1,11 @@
 use perple::perple::Perple;
 use perple::LoopMode;
 use perple::{
-    color::ImgBud, draw_detections, load_image
+    color::ClrBud, draw_detections, load_image
 };
 use std::time::Instant;
 // 添加Swapl导入
-use perple::swapl::Swapl;
+use perple::utils::swapl::Swapl;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Perple 图像测试示例");
@@ -13,7 +13,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     // 加载图像
     // 注意：确保图像文件路径正确
-    let image = load_image("data/test/1562400315184.jpg")?;
+    let image = load_image("data/test/images/1562400315184.jpg")?;
     
     // 打印图像信息
     println!("原始图像尺寸: {}x{}", image.width(), image.height());
@@ -55,7 +55,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 从结果流中获取检测结果
     let bounds = {
         let mut bounds_stream = perple.img_bud_stream.lock().unwrap();
-        bounds_stream.read().unwrap_or_else(|| ImgBud::new())
+        bounds_stream.read().unwrap_or_else(|| Vec::new())
     };
     
     println!("检测到 {} 个目标", bounds.len());
@@ -66,10 +66,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 i + 1, 
                 detection.class_name, 
                 detection.confidence,
-                detection.bbox.x1,
-                detection.bbox.y1,
-                detection.bbox.x2,
-                detection.bbox.y2);
+                detection.the_box.x1,
+                detection.the_box.y1,
+                detection.the_box.x2,
+                detection.the_box.y2);
     }
     
     // 在图像上绘制检测框

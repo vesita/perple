@@ -1,4 +1,4 @@
-use crate::lidar::{bounds::Box3D, tag::Tag3D, lifra::Lifra};
+use crate::cloud::{bounds::Box3D, tag::Tag3D, lifra::Lifra};
 use std::cmp::Ordering;
 
 pub struct Claster {

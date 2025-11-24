@@ -52,95 +52,26 @@ impl Box3D {
 /// 这是一个类似于Vec的容器，但具有固定的最大容量，避免了动态分配内存的开销。
 /// 它实现了常用的集合操作，如push、clear、len等，并支持迭代器。
 #[derive(Clone)]
-pub struct LidBud {
-    bounds: Vec<Box3D>,
-    len: usize,
+pub struct CldBud {
+    pub the_box: Box3D,
+    pub class_id: u32,
+    pub class_name: String,
 }
 
-impl LidBud {
+impl CldBud {
     /// 创建一个新的空Bounds容器
     pub fn new() -> Self {
         Self {
-            bounds: Vec::with_capacity(DETECTIONS_CAPACITY),
-            len: 0,
+            the_box: Box3D::empty_box(),
+            class_id: 0,
+            class_name: String::new(),
         }
-    }
-    
-    /// 向容器中添加一个新的检测结果
-    pub fn push(&mut self, detection: Box3D) {
-        if self.len < DETECTIONS_CAPACITY {
-            self.bounds.push(detection);
-            self.len += 1;
-        }
-    }
-    
-    /// 清空容器
-    pub fn clear(&mut self) {
-        self.bounds.clear();
-        self.len = 0;
-    }
-    
-    /// 获取容器中元素的数量
-    pub fn len(&self) -> usize {
-        self.len
-    }
-    
-    /// 检查容器是否为空
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-    
-    /// 获取容器的切片引用
-    pub fn as_slice(&self) -> &[Box3D] {
-        &self.bounds
-    }
-    
-    /// 获取容器的可变切片引用
-    pub fn as_mut_slice(&mut self) -> &mut [Box3D] {
-        &mut self.bounds
-    }
-    
-    /// 提供只读引用迭代器
-    pub fn iter(&self) -> std::slice::Iter<Box3D> {
-        self.bounds.iter()
-    }
-    
-    /// 提供可变引用迭代器
-    pub fn iter_mut(&mut self) -> std::slice::IterMut<Box3D> {
-        self.bounds.iter_mut()
     }
 }
 
-impl Default for LidBud {
+impl Default for CldBud {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl IntoIterator for LidBud {
-    type Item = Box3D;
-    type IntoIter = std::vec::IntoIter<Box3D>;
-    
-    fn into_iter(self) -> Self::IntoIter {
-        self.bounds.into_iter()
-    }
-}
-
-impl<'a> IntoIterator for &'a LidBud {
-    type Item = &'a Box3D;
-    type IntoIter = std::slice::Iter<'a, Box3D>;
-    
-    fn into_iter(self) -> Self::IntoIter {
-        self.bounds.iter()
-    }
-}
-
-impl<'a> IntoIterator for &'a mut LidBud {
-    type Item = &'a mut Box3D;
-    type IntoIter = std::slice::IterMut<'a, Box3D>;
-    
-    fn into_iter(self) -> Self::IntoIter {
-        self.bounds.iter_mut()
     }
 }
 

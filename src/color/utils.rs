@@ -8,8 +8,7 @@ use ndarray::Axis;
 use ort::session::SessionOutputs;
 
 use crate::color::bounds::Box2D;
-use crate::color::bounds::ImgBud;
-use crate::color::bounds::Detection;
+use crate::color::bounds::ClrBud;
 use crate::color::image::ScaleMessage;
 use crate::config::DETECTIONS_CAPACITY;
 use crate::config::PERSON_CLASS_LABEL;
@@ -60,7 +59,7 @@ pub fn process_detections(
     input_height: usize,
     confidence_threshold: f32,
     nms_threshold: f32,
-) -> Vec<Detection> {
+) -> Vec<ClrBud> {
     let mut detections = Vec::new();
     
     // 预分配容量以减少重新分配
@@ -90,8 +89,8 @@ pub fn process_detections(
         let s_x2 = x2 * scale_x;
         let s_y2 = y2 * scale_y;
 
-        detections.push(Detection {
-            bbox: Box2D {
+        detections.push(ClrBud {
+            the_box: Box2D {
                 x1: s_x1,
                 y1: s_y1,
                 x2: s_x2,
@@ -115,7 +114,7 @@ pub fn to_bounds(
     message: &ScaleMessage,
     confidence_threshold: f32,
     nms_threshold: f32,
-) -> Vec<Detection> {
+) -> Vec<ClrBud> {
     let mut detections = Vec::new();
     let (img_width, img_height) = (message.o_width as f32, message.o_height as f32);
     let (input_width, input_height) = (message.s_width, message.s_height);
@@ -156,8 +155,8 @@ pub fn to_bounds(
         let scaled_x2 = x2 * scale_x;
         let scaled_y2 = y2 * scale_y;
         
-        detections.push(Detection {
-            bbox: Box2D {
+        detections.push(ClrBud {
+            the_box: Box2D {
                 x1: scaled_x1,
                 y1: scaled_y1,
                 x2: scaled_x2,
@@ -187,7 +186,7 @@ pub fn to_bounds(
 /// 
 /// # 返回值
 /// 返回应用NMS后的检测结果列表
-fn apply_nms(detections: &mut Vec<Detection>, nms_threshold: f32) -> Vec<Detection> {
+fn apply_nms(detections: &mut Vec<ClrBud>, nms_threshold: f32) -> Vec<ClrBud> {
     let mut result = Vec::new();
     let mut picked_indices = vec![false; detections.len()];
 
@@ -199,7 +198,7 @@ fn apply_nms(detections: &mut Vec<Detection>, nms_threshold: f32) -> Vec<Detecti
         result.push(detections[i].clone());
         
         // 缓存当前检测框的面积以避免重复计算
-        let area_i = (detections[i].bbox.x2 - detections[i].bbox.x1) * (detections[i].bbox.y2 - detections[i].bbox.y1);
+        let area_i = (detections[i].the_box.x2 - detections[i].the_box.x1) * (detections[i].the_box.y2 - detections[i].the_box.y1);
         
         // 提前检查，如果框的面积为0，则跳过
         if area_i <= 0.0 {
@@ -212,7 +211,7 @@ fn apply_nms(detections: &mut Vec<Detection>, nms_threshold: f32) -> Vec<Detecti
                 continue;
             }
             
-            let area_j = (detections[j].bbox.x2 - detections[j].bbox.x1) * (detections[j].bbox.y2 - detections[j].bbox.y1);
+            let area_j = (detections[j].the_box.x2 - detections[j].the_box.x1) * (detections[j].the_box.y2 - detections[j].the_box.y1);
             
             // 提前检查，如果框的面积为0，则跳过
             if area_j <= 0.0 {
@@ -220,7 +219,7 @@ fn apply_nms(detections: &mut Vec<Detection>, nms_threshold: f32) -> Vec<Detecti
                 continue;
             }
             
-            let inter = intersection(&detections[i].bbox, &detections[j].bbox);
+            let inter = intersection(&detections[i].the_box, &detections[j].the_box);
             // 如果交集为0，直接跳过
             if inter == 0.0 {
                 continue;
@@ -250,7 +249,7 @@ fn apply_nms(detections: &mut Vec<Detection>, nms_threshold: f32) -> Vec<Detecti
 /// * `nms_threshold` - NMS阈值
 pub fn nms_tensor(
     from_model: &mut SessionOutputs,
-    bounds: &mut ImgBud,
+    bounds: &mut Vec<ClrBud>,
     message: &ScaleMessage,
     picked_indices: &mut Vec<bool>,
     confidence_threshold: f32,
@@ -310,8 +309,8 @@ pub fn nms_tensor(
         }
 
         // 将未被抑制的边界框添加到bounds中
-        bounds.push(Detection {
-            bbox: Box2D {
+        bounds.push(ClrBud {
+            the_box: Box2D {
                 x1: i_x1,
                 y1: i_y1,
                 x2: i_x2,
@@ -414,7 +413,7 @@ fn union(box1: &Box2D, box2: &Box2D) -> f32 {
 /// 
 /// # 返回值
 /// 返回绘制了检测框的图像
-pub fn draw_detections(image: &DynamicImage, detections: &[Detection]) -> DynamicImage {
+pub fn draw_detections(image: &DynamicImage, detections: &[ClrBud]) -> DynamicImage {
     let (img_width, img_height) = image.dimensions();
     let mut dt = DrawTarget::new(img_width as i32, img_height as i32);
     
@@ -437,7 +436,7 @@ pub fn draw_detections(image: &DynamicImage, detections: &[Detection]) -> Dynami
     dt.draw_image_at(0.0, 0.0, &img, &DrawOptions::new());
 
     for detection in detections {
-        let bbox = &detection.bbox;
+        let bbox = &detection.the_box;
 
         let mut pb = PathBuilder::new();
         let width = bbox.x2 - bbox.x1;

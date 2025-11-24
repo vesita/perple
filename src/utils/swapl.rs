@@ -2,9 +2,9 @@ use std::sync::{Arc, Mutex};
 use image::DynamicImage;
 
 
-use crate::color::ImgBud;
-use crate::lidar::bounds::LidBud;
-use crate::lidar::lifra::Lifra;
+use crate::color::ClrBud;
+use crate::cloud::bounds::CldBud;
+use crate::cloud::lifra::Lifra;
 use crate::utils::stream::Stream;
 
 /// 系统数据交换中枢
@@ -16,11 +16,11 @@ pub struct Swapl {
     /// 点云数据输入流
     pub lidars: Arc<Mutex<Stream<Lifra>>>,
     /// 点云检测结果输出流
-    pub lid_objs: Arc<Mutex<Stream<LidBud>>>,
+    pub lid_objs: Arc<Mutex<Stream<Vec<CldBud>>>>,
     /// 图像数据输入流
     pub images: Arc<Mutex<Stream<DynamicImage>>>,
     /// 图像检测结果输出流
-    pub img_objs: Arc<Mutex<Stream<ImgBud>>>,
+    pub img_objs: Arc<Mutex<Stream<Vec<ClrBud>>>>,
 }
 
 impl Swapl { 
@@ -40,7 +40,7 @@ impl Swapl {
     }
     
     /// 获取图像检测结果流的引用
-    pub fn get_img_objs_stream(&self) -> Arc<Mutex<Stream<ImgBud>>> {
+    pub fn get_img_objs_stream(&self) -> Arc<Mutex<Stream<Vec<ClrBud>>>> {
         Arc::clone(&self.img_objs)
     }
     
@@ -50,7 +50,9 @@ impl Swapl {
     }
     
     /// 获取点云检测结果流的引用
-    pub fn get_lid_objs_stream(&self) -> Arc<Mutex<Stream<LidBud>>> {
+    pub fn get_lid_objs_stream(&self) -> Arc<Mutex<Stream<Vec<CldBud>>>> {
         Arc::clone(&self.lid_objs)
     }
+
+
 }

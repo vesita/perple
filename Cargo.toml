@@ -10,3 +10,4 @@ ndarray = { version = "0.*", features = ["rayon"] }
 raqote = "0.*"
 pcd-rs = "0.*"
 nalgebra = {version = "0.*", features = ["std"]}
+bevy = {version = "0.*"}
