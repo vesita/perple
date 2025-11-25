@@ -4,8 +4,12 @@
 
 use image::GenericImageView;
 use ndarray::Array2;
+use ndarray::Array4;
 use ndarray::Axis;
 use ort::session::SessionOutputs;
+use ort::value::Tensor;
+use ort::value::TensorValueType;
+use ort::value::Value;
 
 use crate::utils::Box2D;
 use crate::color::ClrBud;
@@ -476,4 +480,24 @@ pub fn draw_detections(image: &DynamicImage, detections: &[ClrBud]) -> DynamicIm
         image::ImageBuffer::from_raw(img_width, img_height, pixels)
             .expect("Failed to create image from rendered data")
     )
+}
+
+
+
+
+/// 将ndarray数组转换为ONNX Runtime张量
+/// 
+/// # 参数
+/// * `mats` - 四维数组，形状为(1, 3, height, width)
+/// 
+/// # 返回值
+/// 返回对应的ONNX Runtime张量
+pub fn to_input(mats: &Array4<f32>) -> Value<TensorValueType<f32>> {
+    let shape: Vec<usize> = mats.shape().to_vec();
+    let (data, _offset) = mats.clone().into_raw_vec_and_offset();
+    let result = Tensor::from_array((
+        [shape[0], shape[1], shape[2], shape[3]],
+        data
+    )).unwrap();
+    result
 }

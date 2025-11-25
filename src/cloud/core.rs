@@ -1,12 +1,50 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
+use std::fmt;
 
 use nalgebra::{Matrix3, Matrix4, Vector3, Vector4};
 
 use crate::utils::world::OnWorld;
-use crate::{cloud::{CldBud, claster::Claster, lifra::Lifra}, utils::stream::{Stream, Cream}};
+use crate::{cloud::{CldBud, claster::Claster, lifra::Lifra}, utils::stream::{Stream, Cream, StreamError}};
 use crate::utils::boxes::Box3D;
 
+/// Lidar模块的错误类型
+#[derive(Debug)]
+pub enum LidarError {
+    /// 流缓冲区相关错误
+    StreamError(StreamError),
+    /// 线程锁中毒错误
+    PoisonError(String),
+    /// 提交写入操作错误
+    CommitError(String),
+    /// 其他错误
+    Other(String),
+}
+
+impl fmt::Display for LidarError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LidarError::StreamError(e) => write!(f, "流错误: {}", e),
+            LidarError::PoisonError(e) => write!(f, "线程锁中毒错误: {}", e),
+            LidarError::CommitError(e) => write!(f, "提交写入操作错误: {}", e),
+            LidarError::Other(e) => write!(f, "其他错误: {}", e),
+        }
+    }
+}
+
+impl std::error::Error for LidarError {}
+
+impl From<StreamError> for LidarError {
+    fn from(error: StreamError) -> Self {
+        LidarError::StreamError(error)
+    }
+}
+
+impl<T> From<PoisonError<T>> for LidarError {
+    fn from(error: PoisonError<T>) -> Self {
+        LidarError::PoisonError(format!("线程锁中毒: {:?}", error))
+    }
+}
 
 /// Lidar模块的核心结构，用于执行点云处理
 pub struct Cloud {
@@ -40,11 +78,11 @@ impl Cloud {
     /// 1. 从输入流获取点云数据
     /// 2. 使用Claster直接处理整个帧数据
     /// 3. 将结果写入输出流
-    pub fn fast_act(&mut self) {
+    pub fn fast_act(&mut self) -> Result<(), LidarError> {
         // 从输入流中读取点云数据
         let lifra = match self.read_input() {
             Some(data) => data,
-            None => return,
+            None => return Ok(()), // 没有数据可处理，这不是错误
         };
         
         // 处理点云数据
@@ -53,11 +91,12 @@ impl Cloud {
         let process_duration = start_time.elapsed();
         
         // 将结果写入输出流
-        self.write_output();
+        self.write_output()?;
         
         let duration = start_time.elapsed();
         println!("点云处理耗时: {:?}", process_duration);
         println!("点云IO耗时: {:?}", duration - process_duration);
+        Ok(())
     }
     
     /// 带前置和后置处理函数的执行方法
@@ -72,14 +111,14 @@ impl Cloud {
     /// # 参数
     /// * `pre_process` - 前置处理函数，接收并返回Lifra点云数据
     /// * `post_process` - 后置处理函数，在处理完成后调用
-    pub fn act<F>(&mut self, prep: F) 
+    pub fn act<F>(&mut self, prep: F) -> Result<(), LidarError>
     where 
         F: FnOnce(Lifra) -> Lifra,
     {
         // 从输入流中读取点云数据
         let lifra = match self.read_input() {
             Some(data) => data,
-            None => return,
+            None => return Ok(()), // 没有数据可处理，这不是错误
         };
         
         // 执行前置处理
@@ -91,11 +130,12 @@ impl Cloud {
         let process_duration = start_time.elapsed();
         
         // 将结果写入输出流
-        self.write_output();
+        self.write_output()?;
         
         let duration = start_time.elapsed();
         println!("点云处理耗时: {:?}", process_duration);
         println!("点云IO耗时: {:?}", duration - process_duration);
+        Ok(())
     }
     
     /// 从输入流中读取点云数据
@@ -110,30 +150,34 @@ impl Cloud {
     }
     
     /// 将处理结果写入输出流
-    fn write_output(&mut self) {
-        let mut output_stream = self.cream.out_stream.lock().unwrap();
-        if let Ok(slot) = output_stream.get_write_mut() {
-            // 初始化或获取LidBud对象
-            let bounds = slot.get_or_insert_with(|| Vec::new());
-            bounds.clear(); // 清空之前的数据
-            
-            // 将聚类结果转换为LidBud格式
-            // 将所有聚类对象添加到LidBud中
-            for box3d in self.claster.objects().iter() {
-                bounds.push(CldBud {
-                    the_box: box3d.clone(),
-                    class_id: 0,
-                    class_name: String::new(),
-                });
+    fn write_output(&mut self) -> Result<(), LidarError> {
+        let mut output_stream = self.cream.out_stream.lock()?;
+        let write_mut_result = output_stream.get_write_mut();
+        match write_mut_result {
+            Ok(slot) => {
+                // 初始化或获取CldBud对象
+                let bounds = slot.get_or_insert_with(|| Vec::new());
+                bounds.clear(); // 清空之前的数据
+                
+                // 将聚类结果转换为CldBud格式
+                // 将所有聚类对象添加到CldBud中
+                for box3d in self.claster.objects().iter() {
+                    bounds.push(CldBud {
+                        the_box: box3d.clone(),
+                        class_id: 0,
+                        class_name: String::new(),
+                    });
+                }
+                
+                // 提交写入操作
+                output_stream.commit_write()
+                    .map_err(|e| LidarError::CommitError(format!("{:?}", e)))?;
+            },
+            Err(e) => {
+                return Err(LidarError::from(e));
             }
-            
-            // 提交写入操作
-            if let Err(e) = output_stream.commit_write() {
-                eprintln!("提交写入操作时发生错误: {:?}", e);
-            }
-        } else {
-            eprintln!("获取输出流写入位置失败: 缓冲区已满");
         }
+        Ok(())
     }
 
     /// 获取输入输出流的引用
@@ -153,7 +197,7 @@ impl Lidar {
         }
     }
 
-    pub fn act(&mut self) {
+    pub fn act(&mut self) -> Result<(), LidarError> {
         // 创建一个前置处理函数，将点云从雷达坐标系转换到世界坐标系
         let extrinsic = self.extrinsic;
         let pre_process = move |lifra: Lifra| -> Lifra {
@@ -175,10 +219,9 @@ impl Lidar {
         };
         
         // 调用带处理器的act方法
-        self.data.act(pre_process);
+        self.data.act(pre_process)
     }
 }
-
 
 impl OnWorld for Lidar { 
     fn on_world(&self) -> Matrix4<f32> {

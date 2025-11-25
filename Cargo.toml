@@ -11,3 +11,5 @@ raqote = "0.*"
 pcd-rs = "0.*"
 nalgebra = {version = "0.*", features = ["std"]}
 bevy = {version = "0.*"}
+toml = "0.*"
+serde = { version = "1.*", features = ["derive"] }

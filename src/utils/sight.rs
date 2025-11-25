@@ -2,6 +2,7 @@
 use nalgebra::Vector3;
 use crate::utils::boxes::Box3D;
 
+#[derive(Clone, Debug)]
 pub struct Sight {
     pub origin: Vector3<f32>,
     pub direction: Vector3<f32>,

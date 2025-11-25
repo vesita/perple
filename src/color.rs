@@ -45,7 +45,7 @@ pub mod model;
 pub mod image;
 pub mod detect;
 pub mod output;
-pub mod array;
+pub mod look;
 pub mod core;
 pub mod utils;
 

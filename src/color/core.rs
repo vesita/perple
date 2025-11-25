@@ -1,13 +1,56 @@
 use image::DynamicImage;
 use nalgebra::{Matrix3, Matrix4, Vector3, Vector4};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 use std::thread;
+use std::fmt;
 
-use crate::color::YoloDetector;
-use crate::{color::{ClrBud, image::{ScaleMessage}}, config::{DEFAULT_INPUT_WIDTH, DEFAULT_INPUT_HEIGHT}, utils::stream::{Stream, Cream}};
+use crate::color::{YoloDetector, fill_input_image};
+use crate::utils::sight::Sight;
+use crate::{color::{ClrBud, image::{ScaleMessage}, look::Look}, config::{DEFAULT_INPUT_WIDTH, DEFAULT_INPUT_HEIGHT}, utils::stream::{Stream, Cream, StreamError}};
 use ort::value::{TensorValueType, Value, Tensor};
 use crate::utils::world::OnWorld;
+
+/// Color模块的错误类型
+#[derive(Debug)]
+pub enum ColorError {
+    /// 流缓冲区相关错误
+    StreamError(StreamError),
+    /// 模型推理错误
+    InferenceError(String),
+    /// 线程锁中毒错误
+    PoisonError(String),
+    /// 提交写入操作错误
+    CommitError(String),
+    /// 其他错误
+    Other(String),
+}
+
+impl fmt::Display for ColorError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ColorError::StreamError(e) => write!(f, "流错误: {}", e),
+            ColorError::InferenceError(e) => write!(f, "推理错误: {}", e),
+            ColorError::PoisonError(e) => write!(f, "线程锁中毒错误: {}", e),
+            ColorError::CommitError(e) => write!(f, "提交写入操作错误: {}", e),
+            ColorError::Other(e) => write!(f, "其他错误: {}", e),
+        }
+    }
+}
+
+impl std::error::Error for ColorError {}
+
+impl From<StreamError> for ColorError {
+    fn from(error: StreamError) -> Self {
+        ColorError::StreamError(error)
+    }
+}
+
+impl<T> From<PoisonError<T>> for ColorError {
+    fn from(error: PoisonError<T>) -> Self {
+        ColorError::PoisonError(format!("线程锁中毒: {:?}", error))
+    }
+}
 
 /// Color模块的核心结构，用于执行目标检测
 /// 
@@ -28,8 +71,7 @@ pub struct Color {
 
 pub struct Camera {
     data: Color,
-    intrinsic: Matrix3<f32>,
-    extrinsic: Matrix4<f32>,
+    look: Look,
 }
 
 
@@ -48,7 +90,7 @@ impl Color {
     /// 返回新的Color实例
     pub fn new(
         input_stream: Arc<Mutex<Stream<DynamicImage>>>,
-        output_stream: Arc<Mutex<Stream<Vec<ClrBud>>>>,
+        bud_stream: Arc<Mutex<Stream<Vec<ClrBud>>>>,
         model_path: &str,
     ) -> Self {
         let input_width = DEFAULT_INPUT_WIDTH;
@@ -63,7 +105,7 @@ impl Color {
         Self {
             cream: Cream {
                 in_stream: input_stream,
-                out_stream: output_stream,
+                out_stream: bud_stream,
             },
             model: YoloDetector::new(model_path, input_width, input_height),
             message: ScaleMessage {
@@ -76,9 +118,6 @@ impl Color {
         }
     }
 
-    // 核心业务逻辑方法
-    // ------------------------------------------------------------------------
-
     /// 执行一次检测操作
     /// 
     /// 该方法会：
@@ -86,44 +125,63 @@ impl Color {
     /// 2. 准备模型输入张量
     /// 3. 执行模型推理
     /// 4. 将结果写入输出流
-    pub fn act(&mut self) {
+    pub fn act(&mut self) -> Result<(), ColorError> {
         // 从输入流中读取图像
-        if let Some(input) = self.cream.read() {
-            // 处理图像
-            self.message.o_width = input.width();
-            self.message.o_height = input.height();
-            
-            // 填充tensor value，避免拷贝
-            crate::color::image::fill_input_image(&input, self.model.input_height(), self.model.input_width(), &mut self.tensor_value);
-            
-            // 执行推理并计时
-            let start_time = Instant::now();
-            
-            // 使用新添加的直接引用方法优化性能
-            let mut output_stream = self.cream.out_stream.lock().unwrap();
-            if let Ok(slot) = output_stream.get_write_mut() {
-                // 初始化或获取Bounds对象
+        let input = match self.cream.read() {
+            Some(img) => img,
+            None => return Ok(()), // 没有数据可处理，这不是错误
+        };
+        
+        // 处理图像
+        self.message.o_width = input.width();
+        self.message.o_height = input.height();
+        
+        // 填充tensor value，避免拷贝
+        fill_input_image(&input, self.model.input_height(),
+                self.model.input_width(), &mut self.tensor_value);
+        
+        // 执行推理并计时
+        let start_time = Instant::now();
+        
+        // 使用新的Stream API直接写入数据
+        self.cream.write(Vec::new())?;
+        
+        // 获取输出流的可变引用并填充数据
+        let mut output_stream = self.cream.out_stream.lock()?;
+        
+        // 获取写入位置的可变引用
+        let write_mut_result = output_stream.get_write_mut();
+        match write_mut_result {
+            Ok(slot) => {
+                // 初始化或获取Vec<ClrBud>对象
                 let bounds = slot.get_or_insert_with(|| Vec::new());
                 bounds.clear(); // 清空之前的数据
                 
                 // 执行推理
-                if let Err(e) = self.model.infer(&self.tensor_value, bounds, &self.message) {
-                    eprintln!("推理过程中发生错误: {:?}", e);
+                let infer_result = self.model.infer(&self.tensor_value, bounds, &self.message);
+                match infer_result {
+                    Ok(_) => {
+                        // 提交写入操作
+                        output_stream.commit_write()
+                            .map_err(|e| ColorError::CommitError(format!("{:?}", e)))?;
+                    },
+                    Err(e) => {
+                        eprintln!("推理过程中发生错误: {:?}", e);
+                        // 即使推理出错，也尝试提交写入以保持流的一致性
+                        let _ = output_stream.commit_write();
+                        return Err(ColorError::InferenceError(format!("{:?}", e)));
+                    }
                 }
-                
-                // 提交写入操作
-                if let Err(e) = output_stream.commit_write() {
-                    eprintln!("提交写入操作时发生错误: {:?}", e);
-                }
-            } else {
-                eprintln!("获取输出流写入位置失败: 缓冲区已满");
+            },
+            Err(e) => {
+                return Err(ColorError::from(e));
             }
-            
-            let duration = start_time.elapsed();
-            println!("模型推理耗时: {:?}", duration);
         }
+        
+        let duration = start_time.elapsed();
+        println!("模型推理耗时: {:?}", duration);
+        Ok(())
     }
-    
 
     // Getter方法
     // ------------------------------------------------------------------------
@@ -161,83 +219,36 @@ impl Camera {
 
     pub fn new(
         input_stream: Arc<Mutex<Stream<DynamicImage>>>,
-        output_stream: Arc<Mutex<Stream<Vec<ClrBud>>>>,
+        bud_stream: Arc<Mutex<Stream<Vec<ClrBud>>>>,
+        sight_stream: Arc<Mutex<Stream<Vec<Sight>>>>,
         model_path: &str,
+        config_path: &str,
     ) -> Self {
         Self {
-            data: Color::new(input_stream, output_stream, model_path),
-            intrinsic: Matrix3::identity(),
-            extrinsic: Matrix4::identity(),
+            data: Color::new(input_stream, bud_stream.clone(), model_path),
+            look: Look::new(bud_stream, sight_stream, config_path),
         }
     }
 
-    pub fn act(&mut self) {
-        self.data.act();
+    pub fn act(&mut self) -> Result<(), ColorError> {
+        self.data.act()
     }
 }
 
 impl OnWorld for Camera {
     fn on_world(&self) -> Matrix4<f32> {
-        self.extrinsic
-    }
-
-    fn set_by_angle(&mut self, tra: Vector3<f32>, rot: Vector3<f32>) {
-        let rot_rad = Vector3::new(
-            rot.x.to_radians(),
-            rot.y.to_radians(),
-            rot.z.to_radians(),
-        );
-        self.extrinsic = Matrix4::new_rotation(rot_rad) * Matrix4::new_translation(&tra);
-    }
-
-    fn set_by_radian(&mut self, tra: Vector3<f32>, rot: Vector3<f32>) {
-        self.extrinsic = Matrix4::new_rotation(rot) * Matrix4::new_translation(&tra);
-    }
-
-    fn set_by_matrix(&mut self, matrix: &Matrix4<f32>) {
-        self.extrinsic = *matrix;
+        self.look.extrinsic
     }
     
-    // fn point_iter(&self) -> Box<dyn Iterator<Item = Vector3<f32>>> {
-    //     // 从输入流中获取当前检测框数据
-    //     let points: Vec<Vector3<f32>> = if let Some(clr_buds) = self.data.cream.out_stream
-    //         .lock()
-    //         .unwrap()
-    //         .get_read_ref()
-    //         .and_then(|opt| opt.as_ref()) {
-    //         // 获取内外参矩阵的逆矩阵用于坐标变换
-    //         let inv_extrinsic = self.extrinsic.try_inverse().unwrap_or_else(|| Matrix4::identity());
-    //         let inv_intrinsic = self.intrinsic.try_inverse().unwrap_or_else(|| Matrix3::identity());
-            
-    //         // 将每个检测框的中心点从图像坐标转换为世界坐标
-    //         clr_buds.iter()
-    //             .map(|bud| {
-    //                 // 计算检测框的中心点
-    //                 let center_x = (bud.the_box.x1 + bud.the_box.x2) / 2.0;
-    //                 let center_y = (bud.the_box.y1 + bud.the_box.y2) / 2.0;
-                    
-    //                 // 将2D像素坐标转换为归一化相机坐标
-    //                 let normalized_camera_coords = inv_intrinsic * Vector3::new(center_x, center_y, 0.0);
-                    
-    //                 // 构造齐次坐标向量
-    //                 let homogeneous_coords = Vector4::new(
-    //                     normalized_camera_coords.x,
-    //                     normalized_camera_coords.y,
-    //                     normalized_camera_coords.z,
-    //                     1.0
-    //                 );
-                    
-    //                 // 应用外参矩阵的逆变换，得到世界坐标
-    //                 let world_coords = inv_extrinsic * homogeneous_coords;
-                    
-    //                 // 返回3D世界坐标（忽略齐次坐标）
-    //                 Vector3::new(world_coords.x, world_coords.y, world_coords.z)
-    //             })
-    //             .collect()
-    //     } else {
-    //         Vec::new()
-    //     };
-
-    //     Box::new(points.into_iter())
-    // }
+    fn set_by_angle(&mut self, tra: Vector3<f32>, rot: Vector3<f32>) {
+       self.look.set_by_angle(tra, rot); 
+    }
+    
+    fn set_by_radian(&mut self, tra: Vector3<f32>, rot: Vector3<f32>) {
+        self.look.set_by_radians(tra, rot);
+    }
+    
+    fn set_by_matrix(&mut self, matrix: &Matrix4<f32>) {
+        self.look.extrinsic = *matrix;
+    }
 }

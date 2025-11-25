@@ -1,10 +1,12 @@
 use std::sync::{Arc, Mutex};
 use image::DynamicImage;
-
+use nalgebra::Vector3;
 
 use crate::color::ClrBud;
 use crate::cloud::CldBud;
 use crate::cloud::lifra::Lifra;
+use crate::tracker::target::Target;
+use crate::utils::sight::Sight;
 use crate::utils::stream::Stream;
 
 /// 系统数据交换中枢
@@ -16,11 +18,15 @@ pub struct Swapl {
     /// 点云数据输入流
     pub lidars: Arc<Mutex<Stream<Lifra>>>,
     /// 点云检测结果输出流
-    pub lid_objs: Arc<Mutex<Stream<Vec<CldBud>>>>,
+    pub cld_objs: Arc<Mutex<Stream<Vec<CldBud>>>>,
     /// 图像数据输入流
     pub images: Arc<Mutex<Stream<DynamicImage>>>,
     /// 图像检测结果输出流
-    pub img_objs: Arc<Mutex<Stream<Vec<ClrBud>>>>,
+    pub clr_objs: Arc<Mutex<Stream<Vec<ClrBud>>>>,
+    /// 3D投影结果输出流
+    pub sights: Arc<Mutex<Stream<Vec<Sight>>>>,
+
+    pub targets: Arc<Mutex<Stream<Vec<Target>>>>,
 }
 
 impl Swapl { 
@@ -28,31 +34,13 @@ impl Swapl {
     pub fn new() -> Self {
         Swapl {
             lidars: Arc::new(Mutex::new(Stream::new())),
-            lid_objs: Arc::new(Mutex::new(Stream::new())),
+            cld_objs: Arc::new(Mutex::new(Stream::new())),
             images: Arc::new(Mutex::new(Stream::new())),
-            img_objs: Arc::new(Mutex::new(Stream::new())),
+            clr_objs: Arc::new(Mutex::new(Stream::new())),
+            sights: Arc::new(Mutex::new(Stream::new())),
+            targets: Arc::new(Mutex::new(Stream::new())),
         }
     }
     
-    /// 获取图像输入流的引用
-    pub fn get_images_stream(&self) -> Arc<Mutex<Stream<DynamicImage>>> {
-        Arc::clone(&self.images)
-    }
     
-    /// 获取图像检测结果流的引用
-    pub fn get_img_objs_stream(&self) -> Arc<Mutex<Stream<Vec<ClrBud>>>> {
-        Arc::clone(&self.img_objs)
-    }
-    
-    /// 获取点云输入流的引用
-    pub fn get_lidars_stream(&self) -> Arc<Mutex<Stream<Lifra>>> {
-        Arc::clone(&self.lidars)
-    }
-    
-    /// 获取点云检测结果流的引用
-    pub fn get_lid_objs_stream(&self) -> Arc<Mutex<Stream<Vec<CldBud>>>> {
-        Arc::clone(&self.lid_objs)
-    }
-
-
 }
