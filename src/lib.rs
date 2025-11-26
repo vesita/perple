@@ -5,6 +5,7 @@ pub mod perple;
 pub mod tracker;
 pub mod config;
 pub mod swapl;
+pub mod optional;
 
 
 pub use perple::Perple;

@@ -1,32 +1,36 @@
 use crate::utils::boxes::Box3D;
 
-
-
-/// 固定容量的3D边界框容器
+/// 3D目标检测结果
 /// 
-/// 这是一个类似于Vec的容器，但具有固定的最大容量，避免了动态分配内存的开销。
-/// 它实现了常用的集合操作，如push、clear、len等，并支持迭代器。
-#[derive(Clone)]
+/// 表示一个检测到的3D对象，包括边界框、类别ID、类别名称和置信度。
+#[derive(Debug, Clone)]
 pub struct CldBud {
     pub the_box: Box3D,
     pub class_id: u32,
     pub class_name: String,
+    pub confidence: f32,
 }
 
 impl CldBud {
-    /// 创建一个新的空Bounds容器
-    pub fn new() -> Self {
-        Self {
-            the_box: Box3D::empty_box(),
-            class_id: 0,
-            class_name: String::new(),
-        }
+    /// 创建一个新的检测结果
+    /// 
+    /// # 参数
+    /// * `the_box` - 3D边界框
+    /// * `class_id` - 类别ID
+    /// * `class_name` - 类别名称
+    /// * `confidence` - 置信度
+    pub fn new(the_box: Box3D, class_id: u32, class_name: String, confidence: f32) -> Self {
+        Self { the_box, class_id, class_name, confidence }
     }
 }
 
 impl Default for CldBud {
     fn default() -> Self {
-        Self::new()
+        Self {
+            the_box: Box3D::empty_box(),
+            class_id: 0,
+            class_name: String::new(),
+            confidence: 0.0,
+        }
     }
 }
-

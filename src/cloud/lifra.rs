@@ -25,6 +25,16 @@ impl Lifra {
             count: 0,
         }
     }
+    
+    /// 从DynReader直接构造Lifra实例
+    pub fn init<R>(reader: &mut DynReader<R>) -> Self 
+    where 
+        R: std::io::BufRead,
+    {
+        let mut lifra = Lifra::new();
+        lifra.update(reader);
+        lifra
+    }
 
     pub fn update<R>(&mut self, reader: &mut DynReader<R>) 
     where 

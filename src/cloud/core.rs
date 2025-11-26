@@ -162,11 +162,12 @@ impl Cloud {
                 // 将聚类结果转换为CldBud格式
                 // 将所有聚类对象添加到CldBud中
                 for box3d in self.claster.objects().iter() {
-                    bounds.push(CldBud {
-                        the_box: box3d.clone(),
-                        class_id: 0,
-                        class_name: String::new(),
-                    });
+                    bounds.push(CldBud::new(
+                        *box3d,
+                        0,              // class_id: 默认为0，表示未分类
+                        String::new(),  // class_name: 默认为空字符串
+                        0.0             // confidence: 默认置信度为0.0
+                    ));
                 }
                 
                 // 提交写入操作

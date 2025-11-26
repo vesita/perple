@@ -1,0 +1,189 @@
+use std::{fs, io, sync::{Arc, Mutex}, thread, time::Duration};
+use std::collections::{HashMap, HashSet};
+use image::DynamicImage;
+use pcd_rs::DynReader;
+
+use crate::{cloud::Lifra, color::load_image, swapl::Swapl, utils::stream::Stream};
+
+/// 数据加载器
+/// 
+/// DataLoader负责从文件系统加载2D和3D检测数据，并将它们写入相应的数据流中。
+pub struct DataLoader {
+    /// 2D检测结果数据流
+    clr_stream: Arc<Mutex<Stream<DynamicImage>>>,
+    /// 3D检测结果数据流
+    cld_stream: Arc<Mutex<Stream<Lifra>>>,
+    /// 数据文件路径
+    target_path: String,
+
+    files: Vec<Vec<String>>,
+}
+
+impl DataLoader {
+    /// 创建一个新的数据加载器
+    /// 
+    /// 通过Swapl数据中枢获取所需的数据流并克隆为独立引用
+    pub fn new(
+        swapl: Arc<Mutex<Swapl>>,
+        target_path: String,
+    ) -> Self {
+        let swapl_guard = swapl.lock().unwrap();
+        let clr_stream = Arc::clone(&swapl_guard.colors);
+        let cld_stream = Arc::clone(&swapl_guard.clouds);
+        drop(swapl_guard); // 释放锁以避免潜在的死锁
+        
+        Self {
+            clr_stream,
+            cld_stream,
+            target_path,
+            files: vec![],
+        }
+    }
+
+    /// 列出目标路径中的所有文件
+    /// 
+    /// 返回在camera和lidar目录中都存在的文件对列表，
+    /// 每个元素包含[文件名, 文件名]，为了未来扩展兼容
+    pub fn list_files(&self) -> io::Result<Vec<Vec<String>>> {
+        let lidar_path = format!("{}/lidar", self.target_path);
+        let camera_path = format!("{}/camera", self.target_path);
+
+        // 读取camera目录中的所有文件，构建文件干名到完整文件名的映射
+        let clr_files: HashMap<String, String> = fs::read_dir(camera_path)?
+            .filter_map(|entry| {
+                entry.ok().and_then(|e| {
+                    e.path()
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .and_then(|name| {
+                            let full_name = name.clone();
+                            std::path::Path::new(&name)
+                                .file_stem()
+                                .map(|s| s.to_string_lossy().into_owned())
+                                .map(|stem| (stem, full_name))
+                        })
+                })
+            })
+            .collect();
+
+        // 读取lidar目录中的所有文件，构建文件干名到完整文件名的映射
+        let cld_files: HashMap<String, String> = fs::read_dir(lidar_path)?
+            .filter_map(|entry| {
+                entry.ok().and_then(|e| {
+                    e.path()
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .and_then(|name| {
+                            let full_name = name.clone();
+                            std::path::Path::new(&name)
+                                .file_stem()
+                                .map(|s| s.to_string_lossy().into_owned())
+                                .map(|stem| (stem, full_name))
+                        })
+                })
+            })
+            .collect();
+
+        // 使用函数式方法找出两个目录中基本名称相同的文件对
+        let target: Vec<Vec<String>> = clr_files
+            .into_iter()
+            .filter_map(|(stem, camera_file)| {
+                cld_files.get(&stem).map(|lidar_file| {
+                    vec![camera_file, lidar_file.clone()]
+                })
+            })
+            .collect();
+
+        Ok(target)
+    }
+
+    /// 加载单个数据文件到流中
+    pub fn load(&mut self) -> io::Result<()> {
+        if self.files.is_empty() {
+            self.files = self.list_files()?;
+        }
+
+        for file_pair in &self.files {
+            let camera_file = format!("{}/camera/{}", self.target_path, &file_pair[0]);
+            let lidar_file = format!("{}/lidar/{}", self.target_path, &file_pair[1]);
+            
+            // 获取数据流锁
+            let mut clr_stream = self.clr_stream.lock().unwrap();
+            let mut cld_stream = self.cld_stream.lock().unwrap();
+            
+            // 加载图像文件并写入流
+            match load_image(&camera_file) {
+                Ok(image) => {
+                    clr_stream.write(image).unwrap();
+                }
+                Err(e) => {
+                    eprintln!("Error loading image {}: {}", camera_file, e);
+                    clr_stream.write_direct(|slot| *slot = None).unwrap();
+                }
+            }
+            
+            // 解析 PCD 文件并写入流
+            match DynReader::open(&lidar_file) {
+                Ok(mut reader) => {
+                    let lifra = Lifra::init(&mut reader);
+                    cld_stream.write(lifra).unwrap();
+                }
+                Err(e) => {
+                    eprintln!("Error opening PCD file {}: {}", lidar_file, e);
+                    cld_stream.write_direct(|slot| *slot = None).unwrap();
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// 循环加载数据文件到流中
+    /// 该方法会按照20帧的速度无限循环加载数据，除非遇到I/O错误
+    pub fn load_loop(&mut self) -> io::Result<()> {
+        if self.files.is_empty() {
+            self.files = self.list_files()?;
+        }
+
+        loop {
+            for file_pair in &self.files {
+                let camera_file = format!("{}/camera/{}", self.target_path, &file_pair[0]);
+                let lidar_file = format!("{}/lidar/{}", self.target_path, &file_pair[1]);
+
+                // 先执行耗时的I/O操作，不持有锁
+                let image_result = load_image(&camera_file);
+                let cloud_result = DynReader::open(&lidar_file).map(|mut reader| Lifra::init(&mut reader));
+
+                // 然后获取锁并快速写入数据
+                {
+                    let mut clr_stream = self.clr_stream.lock().unwrap();
+                    match image_result {
+                        Ok(image) => {
+                            clr_stream.write(image).unwrap();
+                        }
+                        Err(e) => {
+                            eprintln!("Error loading image {}: {}", camera_file, e);
+                            clr_stream.write_direct(|slot| *slot = None).unwrap();
+                        }
+                    }
+                } // 在这里自动释放clr_stream的锁
+
+                {
+                    let mut cld_stream = self.cld_stream.lock().unwrap();
+                    match cloud_result {
+                        Ok(lifra) => {
+                            cld_stream.write(lifra).unwrap();
+                        }
+                        Err(e) => {
+                            eprintln!("Error opening PCD file {}: {}", lidar_file, e);
+                            cld_stream.write_direct(|slot| *slot = None).unwrap();
+                        }
+                    }
+                } // 在这里自动释放cld_stream的锁
+                
+                // 延迟以达到20帧/秒的速度 (50ms per frame)
+                thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
+}

@@ -71,9 +71,9 @@ impl Perple {
         config_path: &str,
     ) -> Self {
         // 从Swapl数据中枢获取共享数据流引用
-        let img_stream = Arc::clone(&pool.images);
+        let img_stream = Arc::clone(&pool.colors);
         let clr_bud_stream = Arc::clone(&pool.clr_objs);
-        let lid_stream = Arc::clone(&pool.lidars);
+        let lid_stream = Arc::clone(&pool.clouds);
         let cld_bud_stream = Arc::clone(&pool.cld_objs);
         let sight_stream = Arc::clone(&pool.sights);
         let target_stream = Arc::clone(&pool.targets);
