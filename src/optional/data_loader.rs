@@ -1,9 +1,9 @@
 use std::{fs, io, sync::{Arc, Mutex}, thread, time::Duration};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use image::DynamicImage;
 use pcd_rs::DynReader;
 
-use crate::{cloud::Lifra, color::load_image, swapl::Swapl, utils::stream::Stream};
+use crate::{cloud::Lifra, color::load_image, swapl::Swapl, utils::stream::Stream, utils::stream::StreamError};
 
 /// 数据加载器
 /// 
@@ -114,11 +114,15 @@ impl DataLoader {
             // 加载图像文件并写入流
             match load_image(&camera_file) {
                 Ok(image) => {
-                    clr_stream.write(image).unwrap();
+                    if let Err(StreamError::BufferFull) = clr_stream.write(image) {
+                        eprintln!("警告：颜色流缓冲区已满");
+                    }
                 }
                 Err(e) => {
-                    eprintln!("Error loading image {}: {}", camera_file, e);
-                    clr_stream.write_direct(|slot| *slot = None).unwrap();
+                    eprintln!("加载图像 {} 时出错：{}", camera_file, e);
+                    if let Err(StreamError::BufferFull) = clr_stream.write_direct(|slot| *slot = None) {
+                        eprintln!("警告：写入None时颜色流缓冲区已满");
+                    }
                 }
             }
             
@@ -126,11 +130,15 @@ impl DataLoader {
             match DynReader::open(&lidar_file) {
                 Ok(mut reader) => {
                     let lifra = Lifra::init(&mut reader);
-                    cld_stream.write(lifra).unwrap();
+                    if let Err(StreamError::BufferFull) = cld_stream.write(lifra) {
+                        eprintln!("警告：点云流缓冲区已满");
+                    }
                 }
                 Err(e) => {
-                    eprintln!("Error opening PCD file {}: {}", lidar_file, e);
-                    cld_stream.write_direct(|slot| *slot = None).unwrap();
+                    eprintln!("打开PCD文件 {} 时出错：{}", lidar_file, e);
+                    if let Err(StreamError::BufferFull) = cld_stream.write_direct(|slot| *slot = None) {
+                        eprintln!("警告：写入None时点云流缓冲区已满");
+                    }
                 }
             }
         }
@@ -159,11 +167,15 @@ impl DataLoader {
                     let mut clr_stream = self.clr_stream.lock().unwrap();
                     match image_result {
                         Ok(image) => {
-                            clr_stream.write(image).unwrap();
+                            if let Err(StreamError::BufferFull) = clr_stream.write(image) {
+                                eprintln!("警告：颜色流缓冲区已满");
+                            }
                         }
                         Err(e) => {
-                            eprintln!("Error loading image {}: {}", camera_file, e);
-                            clr_stream.write_direct(|slot| *slot = None).unwrap();
+                            eprintln!("加载图像 {} 时出错：{}", camera_file, e);
+                            if let Err(StreamError::BufferFull) = clr_stream.write_direct(|slot| *slot = None) {
+                                eprintln!("警告：写入None时颜色流缓冲区已满");
+                            }
                         }
                     }
                 } // 在这里自动释放clr_stream的锁
@@ -172,11 +184,15 @@ impl DataLoader {
                     let mut cld_stream = self.cld_stream.lock().unwrap();
                     match cloud_result {
                         Ok(lifra) => {
-                            cld_stream.write(lifra).unwrap();
+                            if let Err(StreamError::BufferFull) = cld_stream.write(lifra) {
+                                eprintln!("警告：点云流缓冲区已满");
+                            }
                         }
                         Err(e) => {
-                            eprintln!("Error opening PCD file {}: {}", lidar_file, e);
-                            cld_stream.write_direct(|slot| *slot = None).unwrap();
+                            eprintln!("打开PCD文件 {} 时出错：{}", lidar_file, e);
+                            if let Err(StreamError::BufferFull) = cld_stream.write_direct(|slot| *slot = None) {
+                                eprintln!("警告：写入None时点云流缓冲区已满");
+                            }
                         }
                     }
                 } // 在这里自动释放cld_stream的锁

@@ -1,7 +1,6 @@
 extern crate nalgebra as na;
 
-use na::{Matrix4, Vector3, Vector4};
-use ndarray::{Array3, ArrayD};
+use na::{Matrix4, Vector3};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use bevy::prelude::*;
@@ -20,8 +19,6 @@ pub struct World {
     equips: Vec<Box<dyn OnWorld>>,
     /// 设备ID映射
     equip_id: HashMap<String, usize>,
-    /// 点云数据点
-    points: Vec<Vector3<f32>>,
     /// 图像数据输入流
     image_input_stream: Option<Arc<Mutex<Stream<DynamicImage>>>>,
     /// 图像检测结果输入流
@@ -56,7 +53,6 @@ impl World {
         Self {
             equips: vec![],
             equip_id: HashMap::new(),
-            points: vec![],
             image_input_stream: None,
             image_result_stream: None,
             lidar_input_stream: None,
@@ -124,15 +120,6 @@ impl World {
         None
     }
 
-    /// 可视化点云数据
-    pub fn visualize(&self, points: &Vec<Vector3<f32>>) {
-        for order in 0..points.len() {
-            if order < self.equips.len() {
-                let equip = &self.equips[order];
-                // 这里可以添加具体的可视化逻辑
-            }
-        }
-    }
     
     /// 添加设备到世界中
     pub fn add_equip(&mut self, name: String, equip: Box<dyn OnWorld>) -> usize {

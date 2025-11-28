@@ -2,11 +2,10 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 use std::fmt;
 
-use nalgebra::{Matrix3, Matrix4, Vector3, Vector4};
+use nalgebra::{Matrix4, Vector3, Vector4};
 
 use crate::utils::world::OnWorld;
 use crate::{cloud::{CldBud, claster::Claster, lifra::Lifra}, utils::stream::{Stream, Cream, StreamError}};
-use crate::utils::boxes::Box3D;
 
 /// Lidar模块的错误类型
 #[derive(Debug)]

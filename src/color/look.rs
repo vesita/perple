@@ -1,9 +1,6 @@
 use std::sync::{Arc, Mutex};
 
 use nalgebra::{Matrix3, Matrix4, Vector2, Vector3};
-use ndarray::Array4;
-use ort::value::{Tensor, TensorValueType, Value};
-
 use crate::{color::ClrBud, utils::{sight::Sight, stream::{Cream, Stream}}, config::load_camera_config};
 
 

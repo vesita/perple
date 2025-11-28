@@ -1,10 +1,12 @@
 use std::sync::{Arc, Mutex};
+
 use image::DynamicImage;
+
 use nalgebra::Vector3;
 
-use crate::color::ClrBud;
-use crate::cloud::CldBud;
 use crate::cloud::lifra::Lifra;
+use crate::cloud::CldBud;
+use crate::color::ClrBud;
 use crate::tracker::target::Target;
 use crate::utils::sight::Sight;
 use crate::utils::stream::Stream;

@@ -1,5 +1,5 @@
-use std::{error::Error, sync::{Arc, Mutex}};
-use crate::{cloud::CldBud, color::ClrBud, tracker::target::Target, utils::{sight::{self, Sight}, stream::{Stream, StreamError}}};
+use std::sync::{Arc, Mutex};
+use crate::{cloud::CldBud, tracker::target::Target, utils::{sight::Sight, stream::{Stream, StreamError}}};
 use nalgebra::Vector3;
 
 /// Tracker模块的错误类型

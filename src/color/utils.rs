@@ -403,7 +403,8 @@ fn intersection(box1: &Box2D, box2: &Box2D) -> f32 {
 /// 
 /// # 返回值
 /// 返回并集面积
-fn union(box1: &Box2D, box2: &Box2D) -> f32 {
+/// 
+pub fn union(box1: &Box2D, box2: &Box2D) -> f32 {
     let area1 = (box1.x2 - box1.x1) * (box1.y2 - box1.y1);
     let area2 = (box2.x2 - box2.x1) * (box2.y2 - box2.y1);
     area1 + area2 - intersection(box1, box2)

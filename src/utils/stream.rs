@@ -173,6 +173,63 @@ impl<T: Default + Send + Clone> Stream<T> {
     pub fn is_empty(&self) -> bool {
         !self.has_data()
     }
+    
+    /// 读取数据并返回数据及当前读取位置的索引
+    /// 这个方法会移动读取指针
+    pub fn read_indexed(&mut self) -> Option<(T, usize)> {
+        let current_read = self.read_index.load(Ordering::Acquire);
+        let current_write = self.write_index.load(Ordering::Acquire);
+        
+        if current_read == current_write {
+            return None;
+        }
+        
+        // 安全地读取数据
+        let data = unsafe {
+            self.pool[current_read].assume_init_read()
+        };
+        
+        // 更新读索引
+        self.read_index.store((current_read + 1) % STREAM_CAPACITY, Ordering::Release);
+        
+        data.map(|d| (d, current_read))
+    }
+    
+    /// 根据索引获取特定位置的数据，不移动读取指针
+    pub fn get_at(&self, index: usize) -> Option<T> {
+        let actual_index = index % STREAM_CAPACITY;
+        let current_read = self.read_index.load(Ordering::Acquire);
+        let current_write = self.write_index.load(Ordering::Acquire);
+        
+        // 检查索引是否在有效范围内
+        let is_valid = if current_write >= current_read {
+            index >= current_read && index < current_write
+        } else {
+            index >= current_read || index < current_write
+        };
+        
+        if is_valid {
+            unsafe {
+                if let Some(data) = self.pool[actual_index].assume_init_ref() {
+                    Some(data.clone())
+                } else {
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    }
+    
+    /// 获取当前读取位置的索引，不移动读取指针
+    pub fn read_index(&self) -> usize {
+        self.read_index.load(Ordering::Acquire)
+    }
+    
+    /// 获取当前写入位置的索引
+    pub fn write_index(&self) -> usize {
+        self.write_index.load(Ordering::Acquire)
+    }
 }
 
 impl <IofActor: Default + Send + Clone, OofActor: Default + Send + Clone> Cream<IofActor, OofActor> {
@@ -207,6 +264,7 @@ impl <IofActor: Default + Send + Clone, OofActor: Default + Send + Clone> Cream<
     }
 
     /// 从输出流接收一个数据项。
+    /// receive 的缩减写法
     pub fn reciv(&self) -> Option<OofActor> {
         self.out_stream.lock().unwrap().read()
     }
@@ -217,6 +275,7 @@ impl <IofActor: Default + Send + Clone, OofActor: Default + Send + Clone> Cream<
     }
 
     /// 将一个数据项交付到输出流（等同于提交读取操作）。
+    /// deliver 的缩减写法
     pub fn deliv(&self) -> Result<(), StreamError> {
         self.out_stream.lock().unwrap().commit_read()
     }
@@ -226,10 +285,14 @@ impl <IofActor: Default + Send + Clone, OofActor: Default + Send + Clone> Cream<
         self.out_stream.lock().unwrap().commit_read()
     }
 
+    /// 获取处理者的输入流引用
+    /// Input of Actor
     pub fn share_ioa(&self) -> Arc<Mutex<Stream<IofActor>>> {
         self.in_stream.clone()
     }
 
+    /// 获取处理者的输出流引用
+    /// Output of Actor
     pub fn share_ooa(&self) -> Arc<Mutex<Stream<OofActor>>> {
         self.out_stream.clone()
     }
