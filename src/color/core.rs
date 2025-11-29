@@ -142,9 +142,6 @@ impl Color {
         // 执行推理并计时
         let start_time = Instant::now();
         
-        // 使用新的Stream API直接写入数据
-        self.cream.write(Vec::new())?;
-        
         // 获取输出流的可变引用并填充数据
         let mut output_stream = self.cream.out_stream.lock()?;
         
@@ -230,7 +227,9 @@ impl Camera {
     }
 
     pub fn act(&mut self) -> Result<(), ColorError> {
-        self.data.act()
+        let _ = self.data.act();
+        let _ = self.look.act();
+        Ok(())
     }
 }
 

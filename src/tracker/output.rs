@@ -11,7 +11,15 @@ pub struct Target {
 
 
 impl Target {
-    pub fn new() -> Self {
+    pub fn new(the_box: Box3D, class_type: String, id: usize) -> Self {
+        Self {
+            the_box,
+            class_type,
+            id,
+        }
+    }
+
+    pub fn empty_target() -> Self {
         Self {
             the_box: Box3D::empty_box(),
             class_type: "".to_string(),

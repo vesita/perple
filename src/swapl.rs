@@ -7,7 +7,7 @@ use nalgebra::Vector3;
 use crate::cloud::lifra::Lifra;
 use crate::cloud::CldBud;
 use crate::color::ClrBud;
-use crate::tracker::target::Target;
+use crate::tracker::output::Target;
 use crate::utils::sight::Sight;
 use crate::utils::stream::Stream;
 

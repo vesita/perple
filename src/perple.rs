@@ -119,7 +119,7 @@ impl Perple {
         }
         if let Ok(mut tracker) = self.tracker_loop.lock() {
             let _ = tracker.start_with_method(LoopMode::Signal, Arc::clone(&self.tracker), |tracker| {
-                let _ = tracker.track();
+                let _ = tracker.run();
             }, 40).map_err(|e| PerpleError::LoopError(e))?;
         }
         Ok(())
@@ -210,7 +210,7 @@ impl Perple {
         let mut tracker_loop = self.tracker_loop.lock()?;
         let tracker_ref = Arc::clone(&self.tracker);
         tracker_loop.start_with_method(mode, tracker_ref, |tracker| {
-            let _ = tracker.track();
+            let _ = tracker.run();
         }, 100) // 100ms间隔
         .map_err(|e| PerpleError::LoopError(e))
     }

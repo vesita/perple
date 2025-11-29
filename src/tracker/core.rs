@@ -1,5 +1,5 @@
 use std::sync::{Arc, Mutex};
-use crate::{cloud::CldBud, tracker::target::Target, utils::{sight::Sight, stream::{Stream, StreamError}}};
+use crate::{cloud::CldBud, tracker::output::Target, utils::{sight::Sight, stream::{Stream, StreamError}}};
 use nalgebra::Vector3;
 
 /// Tracker模块的错误类型
@@ -123,8 +123,8 @@ impl Tracker {
         (center1 - center2).norm()
     }
     
-    /// 更新跟踪目标
-    pub fn track(&mut self) -> Result<(), TrackerError> {
+    /// 更新跟踪目标，结合sight关联功能
+    pub fn run(&mut self) -> Result<(), TrackerError> {
         // 读取最新的3D目标检测结果
         let current_detections = {
             let mut tar3d_guard = self.tar3d.lock()?;
@@ -133,6 +133,20 @@ impl Tracker {
                 None => Vec::new(),
             }
         };
+        
+        // 读取视线数据用于后续分类修正
+        let sight_data = {
+            let mut sight_guard = self.sight.lock()?;
+            match sight_guard.read() {
+                Some(data) => data,
+                None => Vec::new(),
+            }
+        };
+        
+        // 如果没有检测结果，则不进行处理
+        if current_detections.is_empty() {
+            return Ok(());
+        }
         
         // 读取之前的跟踪目标
         let previous_targets = {
@@ -143,7 +157,7 @@ impl Tracker {
             }
         };
         
-        // 创建新的跟踪目标列表
+        // 第一步：基于历史数据进行目标跟踪
         let mut tracked_targets = Vec::new();
         let mut used_detections = vec![false; current_detections.len()];
         
@@ -169,7 +183,7 @@ impl Tracker {
             if let Some(index) = best_match_index {
                 let detection = &current_detections[index];
                 target.the_box = detection.the_box;
-                target.class_type = detection.class_name.clone();
+                // 保留历史分类信息，稍后用视觉信息修正
                 used_detections[index] = true;
                 tracked_targets.push(target);
             }
@@ -189,12 +203,35 @@ impl Tracker {
             }
         }
         
+        // 第二步：使用视觉信息对分类结果进行修正
+        if !sight_data.is_empty() {
+            // 对每个跟踪目标，使用视线数据进行分类修正
+            for target in tracked_targets.iter_mut() {
+                let mut matched = false;
+                
+                // 检查目标是否与任何视线相交
+                for sight in &sight_data {
+                    if sight.slab(&target.the_box) {
+                        // 如果相交，将其分类修正为"person"
+                        target.class_type = "person".to_string();
+                        matched = true;
+                        break;
+                    }
+                }
+                
+                // 如果没有匹配到视线，且原分类为空，则标记为"obstacle"
+                if !matched && target.class_type.is_empty() {
+                    target.class_type = "obstacle".to_string();
+                }
+            }
+        }
+        
         // 将更新后的跟踪结果写入输出流
         {
             let mut target_guard = self.target.lock()?;
             target_guard.write(tracked_targets)?;
         }
-        
+
         Ok(())
     }
 }

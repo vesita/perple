@@ -192,7 +192,7 @@ impl<T: Default + Send + Clone> Stream<T> {
         // 更新读索引
         self.read_index.store((current_read + 1) % STREAM_CAPACITY, Ordering::Release);
         
-        data.map(|d| (d, current_read))
+        data.map(|data| (data, current_read))
     }
     
     /// 根据索引获取特定位置的数据，不移动读取指针
