@@ -12,7 +12,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("========================");
     
     // 创建数据交换中枢
-    let swapl = Arc::new(Mutex::new(Swapl::new()));
+    let swapl = Arc::new(Swapl::new());
     println!("✓ 创建数据交换中枢");
     
     // 创建DataLoader实例
@@ -51,7 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 创建Perple实例（使用占位符路径）
     println!("正在创建Perple实例...");
     let mut perple = Perple::new(
-        &swapl.lock().unwrap(),
+        swapl.clone(),
         "./module/color/yolo11n.onnx", // 使用正确的模型路径
         "./config/camera.toml", // 占位符路径
     );
@@ -82,26 +82,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn show_stream_status(swapl: &Arc<Mutex<Swapl>>) -> Result<(), Box<dyn std::error::Error>> {
-    let swapl_guard = swapl.lock().unwrap();
+fn show_stream_status(swapl: &Arc<Swapl>) -> Result<(), Box<dyn std::error::Error>> {
     
     // 检查各数据流状态
-    let colors_stream = swapl_guard.colors.lock().unwrap();
+    let colors_stream = swapl.colors.lock().unwrap();
     println!("  图像数据流大小: {}", colors_stream.len());
     
-    let clouds_stream = swapl_guard.clouds.lock().unwrap();
+    let clouds_stream = swapl.clouds.lock().unwrap();
     println!("  点云数据流大小: {}", clouds_stream.len());
     
-    let clr_objs_stream = swapl_guard.clr_objs.lock().unwrap();
+    let clr_objs_stream = swapl.clr_objs.lock().unwrap();
     println!("  2D检测结果流大小: {}", clr_objs_stream.len());
     
-    let cld_objs_stream = swapl_guard.cld_objs.lock().unwrap();
+    let cld_objs_stream = swapl.cld_objs.lock().unwrap();
     println!("  3D检测结果流大小: {}", cld_objs_stream.len());
     
-    let sights_stream = swapl_guard.sights.lock().unwrap();
+    let sights_stream = swapl.sights.lock().unwrap();
     println!("  投影结果流大小: {}", sights_stream.len());
     
-    let targets_stream = swapl_guard.targets.lock().unwrap();
+    let targets_stream = swapl.targets.lock().unwrap();
     println!("  跟踪结果流大小: {}", targets_stream.len());
     
     Ok(())

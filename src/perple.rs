@@ -62,38 +62,31 @@ impl Perple {
     /// 所有数据交互都通过Swapl完成，实现了模块间的松耦合设计。
     /// Perple模块只需要持有Swapl的引用，即可访问所有需要的数据流。
     pub fn new(
-        pool: &Swapl,
+        pool: Arc<Swapl>,
         model_path: &str,
         config_path: &str,
     ) -> Self {
-        // 从Swapl数据中枢获取共享数据流引用
-        let img_stream = Arc::clone(&pool.colors);
-        let clr_bud_stream = Arc::clone(&pool.clr_objs);
-        let lid_stream = Arc::clone(&pool.clouds);
-        let cld_bud_stream = Arc::clone(&pool.cld_objs);
-        let sight_stream = Arc::clone(&pool.sights);
-        let target_stream = Arc::clone(&pool.targets);
-        
-
         let camera = Arc::new(Mutex::new(Camera::new(
-            Arc::clone(&img_stream),
-            Arc::clone(&clr_bud_stream),
-            Arc::clone(&sight_stream),
+            Arc::clone(&pool.colors),
+            Arc::clone(&pool.clr_objs),
+            Arc::clone(&pool.sights),
             model_path,
             config_path,
         )));
         
-
         let lidar = Arc::new(Mutex::new(Lidar::new(
-            Arc::clone(&lid_stream), 
-            Arc::clone(&cld_bud_stream)
+            Arc::clone(&pool.clouds), 
+            Arc::clone(&pool.cld_objs)
         )));
 
         let tracker = Arc::new(Mutex::new(Tracker::new(
-            Arc::clone(&sight_stream),
-            Arc::clone(&cld_bud_stream),
-            target_stream,
+            Arc::clone(&pool.sights),
+            Arc::clone(&pool.cld_objs),
+            Arc::clone(&pool.targets),
         )));
+        
+        // 释放pool引用
+        drop(pool);
         
         Self {
             camera,

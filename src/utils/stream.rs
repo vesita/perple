@@ -198,26 +198,12 @@ impl<T: Default + Send + Clone> Stream<T> {
     /// 根据索引获取特定位置的数据，不移动读取指针
     pub fn get_at(&self, index: usize) -> Option<T> {
         let actual_index = index % STREAM_CAPACITY;
-        let current_read = self.read_index.load(Ordering::Acquire);
-        let current_write = self.write_index.load(Ordering::Acquire);
-        
-        // 检查索引是否在有效范围内
-        let is_valid = if current_write >= current_read {
-            index >= current_read && index < current_write
-        } else {
-            index >= current_read || index < current_write
-        };
-        
-        if is_valid {
-            unsafe {
-                if let Some(data) = self.pool[actual_index].assume_init_ref() {
-                    Some(data.clone())
-                } else {
-                    None
-                }
+        unsafe {
+            if let Some(data) = self.pool[actual_index].assume_init_ref() {
+                Some(data.clone())
+            } else {
+                None
             }
-        } else {
-            None
         }
     }
     

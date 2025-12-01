@@ -24,19 +24,18 @@ impl DataLoader {
     /// 
     /// 通过Swapl数据中枢获取所需的数据流并克隆为独立引用
     pub fn new(
-        swapl: Arc<Mutex<Swapl>>,
+        swapl: Arc<Swapl>,
         target_path: String,
     ) -> Self {
-        let swapl_guard = swapl.lock().unwrap();
-        let clr_stream = Arc::clone(&swapl_guard.colors);
-        let cld_stream = Arc::clone(&swapl_guard.clouds);
-        drop(swapl_guard); // 释放锁以避免潜在的死锁
-        
+        let clr_stream = Arc::clone(&swapl.colors);
+        let cld_stream = Arc::clone(&swapl.clouds);
+        let files = vec![];
+
         Self {
             clr_stream,
             cld_stream,
             target_path,
-            files: vec![],
+            files,
         }
     }
 

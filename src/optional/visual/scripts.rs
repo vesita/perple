@@ -1,18 +1,18 @@
-use std::{sync::{Arc, Mutex}, thread, time};
+use std::{sync::Arc, thread, time};
 
 use bevy::prelude::*;
 
-use crate::{Perple, Swapl, optional::{data_loader::DataLoader, visual::{draw_setup, resource::VisResource}}};
+use crate::{Perple, Swapl, optional::{data_loader::DataLoader, visual::{resource::VisResource, interface::draw::{setup_scene, update_visualization, camera_controller}}}};
 
 pub fn vis() -> Result<(), Box<dyn std::error::Error>> {
-    let swapl = Arc::new(Mutex::new(Swapl::new()));
+    let swapl = Arc::new(Swapl::new());
     let mut data_loader = DataLoader::new(
         Arc::clone(&swapl),
         "./data/test".to_string(),
     );
     let _ = data_loader.load()?;
     let mut perple = Perple::new(
-        &swapl.lock().unwrap(),
+        Arc::clone(&swapl),
         "./module/color/yolo11n.onnx", // 使用正确的模型路径
         "./config/camera.toml", // 占位符路径
     );
@@ -21,11 +21,20 @@ pub fn vis() -> Result<(), Box<dyn std::error::Error>> {
     thread::sleep(time::Duration::from_secs(5));
 
     App::new()
-        .add_plugins(DefaultPlugins)
+        .add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "Perple Visualizer".to_string(),
+                resizable: true,
+                prevent_default_event_handling: false,
+                ..default()
+            }),
+            ..default()
+        }))
         .insert_resource(VisResource {
             swapl: Arc::clone(&swapl),
         })
-        .add_systems(Startup, draw_setup)
+        .add_systems(Startup, setup_scene)
+        .add_systems(Update, (update_visualization, camera_controller))
         .run();
         
     Ok(())
