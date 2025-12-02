@@ -1,6 +1,6 @@
 [package]
 name = "perple"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 
 [dependencies]
@@ -13,3 +13,4 @@ nalgebra = {version = "0.*", features = ["std"]}
 bevy = {version = "0.*"}
 toml = "0.*"
 serde = { version = "1.*", features = ["derive"] }
+smooth-bevy-cameras = { git = "https://github.com/bonsairobo/smooth-bevy-cameras.git" }

@@ -1,8 +1,12 @@
 use std::{sync::Arc, thread, time};
 
 use bevy::prelude::*;
+use smooth_bevy_cameras::{
+    LookTransformPlugin,
+    controllers::fps::{FpsCameraPlugin},
+};
 
-use crate::{Perple, Swapl, optional::{data_loader::DataLoader, visual::{resource::VisResource, interface::draw::{setup_scene, update_visualization, camera_controller}}}};
+use crate::{Perple, Swapl, optional::{data_loader::DataLoader, visual::{resource::VisResource, interface::draw::{setup_scene, update_visualization}}}};
 
 pub fn vis() -> Result<(), Box<dyn std::error::Error>> {
     let swapl = Arc::new(Swapl::new());
@@ -30,12 +34,15 @@ pub fn vis() -> Result<(), Box<dyn std::error::Error>> {
             }),
             ..default()
         }))
+        .add_plugins(LookTransformPlugin)
+        .add_plugins(FpsCameraPlugin::default())
         .insert_resource(VisResource {
             swapl: Arc::clone(&swapl),
         })
         .add_systems(Startup, setup_scene)
-        .add_systems(Update, (update_visualization, camera_controller))
+        .add_systems(Update, update_visualization)
         .run();
         
     Ok(())
 }
+
