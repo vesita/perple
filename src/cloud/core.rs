@@ -221,6 +221,38 @@ impl Lidar {
         // 调用带处理器的act方法
         self.data.act(pre_process)
     }
+    
+    /// 获取指定索引位置的帧数据并应用外参矩阵变换
+    /// 
+    /// # 参数
+    /// * `index` - 要获取的帧数据的索引
+    /// 
+    /// # 返回值
+    /// 如果指定索引处存在数据，则返回经过外参矩阵变换的点云数据，否则返回None
+    pub fn get_at_with_transform(&self, index: usize) -> Option<Lifra> {
+        // 锁定输入流
+        let input_stream = self.data.cream().in_stream.lock().ok()?;
+        
+        // 使用get_at方法获取指定索引的数据
+        let lifra = input_stream.get_at(index)?;
+        
+        // 应用外参矩阵变换
+        let extrinsic = self.extrinsic;
+        let transformed_points: Vec<[f32; 3]> = lifra.points()
+            .iter()
+            .map(|point| {
+                // 将点转换为齐次坐标
+                let point_h = Vector4::new(point[0], point[1], point[2], 1.0);
+                // 应用外参矩阵进行坐标变换
+                let transformed = extrinsic * point_h;
+                // 转换回非齐次坐标
+                [transformed.x, transformed.y, transformed.z]
+            })
+            .collect();
+        
+        // 使用变换后的点创建新的Lifra实例并返回
+        Some(Lifra::from_points(transformed_points))
+    }
 }
 
 impl OnWorld for Lidar { 

@@ -69,17 +69,17 @@ pub fn update_visualization(
 ) {
 
     let swapl = &resource.swapl;
+    let lidar = &resource.lidar;
     
     // 尝试获取targets数据
     match swapl.targets.lock() {
         Ok(mut targets_lock) => {
             // 使用read_indexed读取数据和索引
             if let Some((targets, idx)) = targets_lock.read_indexed() {
-                // 尝试获取点云数据
-                match swapl.clouds.lock() {
-                    Ok(clouds) => {
-                        // 使用索引获取对应的点云数据
-                        if let Some(cloud) = clouds.get_at(idx) {
+                // 使用lidar实例获取经过坐标变换的点云数据
+                match lidar.lock() {
+                    Ok(lidar_guard) => {
+                        if let Some(cloud) = lidar_guard.get_at_with_transform(idx) {
                             println!("正在绘制{}个点和{}个检测框", cloud.len(), targets.len());
                             for (idx, point) in cloud.iter().enumerate() {
                                 // 将Y-up坐标转换为Z-up坐标
@@ -142,7 +142,7 @@ pub fn update_visualization(
                         }
                     }
                     Err(e) => {
-                        println!("无法锁定点云数据: {}", e);
+                        println!("无法锁定lidar实例: {}", e);
                     }
                 }
             }

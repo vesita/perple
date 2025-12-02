@@ -46,9 +46,9 @@ impl<T> From<std::sync::PoisonError<T>> for PerpleError {
 /// 该模块通过Swapl数据中枢与其他模块进行数据交互，
 
 pub struct Perple {
-    camera: Arc<Mutex<Camera>>,
-    lidar: Arc<Mutex<Lidar>>,
-    tracker: Arc<Mutex<Tracker>>,
+    pub camera: Arc<Mutex<Camera>>,
+    pub lidar: Arc<Mutex<Lidar>>,
+    pub tracker: Arc<Mutex<Tracker>>,
 
     /// 控制类模块（可能跨线程访问，使用Arc<Mutex<T>>）
     color_loop: Arc<Mutex<MultiLoop>>,

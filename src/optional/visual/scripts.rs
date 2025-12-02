@@ -38,6 +38,7 @@ pub fn vis() -> Result<(), Box<dyn std::error::Error>> {
         .add_plugins(FpsCameraPlugin::default())
         .insert_resource(VisResource {
             swapl: Arc::clone(&swapl),
+            lidar: Arc::clone(&perple.lidar),
         })
         .add_systems(Startup, setup_scene)
         .add_systems(Update, update_visualization)
@@ -45,4 +46,3 @@ pub fn vis() -> Result<(), Box<dyn std::error::Error>> {
         
     Ok(())
 }
-
