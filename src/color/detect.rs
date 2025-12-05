@@ -1,6 +1,6 @@
 use ort::{session::Session, value::{TensorValueType, Value}};
 use image::DynamicImage;
-use crate::{color::{ClrBud,  image::{ScaleMessage, image_to_tensor, resize_image}, load_model, utils::{to_input,nms_tensor}}, config::{DEFAULT_CONFIDENCE_THRESHOLD, DEFAULT_INPUT_HEIGHT, DEFAULT_INPUT_WIDTH, DEFAULT_NMS_THRESHOLD, DETECTIONS_CAPACITY}};
+use crate::{color::{ClrBud,  image::{ScaleMessage, image_to_tensor, resize_image}, load_model, utils::{to_input,nms_tensor}}, config::fixif};
 use ndarray::{Array2, Array4, s};
 use ort::inputs;
 
@@ -60,16 +60,18 @@ impl YoloDetector {
     /// ```
     pub fn new(model_path: &str, input_width: usize, input_height: usize) -> Self {
         let model = load_model(model_path).expect("无法加载模型");
+        let ixi = fixif();
+        let detections_capacity = ixi.detections_capacity;
         
         Self {
             model,
             input_width,
             input_height,
-            confidence_threshold: DEFAULT_CONFIDENCE_THRESHOLD,
-            nms_threshold: DEFAULT_NMS_THRESHOLD,
+            confidence_threshold: ixi.default_confidence_threshold,
+            nms_threshold: ixi.default_nms_threshold,
             picked_indices: {
-                let mut indices = Vec::with_capacity(DETECTIONS_CAPACITY);
-                indices.resize(DETECTIONS_CAPACITY, false);
+                let mut indices = Vec::with_capacity(detections_capacity);
+                indices.resize(detections_capacity, false);
                 indices
             },
         }
@@ -83,7 +85,8 @@ impl YoloDetector {
     /// # 返回值
     /// 返回新的YoloDetector实例
     pub fn with_default_size(model_path: &str) -> Self {
-        Self::new(model_path, DEFAULT_INPUT_WIDTH, DEFAULT_INPUT_HEIGHT)
+        let ixi = fixif();
+        Self::new(model_path, ixi.default_input_width, ixi.default_input_height)
     }
 
     /// 执行模型推理

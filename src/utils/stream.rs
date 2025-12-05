@@ -1,9 +1,10 @@
-use crate::config::STREAM_CAPACITY;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::mem::MaybeUninit;
 use std::boxed::Box;
 use std::fmt;
+
+use crate::config::fixif;
 
 
 /// 表示流操作可能出现的错误
@@ -33,6 +34,7 @@ pub struct Stream<T: Default + Send + Clone> {
     pool: Box<[MaybeUninit<Option<T>>]>,
     read_index: AtomicUsize,
     write_index: AtomicUsize,
+    capacity: usize,
 }
 
 /// 双向流结构，用于连接两个处理单元
@@ -46,18 +48,17 @@ pub struct Cream<IofActor: Default + Send + Clone, OofActor: Default + Send + Cl
 
 impl<T: Default + Send + Clone> Stream<T> { 
     pub fn new() -> Self {
+        let ixi = fixif();
         // 创建一个预分配内存的数组并在堆上分配
-        let mut pool: Vec<MaybeUninit<Option<T>>> = Vec::with_capacity(STREAM_CAPACITY);
-        
-        // 初始化所有元素
-        for _ in 0..STREAM_CAPACITY {
-            pool.push(MaybeUninit::new(None));
-        }
+        let pool: Vec<MaybeUninit<Option<T>>> = (0..ixi.stream_capacity)
+            .map(|_| MaybeUninit::new(None))
+            .collect();
         
         Self {
             pool: pool.into_boxed_slice(),
             read_index: AtomicUsize::new(0),
             write_index: AtomicUsize::new(0),
+            capacity: ixi.stream_capacity,
         }
     }
     
@@ -66,7 +67,7 @@ impl<T: Default + Send + Clone> Stream<T> {
         let current_read = self.read_index.load(Ordering::Acquire);
         let current_write = self.write_index.load(Ordering::Acquire);
         
-        let next_index = (current_write + 1) % STREAM_CAPACITY;
+        let next_index = (current_write + 1) % self.capacity;
         if next_index == current_read {
             return Err(StreamError::BufferFull);
         }
@@ -97,7 +98,7 @@ impl<T: Default + Send + Clone> Stream<T> {
         let current_read = self.read_index.load(Ordering::Acquire);
         let current_write = self.write_index.load(Ordering::Acquire);
         
-        let next_index = (current_write + 1) % STREAM_CAPACITY;
+        let next_index = (current_write + 1) % self.capacity;
         if next_index == current_read {
             return Err(StreamError::BufferFull);
         }
@@ -116,7 +117,7 @@ impl<T: Default + Send + Clone> Stream<T> {
             return Err(StreamError::BufferEmpty);
         }
         // 更新读索引
-        self.read_index.store((current_read + 1) % STREAM_CAPACITY, Ordering::Release);
+        self.read_index.store((current_read + 1) % self.capacity, Ordering::Release);
         Ok(())
     }
     
@@ -154,7 +155,7 @@ impl<T: Default + Send + Clone> Stream<T> {
     
     /// 返回流的容量
     pub fn capacity(&self) -> usize {
-        STREAM_CAPACITY
+        self.capacity
     }
     
     /// 返回当前队列中的元素数量
@@ -165,7 +166,7 @@ impl<T: Default + Send + Clone> Stream<T> {
         if current_write >= current_read {
             current_write - current_read
         } else {
-            STREAM_CAPACITY - current_read + current_write
+            self.capacity - current_read + current_write
         }
     }
     
@@ -190,14 +191,14 @@ impl<T: Default + Send + Clone> Stream<T> {
         };
         
         // 更新读索引
-        self.read_index.store((current_read + 1) % STREAM_CAPACITY, Ordering::Release);
+        self.read_index.store((current_read + 1) % self.capacity, Ordering::Release);
         
         data.map(|data| (data, current_read))
     }
     
     /// 根据索引获取特定位置的数据，不移动读取指针
     pub fn get_at(&self, index: usize) -> Option<T> {
-        let actual_index = index % STREAM_CAPACITY;
+        let actual_index = index % self.capacity;
         unsafe {
             if let Some(data) = self.pool[actual_index].assume_init_ref() {
                 Some(data.clone())
@@ -260,15 +261,15 @@ impl <IofActor: Default + Send + Clone, OofActor: Default + Send + Clone> Cream<
         self.out_stream.lock().unwrap().commit_read()
     }
 
-    /// 将一个数据项交付到输出流（等同于提交读取操作）。
+    /// 将一个数据项交付到输出流（等同于提交写入操作）。
     /// deliver 的缩减写法
-    pub fn deliv(&self) -> Result<(), StreamError> {
-        self.out_stream.lock().unwrap().commit_read()
+    pub fn deliv(&self, data: OofActor) -> Result<(), StreamError> {
+        self.out_stream.lock().unwrap().write(data)
     }
 
     /// 提交对输出流的交付操作，移动交付指针。
     pub fn commit_deliv(&self) -> Result<(), StreamError> {
-        self.out_stream.lock().unwrap().commit_read()
+        self.out_stream.lock().unwrap().commit_write()
     }
 
     /// 获取处理者的输入流引用

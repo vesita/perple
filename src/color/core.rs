@@ -7,7 +7,9 @@ use std::fmt;
 use crate::color::{YoloDetector, fill_input_image};
 use crate::utils::sight::Sight;
 use crate::utils::world::OnWorld;
-use crate::{color::{ClrBud, image::{ScaleMessage}, look::Look}, config::{DEFAULT_INPUT_WIDTH, DEFAULT_INPUT_HEIGHT}, utils::stream::{Stream, Cream, StreamError}};
+use crate::color::{ClrBud, image::{ScaleMessage}, look::Look};
+use crate::config::fixif;
+use crate::utils::stream::{Stream, Cream, StreamError};
 use ort::value::{Value, Tensor, TensorValueType};
 
 /// Color模块的错误类型
@@ -92,8 +94,9 @@ impl Color {
         bud_stream: Arc<Mutex<Stream<Vec<ClrBud>>>>,
         model_path: &str,
     ) -> Self {
-        let input_width = DEFAULT_INPUT_WIDTH;
-        let input_height = DEFAULT_INPUT_HEIGHT;
+        let ixi = fixif();
+        let input_width = ixi.default_input_width;
+        let input_height = ixi.default_input_height;
         
         // 初始化一个空的tensor value
         let initial_data = vec![0.0f32; 3 * input_height * input_width];

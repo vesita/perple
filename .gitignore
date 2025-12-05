@@ -27,5 +27,5 @@ wheels/
 
 # 缓存
 flamegraph.svg
-perf.data
+perf.data*
 .vscode/

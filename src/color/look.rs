@@ -1,8 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use nalgebra::{Matrix3, Matrix4, Vector2, Vector3};
-use crate::{color::ClrBud, utils::{sight::Sight, stream::{Cream, Stream}}, config::load_camera_config};
-
+use crate::{color::ClrBud, utils::{sight::Sight, stream::{Cream, Stream}}, config::fixif};
 
 pub struct Look {
     pub cream: Cream<Vec<ClrBud>, Vec<Sight>>,
@@ -12,13 +11,20 @@ pub struct Look {
 
 impl Default for Look {
     fn default() -> Self {
+        // 从全局配置中获取相机参数
+        let camera_config = &fixif().camera;
+        
+        // 将数组转换为矩阵
+        let intrinsic = Matrix3::from_iterator(camera_config.intrinsic.iter().flatten().cloned());
+        let extrinsic = Matrix4::from_iterator(camera_config.extrinsic.iter().flatten().cloned());
+
         Self {
             cream: Cream {
                 in_stream: Arc::new(Mutex::new(Stream::new())),
                 out_stream: Arc::new(Mutex::new(Stream::new())),
             },
-            intrinsic: Matrix3::identity(),
-            extrinsic: Matrix4::identity(),
+            intrinsic,
+            extrinsic,
         }
     }
 }
@@ -28,11 +34,14 @@ impl Look {
     pub fn new(
         input_stream: Arc<Mutex<Stream<Vec<ClrBud>>>>,
         output_stream: Arc<Mutex<Stream<Vec<Sight>>>>,
-        config_path: &str,
+        _config_path: &str, // 不再需要这个参数，因为我们从全局配置获取
     ) -> Self {
-        // 从TOML配置文件加载相机参数
-        let (intrinsic, extrinsic) = load_camera_config(config_path)
-            .expect("无法加载相机配置文件");
+        // 从全局配置中获取相机参数
+        let camera_config = &fixif().camera;
+        
+        // 将数组转换为矩阵
+        let intrinsic = Matrix3::from_iterator(camera_config.intrinsic.iter().flatten().cloned());
+        let extrinsic = Matrix4::from_iterator(camera_config.extrinsic.iter().flatten().cloned());
 
         Self {
             cream: Cream {

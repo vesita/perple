@@ -1,5 +1,3 @@
-use crate::config::DETECTIONS_CAPACITY;
-
 /// 2D边界框结构
 /// 
 /// 表示一个矩形边界框，用于包围检测到的目标。

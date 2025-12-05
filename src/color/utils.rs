@@ -14,8 +14,7 @@ use ort::value::Value;
 use crate::utils::Box2D;
 use crate::color::ClrBud;
 use crate::color::image::ScaleMessage;
-use crate::config::DETECTIONS_CAPACITY;
-use crate::config::PERSON_CLASS_LABEL;
+use crate::config::fixif;
 use crate::utils::sort::group_sort_by;
 
 use image::DynamicImage;
@@ -101,7 +100,7 @@ pub fn process_detections(
                 y2: s_y2
             },
             class_id: 0, // 只有一个类别，ID为0
-            class_name: PERSON_CLASS_LABEL.to_string(),
+            class_name: fixif().person_class_label.clone(),
             confidence: prob
         });
     }
@@ -167,7 +166,7 @@ pub fn to_bounds(
                 y2: scaled_y2,
             },
             class_id: 0,
-            class_name: PERSON_CLASS_LABEL.to_string(),
+            class_name: fixif().person_class_label.clone(),
             confidence,
         });
     }
@@ -265,6 +264,8 @@ pub fn nms_tensor(
     let (input_width, input_height) = (message.s_width, message.s_height);
     let width_scale = img_width / input_width as f32;
     let height_scale = img_height / input_height as f32;
+    let ixi = fixif();
+    let detections_capacity = ixi.detections_capacity;
 
     // 从SessionOutputs中直接提取张量数据
     let output_tensor = &mut from_model[0];
@@ -279,12 +280,12 @@ pub fn nms_tensor(
     group_sort_by(&mut data, num_params, 4, |a, b| 
         b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
 
-    // 初始化picked_indices数组，但不超过DETECTIONS_CAPACITY的大小
+    // 初始化picked_indices数组，但不超过detections_capacity的大小
     picked_indices.clear();
-    picked_indices.resize(DETECTIONS_CAPACITY, false);
+    picked_indices.resize(detections_capacity, false);
 
     // NMS处理
-    for i in 0..num_boxes.min(DETECTIONS_CAPACITY) {
+    for i in 0..num_boxes.min(detections_capacity) {
         // 如果当前框已经被抑制，则跳过
         if picked_indices[i] {
             continue;
@@ -321,12 +322,12 @@ pub fn nms_tensor(
                 y2: i_y2,
             },
             class_id: 0,
-            class_name: PERSON_CLASS_LABEL.to_string(),
+            class_name: ixi.person_class_label.clone(),
             confidence: i_confidence,
         });
 
         // 检查后续的框是否与当前框重叠过多
-        for j in (i + 1)..num_boxes.min(DETECTIONS_CAPACITY) {
+        for j in (i + 1)..num_boxes.min(detections_capacity) {
             if picked_indices[j] {
                 continue;
             }

@@ -2,7 +2,7 @@ use std::ops::Index;
 
 use pcd_rs::DynReader;
 
-use crate::config::*;
+use crate::config::fixif;
 
 #[derive(Clone)]
 pub struct Lifra {
@@ -13,8 +13,9 @@ pub struct Lifra {
 impl Lifra {
 
     pub fn new() -> Self {
+        let points_capacity = fixif().points_capacity;
         Lifra {
-            points: Vec::with_capacity(POINTS_CAPACITY),
+            points: Vec::with_capacity(points_capacity),
             count: 0,
         }
     }
@@ -25,7 +26,7 @@ impl Lifra {
             count: 0,
         }
     }
-    
+
     /// 从DynReader直接构造Lifra实例
     pub fn init<R>(reader: &mut DynReader<R>) -> Self 
     where 
@@ -71,7 +72,8 @@ impl Lifra {
     /// 
     /// 如果点云已满，则不会添加新点
     pub fn push(&mut self, point: [f32; 3]) {
-        if self.count < POINTS_CAPACITY {
+        let points_capacity = fixif().points_capacity;
+        if self.count < points_capacity {
             self.points.push(point);
             self.count += 1;
         }
@@ -102,8 +104,9 @@ impl Lifra {
     
     /// 使用给定的点云数据创建新的Lifra实例
     pub fn from_points(points: Vec<[f32; 3]>) -> Self {
-        let count = points.len().min(POINTS_CAPACITY);
-        let mut points_vec = Vec::with_capacity(POINTS_CAPACITY);
+        let points_capacity = fixif().points_capacity;
+        let count = points.len().min(points_capacity);
+        let mut points_vec = Vec::with_capacity(points_capacity);
         points_vec.extend_from_slice(&points[..count]);
         Lifra {
             points: points_vec,

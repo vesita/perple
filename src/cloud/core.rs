@@ -6,6 +6,7 @@ use nalgebra::{Matrix4, Vector3, Vector4};
 
 use crate::utils::world::OnWorld;
 use crate::{cloud::{CldBud, claster::Claster, lifra::Lifra}, utils::stream::{Stream, Cream, StreamError}};
+use crate::config::fixif;
 
 /// Lidar模块的错误类型
 #[derive(Debug)]
@@ -191,9 +192,15 @@ impl Lidar {
         input_stream: Arc<Mutex<Stream<Lifra>>>,
         output_stream: Arc<Mutex<Stream<Vec<CldBud>>>>,
     ) -> Self {
+        // 从全局配置中获取lidar外参
+        let lidar_config = &fixif().lidar;
+        
+        // 将数组转换为矩阵
+        let extrinsic = Matrix4::from_iterator(lidar_config.extrinsic.iter().flatten().cloned());
+        
         Self {
             data: Cloud::new(input_stream, output_stream),
-            extrinsic: Matrix4::identity(),
+            extrinsic,
         }
     }
 
