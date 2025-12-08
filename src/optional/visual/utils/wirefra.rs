@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use bevy::{mesh::PrimitiveTopology, prelude::*};
 
 /// 线框立方体组件，用于标识线框立方体实体
 #[derive(Component)]
@@ -28,14 +28,14 @@ fn cube_vertices(width: f32, height: f32, depth: f32) -> Vec<[f32; 3]> {
 
 /// 创建线框立方体的索引列表
 /// 定义立方体12条边的顶点连接关系
-fn cube_indices() -> Vec<u32> {
+fn cube_indices() -> Vec<[usize;2]> {
     vec![
         // 底面四条边
-        0, 1,  1, 2,  2, 3,  3, 0,
+        [0, 1], [1, 2],  [2, 3],  [3, 0],
         // 顶面四条边
-        4, 5,  5, 6,  6, 7,  7, 4,
+        [4, 5],  [5, 6],  [6, 7],  [7, 4],
         // 垂直四条边
-        0, 4,  1, 5,  2, 6,  3, 7,
+        [0, 4],  [1, 5],  [2, 6],  [3, 7],
     ]
 }
 
@@ -49,19 +49,13 @@ pub fn create_wireframe_cube_mesh(
     let vertices = cube_vertices(width, height, depth);
     let indices = cube_indices();
     
-    // 创建线段顶点列表（每条线段两个顶点）
-    let mut positions: Vec<[f32; 3]> = Vec::new();
-    for i in (0..indices.len()).step_by(2) {
-        positions.push(vertices[indices[i] as usize]);
-        positions.push(vertices[indices[i + 1] as usize]);
+    let mut positions = Vec::new();
+    for elem in indices {
+        positions.push(vertices[elem[0]]);
+        positions.push(vertices[elem[1]]);
     }
     
-    // 使用Bevy提供的正确API创建线段网格
-    let mut mesh = Mesh::new(
-        bevy::render::render_resource::PrimitiveTopology::LineList,
-        Default::default()
-    );
-    
+    let mut mesh = Mesh::new(PrimitiveTopology::LineList, default());
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     
     Mesh3d(meshes.add(mesh))

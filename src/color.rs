@@ -31,7 +31,7 @@
 //! let model = load_model("path/to/model.onnx")?;
 //! let image = load_image("path/to/image.jpg")?;
 //! 
-//! let mut detector = YoloDetector::new(model, 640, 640)
+//! let mut detector = YoloDetector::new(640, 640)
 //!     .with_confidence_threshold(0.5)
 //!     .with_nms_threshold(0.7);
 //! 

@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use nalgebra::{Matrix3, Matrix4, Vector2, Vector3};
-use crate::{color::ClrBud, utils::{sight::Sight, stream::{Cream, Stream}}, config::fixif};
+use crate::{color::ClrBud, config::fixif, utils::{sight::Sight, stream::{Cream, Eap, Stream}}};
 
 pub struct Look {
     pub cream: Cream<Vec<ClrBud>, Vec<Sight>>,
@@ -32,9 +32,8 @@ impl Default for Look {
 impl Look {
     
     pub fn new(
-        input_stream: Arc<Mutex<Stream<Vec<ClrBud>>>>,
-        output_stream: Arc<Mutex<Stream<Vec<Sight>>>>,
-        _config_path: &str, // 不再需要这个参数，因为我们从全局配置获取
+        input_stream: Eap<Stream<Vec<ClrBud>>>,
+        output_stream: Eap<Stream<Vec<Sight>>>,
     ) -> Self {
         // 从全局配置中获取相机参数
         let camera_config = &fixif().camera;
@@ -112,8 +111,7 @@ impl Look {
         );
         
         // 创建视线对象
-        let mut sight = Sight::new();
-        sight.update(camera_position, direction);
+        let sight = Sight::new(camera_position, direction);
         sight
     }
 

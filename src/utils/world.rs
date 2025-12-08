@@ -2,13 +2,11 @@ extern crate nalgebra as na;
 
 use na::{Matrix4, Vector3};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 use bevy::prelude::*;
 
 
 use crate::cloud::CldBud;
-use crate::utils::stream::Stream;
-use crate::cloud::lifra::Lifra;
+use crate::utils::stream::{Eap, Stream};
 use crate::color::ClrBud;
 use image::DynamicImage;
 
@@ -20,13 +18,13 @@ pub struct World {
     /// 设备ID映射
     equip_id: HashMap<String, usize>,
     /// 图像数据输入流
-    image_input_stream: Option<Arc<Mutex<Stream<DynamicImage>>>>,
+    image_input_stream: Option<Eap<Stream<DynamicImage>>>,
     /// 图像检测结果输入流
-    image_result_stream: Option<Arc<Mutex<Stream<ClrBud>>>>,
+    image_result_stream: Option<Eap<Stream<ClrBud>>>,
     /// 点云数据输入流
-    lidar_input_stream: Option<Arc<Mutex<Stream<Lifra>>>>,
+    lidar_input_stream: Option<Eap<Stream<Vec<[f32;3]>>>>,
     /// 点云检测结果输入流
-    lidar_result_stream: Option<Arc<Mutex<Stream<CldBud>>>>,
+    lidar_result_stream: Option<Eap<Stream<CldBud>>>,
 }
 
 /// World中设备的trait，定义了设备在世界坐标系中的行为
@@ -61,22 +59,22 @@ impl World {
     }
     
     /// 设置图像数据输入流
-    pub fn set_image_input_stream(&mut self, stream: Arc<Mutex<Stream<DynamicImage>>>) {
+    pub fn set_image_input_stream(&mut self, stream: Eap<Stream<DynamicImage>>) {
         self.image_input_stream = Some(stream);
     }
     
     /// 设置图像检测结果输入流
-    pub fn set_image_result_stream(&mut self, stream: Arc<Mutex<Stream<ClrBud>>>) {
+    pub fn set_image_result_stream(&mut self, stream: Eap<Stream<ClrBud>>) {
         self.image_result_stream = Some(stream);
     }
     
     /// 设置点云数据输入流
-    pub fn set_lidar_input_stream(&mut self, stream: Arc<Mutex<Stream<Lifra>>>) {
+    pub fn set_lidar_input_stream(&mut self, stream: Eap<Stream<Vec<[f32;3]>>>) {
         self.lidar_input_stream = Some(stream);
     }
     
     /// 设置点云检测结果输入流
-    pub fn set_lidar_result_stream(&mut self, stream: Arc<Mutex<Stream<CldBud>>>) {
+    pub fn set_lidar_result_stream(&mut self, stream: Eap<Stream<CldBud>>) {
         self.lidar_result_stream = Some(stream);
     }
     
@@ -101,7 +99,7 @@ impl World {
     }
     
     /// 从数据流中读取点云数据
-    pub fn read_lidar_data(&self) -> Option<Lifra> {
+    pub fn read_lidar_data(&self) -> Option<Vec<[f32;3]>> {
         if let Some(stream) = &self.lidar_input_stream {
             if let Ok(mut s) = stream.lock() {
                 return s.read();

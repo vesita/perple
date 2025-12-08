@@ -23,9 +23,32 @@ pub struct Config {
 
     pub dbscan_min_points: usize,
 
+    // 点云聚类参数移到claster配置中
+    pub claster: ClasterConfig,
+
+    // 地面检测参数
+    pub default_ground_vector: [f32; 3],
+    pub ground_filter_threshold: f32,
+    pub ground_cross_product_patience: f32,
+    pub ground_sample_test_count: usize,
+
+    // 模型路径配置
+    pub model_path: String,
+
     pub camera: CameraConfig,
 
     pub lidar: LidarConfig,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ClasterConfig {
+    pub merge_patience: f32,
+    pub merge_threshold: f32,
+    pub voxel_size: f32,
+    pub min_points_per_cluster: Option<usize>,
+    pub max_points_per_node: Option<usize>,
+    pub max_tree_depth: Option<usize>,
+    pub use_parallel: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -42,13 +65,24 @@ pub struct LidarConfig {
 impl Config {
     pub fn new() -> Self {
         let config_path = "config/default.toml";
-        let config_str = fs::read_to_string(config_path)
-            .expect(&format!("加载{}失败", config_path));
-        toml::from_str(&config_str).expect(&format!("{}解析失败", config_str))
-    }
-    
-    pub fn default() -> Self {
-        Self::new()
+        
+        match fs::read_to_string(config_path) {
+            Ok(config_str) => {
+                match toml::from_str(&config_str) {
+                    Ok(config) => config,
+                    Err(e) => {
+                        eprintln!("解析配置文件 {} 失败: {}", config_path, e);
+                        eprintln!("请检查配置文件格式是否正确");
+                        std::process::exit(1);
+                    }
+                }
+            },
+            Err(e) => {
+                eprintln!("读取配置文件 {} 失败: {}", config_path, e);
+                eprintln!("请确保配置文件存在且路径正确");
+                std::process::exit(1);
+            }
+        }
     }
 
     /// 从TOML字符串增量更新配置
@@ -56,49 +90,61 @@ impl Config {
     pub fn update_from_toml(&mut self, toml_str: &str) -> Result<(), toml::de::Error> {
         let partial_config: PartialConfig = toml::from_str(toml_str)?;
         
-        if let Some(stream_capacity) = partial_config.stream_capacity {
-            self.stream_capacity = stream_capacity;
+        macro_rules! update_field {
+            ($field:ident) => {
+                if let Some(value) = partial_config.$field {
+                    self.$field = value;
+                }
+            };
         }
-        if let Some(detections_capacity) = partial_config.detections_capacity {
-            self.detections_capacity = detections_capacity;
+
+        macro_rules! update_nested_field {
+            ($parent:ident, $field:ident) => {
+                if let Some(ref $parent) = partial_config.$parent {
+                    if let Some(value) = $parent.$field {
+                        self.$parent.$field = value;
+                    }
+                }
+            };
         }
-        if let Some(person_class_label) = partial_config.person_class_label {
-            self.person_class_label = person_class_label;
+
+        // 添加专门用于claster配置更新的宏
+        macro_rules! update_claster_field {
+            ($field:ident) => {
+                if let Some(ref claster) = partial_config.claster {
+                    if let Some(value) = claster.$field {
+                        self.claster.$field = value;
+                    }
+                }
+            };
         }
-        if let Some(points_capacity) = partial_config.points_capacity {
-            self.points_capacity = points_capacity;
-        }
-        if let Some(resolution) = partial_config.resolution {
-            self.resolution = resolution;
-        }
-        if let Some(default_input_width) = partial_config.default_input_width {
-            self.default_input_width = default_input_width;
-        }
-        if let Some(default_input_height) = partial_config.default_input_height {
-            self.default_input_height = default_input_height;
-        }
-        if let Some(default_confidence_threshold) = partial_config.default_confidence_threshold {
-            self.default_confidence_threshold = default_confidence_threshold;
-        }
-        if let Some(default_nms_threshold) = partial_config.default_nms_threshold {
-            self.default_nms_threshold = default_nms_threshold;
-        }
-        if let Some(dbscan_min_points) = partial_config.dbscan_min_points {
-            self.dbscan_min_points = dbscan_min_points;
-        }
-        if let Some(camera) = partial_config.camera {
-            if let Some(intrinsic) = camera.intrinsic {
-                self.camera.intrinsic = intrinsic;
-            }
-            if let Some(extrinsic) = camera.extrinsic {
-                self.camera.extrinsic = extrinsic;
-            }
-        }
-        if let Some(lidar) = partial_config.lidar {
-            if let Some(extrinsic) = lidar.extrinsic {
-                self.lidar.extrinsic = extrinsic;
-            }
-        }
+
+        update_field!(stream_capacity);
+        update_field!(detections_capacity);
+        update_field!(person_class_label);
+        update_field!(points_capacity);
+        update_field!(resolution);
+        update_field!(default_input_width);
+        update_field!(default_input_height);
+        update_field!(default_confidence_threshold);
+        update_field!(default_nms_threshold);
+        update_field!(dbscan_min_points);
+        update_field!(model_path);
+
+        update_field!(default_ground_vector);
+        update_field!(ground_filter_threshold);
+        update_field!(ground_cross_product_patience);
+        update_field!(ground_sample_test_count);
+
+        // 使用新的宏来更新claster配置
+        update_claster_field!(merge_patience);
+        update_claster_field!(merge_threshold);
+        update_claster_field!(voxel_size);
+        update_claster_field!(use_parallel);
+
+        update_nested_field!(camera, intrinsic);
+        update_nested_field!(camera, extrinsic);
+        update_nested_field!(lidar, extrinsic);
 
         Ok(())
     }
@@ -110,6 +156,7 @@ impl Config {
         Ok(())
     }
 }
+
 
 /// 用于增量更新的部分配置结构体
 /// 所有字段都是Option类型，表示它们可能是缺失的
@@ -128,6 +175,15 @@ struct PartialConfig {
 
     pub dbscan_min_points: Option<usize>,
 
+    pub claster: Option<PartialClasterConfig>,
+
+    pub default_ground_vector: Option<[f32; 3]>,
+    pub ground_filter_threshold: Option<f32>,
+    pub ground_cross_product_patience: Option<f32>,
+    pub ground_sample_test_count: Option<usize>,
+
+    pub model_path: Option<String>,
+
     pub camera: Option<PartialCameraConfig>,
 
     pub lidar: Option<PartialLidarConfig>,
@@ -142,4 +198,15 @@ struct PartialCameraConfig {
 #[derive(Serialize, Deserialize, Debug)]
 struct PartialLidarConfig {
     pub extrinsic: Option<[[f32; 4]; 4]>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct PartialClasterConfig {
+    pub merge_patience: Option<f32>,
+    pub merge_threshold: Option<f32>,
+    pub voxel_size: Option<f32>,
+    pub min_points_per_cluster: Option<usize>,
+    pub max_points_per_node: Option<usize>,
+    pub max_tree_depth: Option<usize>,
+    pub use_parallel: Option<bool>,
 }

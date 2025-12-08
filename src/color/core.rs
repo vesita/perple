@@ -1,7 +1,7 @@
 use image::DynamicImage;
-use nalgebra::{Matrix4, Vector3, Vector4};
-use std::sync::{Arc, Mutex, PoisonError};
-use std::time::{Duration, Instant};
+use nalgebra::{Matrix4, Vector3};
+use std::sync::{Arc, PoisonError};
+use std::time::{Instant};
 use std::fmt;
 
 use crate::color::{YoloDetector, fill_input_image};
@@ -9,8 +9,9 @@ use crate::utils::sight::Sight;
 use crate::utils::world::OnWorld;
 use crate::color::{ClrBud, image::{ScaleMessage}, look::Look};
 use crate::config::fixif;
-use crate::utils::stream::{Stream, Cream, StreamError};
+use crate::utils::stream::{Cream, Eap, Stream, StreamError};
 use ort::value::{Value, Tensor, TensorValueType};
+use crate::swapl::global_swapl;
 
 /// Color模块的错误类型
 #[derive(Debug)]
@@ -90,26 +91,29 @@ impl Color {
     /// # 返回值
     /// 返回新的Color实例
     pub fn new(
-        input_stream: Arc<Mutex<Stream<DynamicImage>>>,
-        bud_stream: Arc<Mutex<Stream<Vec<ClrBud>>>>,
-        model_path: &str,
+        input_stream: Eap<Stream<DynamicImage>>,
+        output_stream: Eap<Stream<Vec<ClrBud>>>,
     ) -> Self {
+        
+        // 初始化YOLO检测器
+        let model = YoloDetector::new();
+
         let ixi = fixif();
         let input_width = ixi.default_input_width;
         let input_height = ixi.default_input_height;
-        
+
         // 初始化一个空的tensor value
         let initial_data = vec![0.0f32; 3 * input_height * input_width];
         let tensor_value = Tensor::from_array(
             ([1, 3, input_height, input_width], initial_data)
         ).unwrap();
-        
+
         Self {
             cream: Cream {
                 in_stream: input_stream,
-                out_stream: bud_stream,
+                out_stream: output_stream,
             },
-            model: YoloDetector::new(model_path, input_width, input_height),
+            model,
             message: ScaleMessage {
                 o_width: 0,
                 o_height: 0,
@@ -215,17 +219,23 @@ impl Color {
 }
 
 impl Camera {
-
-    pub fn new(
-        input_stream: Arc<Mutex<Stream<DynamicImage>>>,
-        bud_stream: Arc<Mutex<Stream<Vec<ClrBud>>>>,
-        sight_stream: Arc<Mutex<Stream<Vec<Sight>>>>,
-        model_path: &str,
-        config_path: &str,
-    ) -> Self {
+    /// 创建Camera实例，通过全局Swapl数据中枢进行数据交互
+    /// 
+    /// 所有数据交互都通过全局Swapl完成，实现了模块间的松耦合设计。
+    /// Camera模块内部保留指向各模块的指针，但不再需要外部传入数据流引用
+    pub fn new() -> Self {
+        // 获取全局数据交换中枢
+        let pool = global_swapl();
+        
         Self {
-            data: Color::new(input_stream, bud_stream.clone(), model_path),
-            look: Look::new(bud_stream, sight_stream, config_path),
+            data: Color::new(
+                Arc::clone(&pool.colors),
+                Arc::clone(&pool.clr_objs),
+            ),
+            look: Look::new(
+                Arc::clone(&pool.clr_objs),
+                Arc::clone(&pool.sights),
+            ),
         }
     }
 

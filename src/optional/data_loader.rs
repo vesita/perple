@@ -1,18 +1,35 @@
-use std::{fs, io, sync::{Arc, Mutex}, thread, time::Duration};
+use std::{fs, io, sync::{Arc}, thread, time::Duration};
 use std::collections::HashMap;
 use image::DynamicImage;
 use pcd_rs::DynReader;
 
-use crate::{cloud::Lifra, color::load_image, swapl::Swapl, utils::stream::Stream, utils::stream::StreamError};
+use crate::{color::load_image, swapl::{Swapl, global_swapl}, utils::stream::{Eap, Stream, StreamError}};
+
+
+pub fn Load_cloud<R>(reader: &mut DynReader<R>) -> Vec<[f32; 3]> 
+where 
+    R: std::io::BufRead,
+{
+    let mut result = Vec::new();
+    while let Some(record_result) = reader.next() {
+        if let Ok(point) = record_result {
+            if let Some(coords) = point.to_xyz() {
+                result.push(coords);
+            }
+        }
+    }
+    result
+}
+
 
 /// 数据加载器
 /// 
 /// DataLoader负责从文件系统加载2D和3D检测数据，并将它们写入相应的数据流中。
 pub struct DataLoader {
     /// 2D检测结果数据流
-    clr_stream: Arc<Mutex<Stream<DynamicImage>>>,
+    clr_stream: Eap<Stream<DynamicImage>>,
     /// 3D检测结果数据流
-    cld_stream: Arc<Mutex<Stream<Lifra>>>,
+    cld_stream: Eap<Stream<Vec<[f32; 3]>>>,
     /// 数据文件路径
     target_path: String,
 
@@ -24,9 +41,9 @@ impl DataLoader {
     /// 
     /// 通过Swapl数据中枢获取所需的数据流并克隆为独立引用
     pub fn new(
-        swapl: Arc<Swapl>,
         target_path: String,
     ) -> Self {
+        let swapl = global_swapl();
         let clr_stream = Arc::clone(&swapl.colors);
         let cld_stream = Arc::clone(&swapl.clouds);
         let files = vec![];
@@ -128,7 +145,7 @@ impl DataLoader {
             // 解析 PCD 文件并写入流
             match DynReader::open(&lidar_file) {
                 Ok(mut reader) => {
-                    let lifra = Lifra::init(&mut reader);
+                    let lifra = Load_cloud(&mut reader);
                     if let Err(StreamError::BufferFull) = cld_stream.write(lifra) {
                         eprintln!("警告：点云流缓冲区已满");
                     }
@@ -159,7 +176,7 @@ impl DataLoader {
 
                 // 先执行耗时的I/O操作，不持有锁
                 let image_result = load_image(&camera_file);
-                let cloud_result = DynReader::open(&lidar_file).map(|mut reader| Lifra::init(&mut reader));
+                let cloud_result = DynReader::open(&lidar_file).map(|mut reader| Load_cloud(&mut reader));
 
                 // 然后获取锁并快速写入数据
                 {

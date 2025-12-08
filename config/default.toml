@@ -10,8 +10,28 @@ default_input_height = 640
 default_confidence_threshold = 0.6
 default_nms_threshold = 0.7
 
+# 模型路径
+model_path = "module/color/yolo11n.onnx"
+
 # DBSCAN聚类算法参数
 dbscan_min_points = 3
+# dbscan_eps会基于resolution动态计算，值为resolution * 4.0
+
+# 地面检测参数
+default_ground_vector = [0.0, 0.0, 1.0]
+ground_filter_threshold = 0.3
+ground_cross_product_patience = 3
+ground_sample_test_count = 23
+
+# 点云聚类参数
+[claster]
+merge_patience = 0.20
+merge_threshold = 0.6
+voxel_size = 0.1
+min_points_per_cluster = 10
+max_points_per_node = 50
+max_tree_depth = 10
+use_parallel = true
 
 [camera]
 intrinsic = [

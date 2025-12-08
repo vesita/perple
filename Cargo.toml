@@ -4,6 +4,7 @@ version = "0.2.0"
 edition = "2024"
 
 [dependencies]
+rand = "*"
 ort = "=2.0.0-rc.10"
 image = { version = "0.*" }
 ndarray = { version = "0.*", features = ["rayon"] }
@@ -14,3 +15,5 @@ bevy = {version = "0.*"}
 toml = "0.*"
 serde = { version = "1.*", features = ["derive"] }
 smooth-bevy-cameras = { git = "https://github.com/bonsairobo/smooth-bevy-cameras.git" }
+rayon = "1.*"
+ndarray-linalg = "0.16"

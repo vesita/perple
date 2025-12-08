@@ -1,6 +1,6 @@
-use std::sync::{Arc, Mutex};
-use crate::{cloud::CldBud, tracker::output::Target, utils::{sight::Sight, stream::{Stream, StreamError}}};
-use nalgebra::Vector3;
+
+use crate::{cloud::CldBud, swapl::{self, global_swapl}, tracker::output::Target, utils::{sight::Sight, stream::{Eap, Stream, StreamError}}};
+
 
 /// Tracker模块的错误类型
 #[derive(Debug)]
@@ -33,22 +33,19 @@ impl std::fmt::Display for TrackerError {
 impl std::error::Error for TrackerError {}
 
 pub struct Tracker {
-    sight: Arc<Mutex<Stream<Vec<Sight>>>>,
-    tar3d: Arc<Mutex<Stream<Vec<CldBud>>>>,
-    target: Arc<Mutex<Stream<Vec<Target>>>>,
+    sight: Eap<Stream<Vec<Sight>>>,
+    tar3d: Eap<Stream<Vec<CldBud>>>,
+    target: Eap<Stream<Vec<Target>>>,
     next_id: usize,
 }
 
 impl Tracker {
-    pub fn new(
-        sight: Arc<Mutex<Stream<Vec<Sight>>>>,
-        tar3d: Arc<Mutex<Stream<Vec<CldBud>>>>,
-        output_stream: Arc<Mutex<Stream<Vec<Target>>>>,
-    ) -> Self {
+    pub fn new() -> Self {
+        let swapl = global_swapl();
         Self {
-            sight,
-            tar3d,
-            target: output_stream,
+            sight: swapl.sights.clone(),
+            tar3d: swapl.cld_objs.clone(),
+            target: swapl.targets.clone(),
             next_id: 1,
         }
     }
@@ -82,7 +79,7 @@ impl Tracker {
                 if sight.slab(&cld_bud.the_box) {
                     // 创建匹配的目标对象
                     let target = Target {
-                        the_box: cld_bud.the_box,
+                        the_box: cld_bud.the_box.clone(),
                         class_type: cld_bud.class_name.clone(),
                         id: self.next_id,
                     };
@@ -106,21 +103,16 @@ impl Tracker {
     
     /// 计算两个3D边界框之间的距离
     fn calculate_distance(box1: &crate::utils::boxes::Box3D, box2: &crate::utils::boxes::Box3D) -> f32 {
-        // 计算两个包围盒中心点
-        let center1 = Vector3::new(
-            (box1.x_min + box1.x_max) / 2.0,
-            (box1.y_min + box1.y_max) / 2.0,
-            (box1.z_min + box1.z_max) / 2.0,
-        );
+        // 获取两个包围盒的中心点
+        let center1 = box1.center();
+        let center2 = box2.center();
         
-        let center2 = Vector3::new(
-            (box2.x_min + box2.x_max) / 2.0,
-            (box2.y_min + box2.y_max) / 2.0,
-            (box2.z_min + box2.z_max) / 2.0,
-        );
+        // 计算中心点之间的欧几里得距离
+        let dx = center1.x - center2.x;
+        let dy = center1.y - center2.y;
+        let dz = center1.z - center2.z;
         
-        // 返回中心点之间的欧几里得距离
-        (center1 - center2).norm()
+        (dx * dx + dy * dy + dz * dz).sqrt()
     }
     
     /// 更新跟踪目标，结合sight关联功能
@@ -182,7 +174,7 @@ impl Tracker {
             // 如果找到了匹配，则更新目标的位置和类型
             if let Some(index) = best_match_index {
                 let detection = &current_detections[index];
-                target.the_box = detection.the_box;
+                target.the_box = detection.the_box.clone();
                 // 保留历史分类信息，稍后用视觉信息修正
                 used_detections[index] = true;
                 tracked_targets.push(target);
@@ -194,7 +186,7 @@ impl Tracker {
         for (i, detection) in current_detections.iter().enumerate() {
             if !used_detections[i] {
                 let new_target = Target {
-                    the_box: detection.the_box,
+                    the_box: detection.the_box.clone(),
                     class_type: detection.class_name.clone(),
                     id: self.next_id,
                 };

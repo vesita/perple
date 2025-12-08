@@ -1,23 +1,21 @@
-use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use std::io::{self, Write};
 
 use perple::optional::data_loader::DataLoader;
 use perple::perple::Perple;
-use perple::swapl::Swapl;
+use perple::swapl::global_swapl;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Perple与DataLoader集成演示");
     println!("========================");
     
-    // 创建数据交换中枢
-    let swapl = Arc::new(Swapl::new());
-    println!("✓ 创建数据交换中枢");
+    // 获取全局数据交换中枢
+    let swapl = global_swapl();
+    println!("✓ 获取全局数据交换中枢");
     
     // 创建DataLoader实例
     let mut data_loader = DataLoader::new(
-        Arc::clone(&swapl),
         "./data/test".to_string(),
     );
     println!("✓ 创建DataLoader实例");
@@ -41,20 +39,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("✓ 数据加载完成");
     
     // 显示流状态
-    show_stream_status(&swapl)?;
+    show_stream_status(swapl)?;
     
     print!("按回车键启动Perple处理...");
     io::stdout().flush()?;
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
     
-    // 创建Perple实例（使用占位符路径）
+    // 创建Perple实例
     println!("正在创建Perple实例...");
-    let mut perple = Perple::new(
-        swapl.clone(),
-        "./module/color/yolo11n.onnx", // 使用正确的模型路径
-        "./config/camera.toml", // 占位符路径
-    );
+    let mut perple = Perple::new();
     println!("✓ Perple实例创建完成");
     
     // 启动Perple的各个模块
@@ -69,7 +63,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     thread::sleep(Duration::from_secs(5));
     
     // 显示处理后的流状态
-    show_stream_status(&swapl)?;
+    show_stream_status(swapl)?;
     
     // 停止Perple模块
     println!("正在停止Perple模块...");
@@ -82,7 +76,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn show_stream_status(swapl: &Arc<Swapl>) -> Result<(), Box<dyn std::error::Error>> {
+fn show_stream_status(swapl: &perple::swapl::Swapl) -> Result<(), Box<dyn std::error::Error>> {
     
     // 检查各数据流状态
     let colors_stream = swapl.colors.lock().unwrap();
@@ -96,12 +90,16 @@ fn show_stream_status(swapl: &Arc<Swapl>) -> Result<(), Box<dyn std::error::Erro
     
     let cld_objs_stream = swapl.cld_objs.lock().unwrap();
     println!("  3D检测结果流大小: {}", cld_objs_stream.len());
+    // if let Some(frame) = cld_objs_stream.get_at(0) {
+    //     println!("  3D检测结果对象数量: {}", frame.len());
+    //     for idx in 0..frame.len().min(20) {
+    //         println!("      包围盒: {:?}", frame[idx].the_box);
+    //         println!("      中心点: {:?}", frame[idx].the_box.center());
+    //     }
+    // }
     
     let sights_stream = swapl.sights.lock().unwrap();
     println!("  投影结果流大小: {}", sights_stream.len());
-    
-    let targets_stream = swapl.targets.lock().unwrap();
-    println!("  跟踪结果流大小: {}", targets_stream.len());
     
     Ok(())
 }

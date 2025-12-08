@@ -23,7 +23,7 @@ use bevy::prelude::*;
 pub fn z_up_to_y_up(position: Vec3) -> Vec3 {
     Vec3::new(
         position.x,     // X轴保持不变
-        -position.z,    // Y = -Z
+        position.z,    // Y = -Z
         position.y,     // Z = Y
     )
 }

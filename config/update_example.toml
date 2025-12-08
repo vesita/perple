@@ -1,8 +1,16 @@
 # 示例增量配置文件
 # 只更新需要更改的配置项
 
+# 更新模型路径
+model_path = "./module/color/yolo11s.onnx"
+
 # 更新DBSCAN聚类参数
 dbscan_min_points = 5
+
+# 更新点云聚类参数
+[claster]
+merge_patience = 0.15
+voxel_size = 0.05
 
 # 更新相机内参矩阵
 [camera]

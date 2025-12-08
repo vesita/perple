@@ -7,6 +7,13 @@ use std::fmt;
 use crate::config::fixif;
 
 
+pub type Eap<T> = Arc<Mutex<T>>;
+
+/// 创建一个新的Eap实例
+pub fn new_eap<T>(value: T) -> Eap<T> {
+    Arc::new(Mutex::new(value))
+}
+
 /// 表示流操作可能出现的错误
 #[derive(Debug)]
 pub enum StreamError {
@@ -42,9 +49,15 @@ pub struct Stream<T: Default + Send + Clone> {
 /// IofActor 表示输入流的数据类型
 /// OofActor 表示输出流的数据类型
 pub struct Cream<IofActor: Default + Send + Clone, OofActor: Default + Send + Clone> {
-    pub in_stream: Arc<Mutex<Stream<IofActor>>>,
-    pub out_stream: Arc<Mutex<Stream<OofActor>>>,
+    pub in_stream: Eap<Stream<IofActor>>,
+    pub out_stream: Eap<Stream<OofActor>>,
 }
+
+// 定义类型别名简化常见的流类型
+pub type StreamPtr<T> = Eap<Stream<T>>;
+
+// 为常用的流类型定义特定别名
+pub type DataStream<T> = StreamPtr<T>;
 
 impl<T: Default + Send + Clone> Stream<T> { 
     pub fn new() -> Self {
@@ -274,13 +287,13 @@ impl <IofActor: Default + Send + Clone, OofActor: Default + Send + Clone> Cream<
 
     /// 获取处理者的输入流引用
     /// Input of Actor
-    pub fn share_ioa(&self) -> Arc<Mutex<Stream<IofActor>>> {
+    pub fn share_ioa(&self) -> Eap<Stream<IofActor>> {
         self.in_stream.clone()
     }
 
     /// 获取处理者的输出流引用
     /// Output of Actor
-    pub fn share_ooa(&self) -> Arc<Mutex<Stream<OofActor>>> {
+    pub fn share_ooa(&self) -> Eap<Stream<OofActor>> {
         self.out_stream.clone()
     }
 }

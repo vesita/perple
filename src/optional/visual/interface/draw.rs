@@ -3,17 +3,11 @@ use smooth_bevy_cameras::{
     controllers::fps::{FpsCameraBundle, FpsCameraController},
 };
 
-use crate::{optional::visual::{VisResource, utils::{wirefra::{spawn_wireframe_cube, WireframeCube}, coordinate::y_up_to_z_up}}};
-
-// 添加标记组件，用于标识我们创建的可视化对象
-#[derive(Component)]
-pub struct VisualizedObject;
+use crate::{optional::visual::utils::{coordinate::z_up_to_y_up, wirefra::spawn_wireframe_cube}, swapl::global_swapl};
 
 // 设置场景的基本元素：相机和光源
 pub fn setup_scene(
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {    
     // 添加点光源
     commands.spawn((
@@ -31,13 +25,6 @@ pub fn setup_scene(
         brightness: 100.0,
         ..default()
     });
-    
-    // 添加一个圆形基座以便更好地观察3D空间
-    commands.spawn((
-        Mesh3d(meshes.add(Circle::new(4.0))),
-        MeshMaterial3d(materials.add(Color::WHITE)),
-        Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
-    ));
     
     // 使用FPS相机控制器
     commands
@@ -61,32 +48,24 @@ pub fn update_visualization(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    resource: Res<VisResource>,
-    // 查询当前已有的可视化对象并删除它们
-    mut query: Query<Entity, With<VisualizedObject>>,
-    // 查询线框立方体
-    _wireframe_query: Query<Entity, With<WireframeCube>>,
 ) {
-
-    let swapl = &resource.swapl;
-    let lidar = &resource.lidar;
-    
+    let swapl = global_swapl();
     // 尝试获取targets数据
     match swapl.targets.lock() {
         Ok(mut targets_lock) => {
             // 使用read_indexed读取数据和索引
             if let Some((targets, idx)) = targets_lock.read_indexed() {
                 // 使用lidar实例获取经过坐标变换的点云数据
-                match lidar.lock() {
-                    Ok(lidar_guard) => {
-                        if let Some(cloud) = lidar_guard.get_at_with_transform(idx) {
+                match swapl.cloud_in_world.lock() {
+                    Ok(cloud_stream) => {
+                        if let Some(cloud) = cloud_stream.get_at(idx) {
                             println!("正在绘制{}个点和{}个检测框", cloud.len(), targets.len());
-                            for (idx, point) in cloud.iter().enumerate() {
-                                // 将Y-up坐标转换为Z-up坐标
-                                let point_vec3 = y_up_to_z_up(Vec3::new(point[0], point[1], point[2]));
+                                                    
+                            for (point_idx, point) in cloud.iter().enumerate() {
+                                // 点云数据是Z-up坐标系，需要转换为Y-up坐标系以适配Bevy
+                                let point_vec3 = z_up_to_y_up(Vec3::new(point[0], point[1], point[2]));
                                 
                                 commands.spawn((
-                                    VisualizedObject,
                                     Mesh3d(meshes.add(Sphere::new(0.05).mesh())),
                                     MeshMaterial3d(materials.add(StandardMaterial {
                                         base_color: Color::srgb(1.0, 0.0, 1.0),
@@ -95,46 +74,27 @@ pub fn update_visualization(
                                     Transform::from_xyz(point_vec3.x, point_vec3.y, point_vec3.z),
                                 ));
                                 
-                                // 每1000个点打印一次进度
-                                if idx % 1000 == 0 && idx > 0 {
-                                    println!("已绘制{}个点", idx);
+                                // 每4000个点打印一次进度
+                                if point_idx % 4000 == 0 && point_idx > 0 {
+                                    println!("已绘制{}个点", point_idx);
                                 }
                             }
 
                             // 绘制处理后的检测框（使用手动线框实现）
-                            for (i, tar) in targets.iter().enumerate() {
-                                let center = y_up_to_z_up(Vec3::new(
-                                    (tar.the_box.x_max + tar.the_box.x_min) / 2.0,
-                                    (tar.the_box.y_max + tar.the_box.y_min) / 2.0,
-                                    (tar.the_box.z_max + tar.the_box.z_min) / 2.0
-                                ));
-                                
-                                let size = y_up_to_z_up(Vec3::new(
-                                    tar.the_box.x_max - tar.the_box.x_min,
-                                    tar.the_box.y_max - tar.the_box.y_min,
-                                    tar.the_box.z_max - tar.the_box.z_min
-                                ));
-                                
+                            for tar in &targets {
+                                // Box3D也是Z-up坐标系，需要转换为Y-up坐标系
+                                let center = tar.the_box.center_y_up();
+                                let size = tar.the_box.shape_y_up();
                                 let size = Vec3::new(size.x.abs(), size.y.abs(), size.z.abs());
                                 
-                                // 确保尺寸合理
-                                if size.x > 0.0 && size.y > 0.0 && size.z > 0.0 {
-                                    spawn_wireframe_cube(
-                                        &mut commands,
-                                        &mut meshes,
-                                        &mut materials,
-                                        center,
-                                        size,
-                                        Color::srgb(0.0, 0.0, 1.0), // Blue
-                                    );
-                                    
-                                    println!("绘制检测框{}: 中心({:.2}, {:.2}, {:.2}), 尺寸({:.2}, {:.2}, {:.2})", 
-                                             i, center.x, center.y, center.z, size.x, size.y, size.z);
-                                }
-                            }
-                            // 删除之前的可视化对象
-                            for entity in query.iter_mut() {
-                                commands.entity(entity).despawn();
+                                spawn_wireframe_cube(
+                                    &mut commands,
+                                    &mut meshes,
+                                    &mut materials,
+                                    center,
+                                    size,
+                                    Color::srgb(0.0, 0.0, 1.0), // Blue
+                                );
                             }
                             println!("完成绘制: {}个点, {}个检测框", cloud.len(), targets.len());
                         } else {
@@ -142,7 +102,7 @@ pub fn update_visualization(
                         }
                     }
                     Err(e) => {
-                        println!("无法锁定lidar实例: {}", e);
+                        println!("无法锁定cloud_in_world实例: {}", e);
                     }
                 }
             }

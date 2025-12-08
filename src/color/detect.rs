@@ -11,11 +11,10 @@ use ort::inputs;
 /// # 示例
 /// 
 /// ```
-/// use perple::color::{YoloDetector, load_model};
+/// use perple::color::YoloDetector;
 /// 
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// let model = load_model("path/to/model.onnx")?;
-/// let mut detector = YoloDetector::new(model, 640, 640)
+/// let mut detector = YoloDetector::new(640, 640)
 ///     .with_confidence_threshold(0.5)
 ///     .with_nms_threshold(0.7);
 /// # Ok(())
@@ -40,7 +39,6 @@ impl YoloDetector {
     /// 创建新的YoloDetector实例
     /// 
     /// # 参数
-    /// * `model` - 已加载的ONNX模型
     /// * `input_width` - 模型输入图像宽度
     /// * `input_height` - 模型输入图像高度
     /// 
@@ -50,43 +48,32 @@ impl YoloDetector {
     /// # 示例
     /// 
     /// ```
-    /// use perple::color::{YoloDetector, load_model};
+    /// use perple::color::YoloDetector;
     /// 
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let model = load_model("path/to/model.onnx")?;
-    /// let detector = YoloDetector::new(model, 640, 640);
+    /// let detector = YoloDetector::new(640, 640);
     /// # Ok(())
     /// # }
     /// ```
-    pub fn new(model_path: &str, input_width: usize, input_height: usize) -> Self {
+    pub fn new() -> Self {
+        // 从全局配置中获取模型路径
+        let config = fixif();
+        let model_path = &config.model_path;
         let model = load_model(model_path).expect("无法加载模型");
-        let ixi = fixif();
-        let detections_capacity = ixi.detections_capacity;
+        let detections_capacity = config.detections_capacity;
         
         Self {
             model,
-            input_width,
-            input_height,
-            confidence_threshold: ixi.default_confidence_threshold,
-            nms_threshold: ixi.default_nms_threshold,
+            input_width: config.default_input_width,
+            input_height: config.default_input_height,
+            confidence_threshold: config.default_confidence_threshold,
+            nms_threshold: config.default_nms_threshold,
             picked_indices: {
                 let mut indices = Vec::with_capacity(detections_capacity);
                 indices.resize(detections_capacity, false);
                 indices
             },
         }
-    }
-
-    /// 创建新的YoloDetector实例，使用默认输入尺寸
-    /// 
-    /// # 参数
-    /// * `model_path` - 模型文件路径
-    /// 
-    /// # 返回值
-    /// 返回新的YoloDetector实例
-    pub fn with_default_size(model_path: &str) -> Self {
-        let ixi = fixif();
-        Self::new(model_path, ixi.default_input_width, ixi.default_input_height)
     }
 
     /// 执行模型推理

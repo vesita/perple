@@ -2,6 +2,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use crate::utils::stream::Eap;
+
 /// 循环模式枚举，用于指定循环的不同执行方式
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LoopMode {
@@ -28,7 +30,7 @@ pub enum LoopMode {
 /// 并提供开始、停止和等待完成等功能。
 pub struct MultiLoop {
     /// 循环运行状态标志，使用互斥锁保证线程安全
-    running: Arc<Mutex<bool>>,
+    running: Eap<bool>,
     
     /// 循环执行线程句柄，用于等待线程完成
     thread_handle: Option<thread::JoinHandle<()>>,
@@ -127,7 +129,7 @@ impl MultiLoop {
     pub fn start_with_method<T, F>(
         &mut self,
         mode: LoopMode,
-        object: Arc<Mutex<T>>,
+        object: Eap<T>,
         method: F,
         interval_ms: u64,
     ) -> Result<(), String>

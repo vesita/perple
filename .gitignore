@@ -29,3 +29,4 @@ wheels/
 flamegraph.svg
 perf.data*
 .vscode/
+.lingma/

@@ -2,15 +2,13 @@ use std::sync::{Arc, Mutex};
 use std::fmt;
 
 use crate::color::core::Camera;
-use crate::color::core::Color;
-use crate::cloud::core::{Cloud, Lidar};
-use crate::cloud::lifra::Lifra;
-use crate::cloud::CldBud;
+use crate::cloud::core::{Lidar};
+
 use crate::tracker::core::Tracker;
-use crate::Swapl;
-use crate::utils::stream::Stream;
+use crate::swapl::{Swapl, global_swapl};
+use crate::utils::stream::{Eap};
 use crate::utils::muloop::{MultiLoop, LoopMode};
-use crate::utils::world::World;
+use crate::config::fixif;
 
 /// Perple模块的错误类型
 #[derive(Debug)]
@@ -46,47 +44,28 @@ impl<T> From<std::sync::PoisonError<T>> for PerpleError {
 /// 该模块通过Swapl数据中枢与其他模块进行数据交互，
 
 pub struct Perple {
-    pub camera: Arc<Mutex<Camera>>,
-    pub lidar: Arc<Mutex<Lidar>>,
-    pub tracker: Arc<Mutex<Tracker>>,
+    pub camera: Eap<Camera>,
+    pub lidar: Eap<Lidar>,
+    pub tracker: Eap<Tracker>,
 
-    /// 控制类模块（可能跨线程访问，使用Arc<Mutex<T>>）
-    color_loop: Arc<Mutex<MultiLoop>>,
-    lidar_loop: Arc<Mutex<MultiLoop>>,
-    tracker_loop: Arc<Mutex<MultiLoop>>,
+    /// 控制类模块（可能跨线程访问，使用Eap<T>>）
+    color_loop: Eap<MultiLoop>,
+    lidar_loop: Eap<MultiLoop>,
+    tracker_loop: Eap<MultiLoop>,
 }
 
 impl Perple {
-    /// 创建Perple实例，通过Swapl数据中枢进行数据交互
+    /// 创建Perple实例，通过全局Swapl数据中枢进行数据交互
     /// 
-    /// 所有数据交互都通过Swapl完成，实现了模块间的松耦合设计。
-    /// Perple模块只需要持有Swapl的引用，即可访问所有需要的数据流。
-    pub fn new(
-        pool: Arc<Swapl>,
-        model_path: &str,
-        config_path: &str,
-    ) -> Self {
-        let camera = Arc::new(Mutex::new(Camera::new(
-            Arc::clone(&pool.colors),
-            Arc::clone(&pool.clr_objs),
-            Arc::clone(&pool.sights),
-            model_path,
-            config_path,
-        )));
+    /// 所有数据交互都通过全局Swapl完成，实现了模块间的松耦合设计。
+    /// Perple模块内部保留指向各模块的指针，但不再需要外部传入Swapl引用
+    /// 模型路径从全局配置中获取
+    pub fn new() -> Self {
+        let camera = Arc::new(Mutex::new(Camera::new()));
         
-        let lidar = Arc::new(Mutex::new(Lidar::new(
-            Arc::clone(&pool.clouds), 
-            Arc::clone(&pool.cld_objs)
-        )));
+        let lidar = Arc::new(Mutex::new(Lidar::new()));
 
-        let tracker = Arc::new(Mutex::new(Tracker::new(
-            Arc::clone(&pool.sights),
-            Arc::clone(&pool.cld_objs),
-            Arc::clone(&pool.targets),
-        )));
-        
-        // 释放pool引用
-        drop(pool);
+        let tracker = Arc::new(Mutex::new(Tracker::new()));
         
         Self {
             camera,
