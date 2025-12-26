@@ -1,5 +1,5 @@
-use bevy::math::Vec3;
-use nalgebra::{Matrix4, Point3, Vector3};
+use nalgebra::{Matrix4, Point3, Vector3, Vector4};
+use redra::proto::shape::Point;
 
 /// 2D边界框结构
 /// 
@@ -255,31 +255,31 @@ impl Box3D {
         [self.pose[(0, 3)], self.pose[(1, 3)], self.pose[(2, 3)]]
     }
 
-    pub fn center_z_up(&self) -> Vec3 {
-        Vec3::new(self.pose[(0, 3)], self.pose[(1, 3)], self.pose[(2, 3)])
-    }
+    // pub fn center_z_up(&self) -> Vec3 {
+    //     Vec3::new(self.pose[(0, 3)], self.pose[(1, 3)], self.pose[(2, 3)])
+    // }
 
-    pub fn shape_z_up(&self) -> Vec3 {
-        Vec3::new(self.length, self.width, self.height)
-    }
+    // pub fn shape_z_up(&self) -> Vec3 {
+    //     Vec3::new(self.length, self.width, self.height)
+    // }
 
-    pub fn center_y_up(&self) -> Vec3 {
-        let center = self.center_z_up();
-        Vec3::new(
-            center.x,
-            center.z,
-            center.y,
-        )
-    }
+    // pub fn center_y_up(&self) -> Vec3 {
+    //     let center = self.center_z_up();
+    //     Vec3::new(
+    //         center.x,
+    //         center.z,
+    //         center.y,
+    //     )
+    // }
 
-    pub fn shape_y_up(&self) -> Vec3 {
-        let shape = self.shape_z_up();
-        Vec3::new(
-            shape.x,
-            shape.z,
-            shape.y,
-        )
-    }
+    // pub fn shape_y_up(&self) -> Vec3 {
+    //     let shape = self.shape_z_up();
+    //     Vec3::new(
+    //         shape.x,
+    //         shape.z,
+    //         shape.y,
+    //     )
+    // }
     
     /// 计算点到包围盒中心的距离
     /// 
@@ -396,6 +396,10 @@ impl Box3D {
         } else {
             panic!("矩阵不可求逆: {}", self.pose);
         }
+    }
+
+    pub fn to_y_up(&self, point: &Point3<f32>) -> Point3<f32> {
+        Point3::new(point.x, point.z, point.y)
     }
 
     /// 将局部坐标系中的点转换到世界坐标系中

@@ -11,9 +11,7 @@ ndarray = { version = "0.*", features = ["rayon"] }
 raqote = "0.*"
 pcd-rs = "0.*"
 nalgebra = {version = "0.*", features = ["std"]}
-bevy = {version = "0.*"}
 toml = "0.*"
 serde = { version = "1.*", features = ["derive"] }
-smooth-bevy-cameras = { git = "https://github.com/bonsairobo/smooth-bevy-cameras.git" }
-rayon = "1.*"
-ndarray-linalg = "0.16"
+tokio = { version = "1.*", features = ["full"] }
+redra ={ git = "https://github.com/vesita/redra.git", default-features = false, features = ["client"]}

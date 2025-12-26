@@ -8,10 +8,11 @@ wheels/
 
 # python 虚拟环境
 .venv
-
+uv.lock
 
 # rust 忽略项
 /target
+Cargo.lock
 
 
 # yolo 忽略项
