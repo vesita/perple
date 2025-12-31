@@ -15,6 +15,7 @@ use crate::{
 pub enum TrackerError {
     StreamError(StreamError),
     PoisonError(String),
+    KalmanError(crate::tracker::kalman::KalmanError),
 }
 
 impl From<StreamError> for TrackerError {
@@ -29,22 +30,62 @@ impl<T> From<std::sync::PoisonError<T>> for TrackerError {
     }
 }
 
+impl From<crate::tracker::kalman::KalmanError> for TrackerError {
+    fn from(error: crate::tracker::kalman::KalmanError) -> Self {
+        TrackerError::KalmanError(error)
+    }
+}
+
 impl std::fmt::Display for TrackerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             TrackerError::StreamError(e) => write!(f, "流错误: {}", e),
             TrackerError::PoisonError(e) => write!(f, "线程锁中毒: {}", e),
+            TrackerError::KalmanError(e) => write!(f, "卡尔曼滤波错误: {}", e),
         }
     }
 }
 
 impl std::error::Error for TrackerError {}
 
+/// 跟踪目标信息
+struct TrackedObject {
+    id: usize,
+    kalman_filter: KalmanFilter,
+    class_type: String,
+    last_seen: std::time::SystemTime,
+}
+
+impl TrackedObject {
+    fn new(id: usize, initial_position: (f64, f64, f64), class_type: String) -> Result<Self, crate::tracker::kalman::KalmanError> {
+        let mut kf = KalmanFilter::new(6, 3)?; // 6维状态向量(x,y,z,vx,vy,vz)，3维测量向量(x,y,z)
+        let initial_state = arr1(&[
+            initial_position.0,
+            initial_position.1,
+            initial_position.2,
+            0.0, // 初始vx
+            0.0, // 初始vy
+            0.0, // 初始vz
+        ]);
+        let initial_covariance = ndarray::Array2::eye(6) * 10.0; // 初始高不确定性
+        kf.init(initial_state, initial_covariance, 0.1)?;
+        
+        Ok(Self {
+            id,
+            kalman_filter: kf,
+            class_type,
+            last_seen: std::time::SystemTime::now(),
+        })
+    }
+}
+
 pub struct Tracker {
     sight: Eap<Stream<Vec<Sight>>>,
     tar3d: Eap<Stream<Vec<CldBud>>>,
     target: Eap<Stream<Vec<Target>>>,
     next_id: usize,
+    tracked_objects: HashMap<usize, TrackedObject>, // 存储已跟踪的对象
+    max_disappeared: u32, // 对象在被认为消失之前可以丢失的最大帧数
 }
 
 impl Tracker {
@@ -55,6 +96,8 @@ impl Tracker {
             tar3d: swapl.cld_objs.clone(),
             target: swapl.targets.clone(),
             next_id: 1,
+            tracked_objects: HashMap::new(),
+            max_disappeared: 5,
         }
     }
 

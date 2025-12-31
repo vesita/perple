@@ -122,7 +122,6 @@ pub fn pick_wall(cloud: &mut [[f32; 3]]) -> (usize, Vec<CldBud>) {
     // 为了不改变原始点云顺序，我们创建一个索引向量进行操作
     let indices: Vec<usize> = (0..cloud.len()).collect();
     let mut used: Vec<bool> = vec![false; cloud.len()]; // 标记已被使用的点
-
     // 可能存在多个墙面，所以我们循环检测直到找不到更多墙面
     loop {
         // let mut best_plane: Option<([f32; 3], f32)> = None; // (法向量, 距离)
