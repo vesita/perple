@@ -6,6 +6,7 @@ use perple::optional::data_loader::DataLoader;
 use perple::perple::Perple;
 use perple::swapl::global_swapl;
 
+use perple::utils::combine::combine_all;
 use redra::client::*;
 use tokio;
 use tokio::time::sleep;
@@ -42,9 +43,9 @@ async fn send_points_async(points: Vec<[f32; 3]>) {
 
 async fn send_boxes_async(boxes: Vec<perple::cloud::CldBud>) {
     for bound in boxes {
-        for corner in bound.the_box.vertices() {
-            let visual_point = bound.the_box.to_y_up(&corner);
-            let _ = send_point(visual_point.x, visual_point.y, visual_point.z).await;
+        let edges = bound.the_box.edges_z_up();
+        for edge in edges {
+            let _ = send_segment(edge[0], edge[1]).await;
         }
     }
 }

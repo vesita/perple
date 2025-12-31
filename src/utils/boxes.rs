@@ -1,3 +1,5 @@
+use std::result;
+
 use nalgebra::{Matrix4, Point3, Vector3, Vector4};
 use redra::proto::shape::Point;
 
@@ -321,6 +323,44 @@ impl Box3D {
         world_vertices
     }
     
+    pub fn edges(&self) -> Vec<[[f32; 3];2]> {
+        let vertices = self.vertices();
+        let cube_edges = [
+            // 下底面的边
+            [0, 1], [1, 2], [2, 3], [3, 0],
+            // 上顶面的边
+            [4, 5], [5, 6], [6, 7], [7, 4],
+            // 垂直连接上下底面的边
+            [0, 4], [1, 5], [2, 6], [3, 7],
+        ];
+        let mut result = Vec::new();
+        for &edge in cube_edges.iter() {
+            let vertex1 = [vertices[edge[0]].x, vertices[edge[0]].y, vertices[edge[0]].z];
+            let vertex2 = [vertices[edge[1]].x, vertices[edge[1]].y, vertices[edge[1]].z];
+            result.push([vertex1, vertex2]);
+        }
+        result
+    }
+
+    pub fn edges_z_up(&self) -> Vec<[[f32; 3];2]> {
+        let vertices = self.vertices();
+        let cube_edges = [
+            // 下底面的边
+            [0, 1], [1, 2], [2, 3], [3, 0],
+            // 上顶面的边
+            [4, 5], [5, 6], [6, 7], [7, 4],
+            // 垂直连接上下底面的边
+            [0, 4], [1, 5], [2, 6], [3, 7],
+        ];
+        let mut result = Vec::new();
+        for &edge in cube_edges.iter() {
+            let vertex1 = [vertices[edge[0]].x, vertices[edge[0]].z, vertices[edge[0]].y];
+            let vertex2 = [vertices[edge[1]].x, vertices[edge[1]].z, vertices[edge[1]].y];
+            result.push([vertex1, vertex2]);
+        }
+        result
+    }
+
     /// 检查点是否在包围盒附近（在一定距离内）
     pub fn near(&self, point: &[f32; 3], distance: f32) -> bool {
         // 首先通过中心点距离进行快速筛选
