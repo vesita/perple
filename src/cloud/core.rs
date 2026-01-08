@@ -1,18 +1,15 @@
 use std::fmt;
-use std::sync::{Arc, PoisonError};
+use std::sync::PoisonError;
 use std::time::Instant;
 
+use log::info;
 use nalgebra::{Matrix4, Vector3, Vector4};
 
 use crate::cloud::classify::core::{Classify, ClassifyError};
 use crate::config::fixif;
-use crate::utils::stream::Eap;
-use crate::utils::world::OnWorld;
-use crate::{
-    cloud::{CldBud},
-    utils::stream::{Cream, Stream, StreamError},
-};
 use crate::swapl::global_swapl;
+use crate::utils::stream::{Cream, StreamError};
+use crate::utils::world::OnWorld;
 
 /// Lidar模块的错误类型
 #[derive(Debug)]
@@ -69,16 +66,15 @@ pub struct Lidar {
     extrinsic: Matrix4<f32>,
 }
 
-
 impl Lidar {
     /// 创建Lidar实例，通过全局Swapl数据中枢进行数据交互
-    /// 
+    ///
     /// 所有数据交互都通过全局Swapl完成，实现了模块间的松耦合设计。
     /// Lidar模块内部保留指向各模块的指针，但不再需要外部传入数据流引用
     pub fn new() -> Self {
         // 获取全局数据交换中枢
         let pool = global_swapl();
-        
+
         // 从全局配置中获取lidar外参
         let lidar_config = &fixif().lidar;
 
@@ -95,14 +91,15 @@ impl Lidar {
         }
     }
 
-    pub fn act(&mut self) -> Result<(), LidarError> {
+    pub async fn act(&mut self) -> Result<(), LidarError> {
+        info!("Lidar模块启动");
         // 先读取并处理输入数据
-        self.read_input()?;
-        
+        self.read_input().await?;
+
         // 创建一个计时器
         let start = Instant::now();
         // 使用分类器处理数据
-        self.classify.act()?;
+        self.classify.act().await?;
 
         // 计算处理时间
         let elapsed = start.elapsed().as_millis();
@@ -110,8 +107,8 @@ impl Lidar {
         Ok(())
     }
 
-    pub fn read_input(&mut self) -> Result<(), LidarError> {
-        if let Some(mut data) = self.cream.read() {
+    pub async fn read_input(&mut self) -> Result<(), LidarError> {
+        if let Some(mut data) = self.cream.read().await {
             for point in &mut data {
                 // 使用转换矩阵将点从雷达坐标系转换到世界坐标系
                 let point_vec = Vector4::new(point[0], point[1], point[2], 1.0);
@@ -120,15 +117,14 @@ impl Lidar {
                 point[1] = point_world.y;
                 point[2] = point_world.z;
             }
-            
+
             // 写入处理后的数据到输出流
-            self.cream.write(data)?;
+            self.cream.write(data).await?;
             Ok(())
         } else {
             return Err(LidarError::Other("没有数据".to_string()));
         }
     }
-
 }
 
 impl OnWorld for Lidar {

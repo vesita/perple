@@ -6,36 +6,44 @@ pub struct WireframeCube;
 
 /// 创建线框立方体的顶点列表
 /// 返回立方体的8个顶点坐标
-fn cube_vertices(width: f32, height: f32, depth: f32) -> Vec<[f32; 3]> {
+pub fn cube_vertices(width: f32, height: f32, depth: f32) -> Vec<[f32; 3]> {
     let half_width = width / 2.0;
     let half_height = height / 2.0;
     let half_depth = depth / 2.0;
-    
+
     vec![
         // 底面四个顶点
-        [-half_width, -half_height, -half_depth],  // 0: 左前下
-        [half_width, -half_height, -half_depth],   // 1: 右前下
-        [half_width, -half_height, half_depth],    // 2: 右后下
-        [-half_width, -half_height, half_depth],   // 3: 左后下
-        
+        [-half_width, -half_height, -half_depth], // 0: 左前下
+        [half_width, -half_height, -half_depth],  // 1: 右前下
+        [half_width, -half_height, half_depth],   // 2: 右后下
+        [-half_width, -half_height, half_depth],  // 3: 左后下
         // 顶面四个顶点
-        [-half_width, half_height, -half_depth],   // 4: 左前上
-        [half_width, half_height, -half_depth],    // 5: 右前上
-        [half_width, half_height, half_depth],     // 6: 右后上
-        [-half_width, half_height, half_depth],    // 7: 左后上
+        [-half_width, half_height, -half_depth], // 4: 左前上
+        [half_width, half_height, -half_depth],  // 5: 右前上
+        [half_width, half_height, half_depth],   // 6: 右后上
+        [-half_width, half_height, half_depth],  // 7: 左后上
     ]
 }
 
 /// 创建线框立方体的索引列表
 /// 定义立方体12条边的顶点连接关系
-fn cube_indices() -> Vec<[usize;2]> {
+pub fn cube_indices() -> Vec<[usize; 2]> {
     vec![
         // 底面四条边
-        [0, 1], [1, 2],  [2, 3],  [3, 0],
+        [0, 1],
+        [1, 2],
+        [2, 3],
+        [3, 0],
         // 顶面四条边
-        [4, 5],  [5, 6],  [6, 7],  [7, 4],
+        [4, 5],
+        [5, 6],
+        [6, 7],
+        [7, 4],
         // 垂直四条边
-        [0, 4],  [1, 5],  [2, 6],  [3, 7],
+        [0, 4],
+        [1, 5],
+        [2, 6],
+        [3, 7],
     ]
 }
 
@@ -48,16 +56,16 @@ fn cube_indices() -> Vec<[usize;2]> {
 // ) -> Mesh3d {
 //     let vertices = cube_vertices(width, height, depth);
 //     let indices = cube_indices();
-    
+
 //     let mut positions = Vec::new();
 //     for elem in indices {
 //         positions.push(vertices[elem[0]]);
 //         positions.push(vertices[elem[1]]);
 //     }
-    
+
 //     let mut mesh = Mesh::new(PrimitiveTopology::LineList, default());
 //     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    
+
 //     Mesh3d(meshes.add(mesh))
 // }
 
@@ -76,13 +84,13 @@ fn cube_indices() -> Vec<[usize;2]> {
 //         size.y,
 //         size.z,
 //     );
-    
+
 //     let material = MeshMaterial3d(materials.add(StandardMaterial {
 //         base_color: color,
 //         unlit: true,
 //         ..default()
 //     }));
-    
+
 //     commands.spawn((
 //         WireframeCube,
 //         mesh,
@@ -109,7 +117,7 @@ fn cube_indices() -> Vec<[usize;2]> {
 //             size.z,
 //         );
 //         *mesh_handle = new_mesh;
-        
+
 //         // 更新位置
 //         transform.translation = position;
 //     }

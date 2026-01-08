@@ -1,17 +1,17 @@
 use image::DynamicImage;
+use log::info;
 use nalgebra::{Matrix4, Vector3};
-use std::sync::{Arc, PoisonError};
-use std::time::{Instant};
 use std::fmt;
+use std::sync::{Arc, PoisonError};
+use std::time::Instant;
 
+use crate::color::{ClrBud, image::ScaleMessage, look::Look};
 use crate::color::{YoloDetector, fill_input_image};
-use crate::utils::sight::Sight;
-use crate::utils::world::OnWorld;
-use crate::color::{ClrBud, image::{ScaleMessage}, look::Look};
 use crate::config::fixif;
-use crate::utils::stream::{Cream, Eap, Stream, StreamError};
-use ort::value::{Value, Tensor, TensorValueType};
 use crate::swapl::global_swapl;
+use crate::utils::stream::{Cream, Eap, Stream, StreamError};
+use crate::utils::world::OnWorld;
+use ort::value::{Tensor, TensorValueType, Value};
 
 /// Color模块的错误类型
 #[derive(Debug)]
@@ -55,7 +55,7 @@ impl<T> From<PoisonError<T>> for ColorError {
 }
 
 /// Color模块的核心结构，用于执行目标检测
-/// 
+///
 /// 这个结构体封装了整个目标检测流程，包括：
 /// - 图像输入管理
 /// - 模型推理
@@ -76,25 +76,23 @@ pub struct Camera {
     look: Look,
 }
 
-
-impl Color { 
+impl Color {
     // 构造函数和初始化方法
     // ------------------------------------------------------------------------
 
     /// 创建一个新的Color实例
-    /// 
+    ///
     /// # 参数
     /// * `input_stream` - 输入图像流的线程安全引用
     /// * `output_stream` - 输出结果流的线程安全引用
     /// * `model_path` - 模型文件路径
-    /// 
+    ///
     /// # 返回值
     /// 返回新的Color实例
     pub fn new(
         input_stream: Eap<Stream<DynamicImage>>,
         output_stream: Eap<Stream<Vec<ClrBud>>>,
     ) -> Self {
-        
         // 初始化YOLO检测器
         let model = YoloDetector::new();
 
@@ -104,9 +102,8 @@ impl Color {
 
         // 初始化一个空的tensor value
         let initial_data = vec![0.0f32; 3 * input_height * input_width];
-        let tensor_value = Tensor::from_array(
-            ([1, 3, input_height, input_width], initial_data)
-        ).unwrap();
+        let tensor_value =
+            Tensor::from_array(([1, 3, input_height, input_width], initial_data)).unwrap();
 
         Self {
             cream: Cream {
@@ -125,33 +122,37 @@ impl Color {
     }
 
     /// 执行一次检测操作
-    /// 
+    ///
     /// 该方法会：
     /// 1. 从输入流获取图像
     /// 2. 准备模型输入张量
     /// 3. 执行模型推理
     /// 4. 将结果写入输出流
-    pub fn act(&mut self) -> Result<(), ColorError> {
+    pub async fn act(&mut self) -> Result<(), ColorError> {
         // 从输入流中读取图像
-        let input = match self.cream.read() {
+        let input = match self.cream.read().await {
             Some(img) => img,
             None => return Ok(()), // 没有数据可处理，这不是错误
         };
-        
+
         // 处理图像
         self.message.o_width = input.width();
         self.message.o_height = input.height();
-        
+
         // 填充tensor value，避免拷贝
-        fill_input_image(&input, self.model.input_height(),
-                self.model.input_width(), &mut self.tensor_value);
-        
+        fill_input_image(
+            &input,
+            self.model.input_height(),
+            self.model.input_width(),
+            &mut self.tensor_value,
+        );
+
         // 执行推理并计时
         let start_time = Instant::now();
-        
+
         // 获取输出流的可变引用并填充数据
-        let mut output_stream = self.cream.out_stream.lock()?;
-        
+        let mut output_stream = self.cream.out_stream.lock().await;
+
         // 获取写入位置的可变引用
         let write_mut_result = output_stream.get_write_mut();
         match write_mut_result {
@@ -159,15 +160,16 @@ impl Color {
                 // 初始化或获取Vec<ClrBud>对象
                 let bounds = slot.get_or_insert_with(|| Vec::new());
                 bounds.clear(); // 清空之前的数据
-                
+
                 // 执行推理
                 let infer_result = self.model.infer(&self.tensor_value, bounds, &self.message);
                 match infer_result {
                     Ok(_) => {
                         // 提交写入操作
-                        output_stream.commit_write()
+                        output_stream
+                            .commit_write()
                             .map_err(|e| ColorError::CommitError(format!("{:?}", e)))?;
-                    },
+                    }
                     Err(e) => {
                         eprintln!("推理过程中发生错误: {:?}", e);
                         // 即使推理出错，也尝试提交写入以保持流的一致性
@@ -175,12 +177,12 @@ impl Color {
                         return Err(ColorError::InferenceError(format!("{:?}", e)));
                     }
                 }
-            },
+            }
             Err(e) => {
                 return Err(ColorError::from(e));
             }
         }
-        
+
         let duration = start_time.elapsed();
         println!("模型推理耗时: {:?}", duration);
         Ok(())
@@ -193,7 +195,7 @@ impl Color {
     pub fn model(&self) -> &YoloDetector {
         &self.model
     }
-    
+
     /// 获取可变模型引用
     pub fn model_mut(&mut self) -> &mut YoloDetector {
         &mut self.model
@@ -211,7 +213,7 @@ impl Color {
     pub fn set_confidence_threshold(&mut self, threshold: f32) {
         self.model.set_confidence_threshold(threshold);
     }
-    
+
     /// 更新模型NMS阈值
     pub fn set_nms_threshold(&mut self, threshold: f32) {
         self.model.set_nms_threshold(threshold);
@@ -220,26 +222,21 @@ impl Color {
 
 impl Camera {
     /// 创建Camera实例，通过全局Swapl数据中枢进行数据交互
-    /// 
+    ///
     /// 所有数据交互都通过全局Swapl完成，实现了模块间的松耦合设计。
     /// Camera模块内部保留指向各模块的指针，但不再需要外部传入数据流引用
     pub fn new() -> Self {
         // 获取全局数据交换中枢
         let pool = global_swapl();
-        
+
         Self {
-            data: Color::new(
-                Arc::clone(&pool.colors),
-                Arc::clone(&pool.clr_objs),
-            ),
-            look: Look::new(
-                Arc::clone(&pool.clr_objs),
-                Arc::clone(&pool.sights),
-            ),
+            data: Color::new(Arc::clone(&pool.colors), Arc::clone(&pool.clr_objs)),
+            look: Look::new(Arc::clone(&pool.clr_objs), Arc::clone(&pool.sights)),
         }
     }
 
     pub fn act(&mut self) -> Result<(), ColorError> {
+        info!("启动Camera模块");
         let _ = self.data.act();
         let _ = self.look.act();
         Ok(())
@@ -250,15 +247,15 @@ impl OnWorld for Camera {
     fn on_world(&self) -> Matrix4<f32> {
         self.look.extrinsic
     }
-    
+
     fn set_by_angle(&mut self, tra: Vector3<f32>, rot: Vector3<f32>) {
-       self.look.set_by_angle(tra, rot); 
+        self.look.set_by_angle(tra, rot);
     }
-    
+
     fn set_by_radian(&mut self, tra: Vector3<f32>, rot: Vector3<f32>) {
         self.look.set_by_radians(tra, rot);
     }
-    
+
     fn set_by_matrix(&mut self, matrix: &Matrix4<f32>) {
         self.look.extrinsic = *matrix;
     }

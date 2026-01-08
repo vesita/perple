@@ -1,10 +1,15 @@
-use crate::{cloud::{CldBud, classify::{claster::Claster, environment::*}}, swapl::global_swapl, utils::stream::Cream};
-
+use crate::{
+    cloud::{
+        CldBud,
+        classify::{claster::Claster, environment::*},
+    },
+    swapl::global_swapl,
+    utils::stream::Cream,
+};
 
 pub enum ClassifyError {
-    Error
+    Error,
 }
-
 
 pub struct Classify {
     cream: Cream<Vec<[f32; 3]>, Vec<CldBud>>,
@@ -15,7 +20,6 @@ impl Classify {
     pub fn new() -> Self {
         let swapl = global_swapl();
         Self {
-            
             cream: Cream {
                 in_stream: swapl.cloud_in_world.clone(),
                 out_stream: swapl.cld_objs.clone(),
@@ -23,10 +27,9 @@ impl Classify {
             claster: Claster::new(),
         }
     }
-    
 
-    pub fn act(&mut self) -> Result<(), ClassifyError> {
-        if let Some(mut target) = self.cream.read() {
+    pub async fn act(&mut self) -> Result<(), ClassifyError> {
+        if let Some(mut target) = self.cream.read().await {
             let (slice_index, grounds) = single_pick_ground(&mut target);
             println!("完成地面提取，已过滤{}个点", slice_index);
             // let (slice_index, walls) = pick_wall(&mut target[slice_index..]);

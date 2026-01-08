@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex, LazyLock};
+use std::sync::LazyLock;
 
 use image::DynamicImage;
 
@@ -7,7 +7,7 @@ use crate::cloud::CldBud;
 use crate::color::ClrBud;
 use crate::tracker::output::Target;
 use crate::utils::sight::Sight;
-use crate::utils::stream::{Eap, Stream};
+use crate::utils::stream::{Eap, Stream, new_eap};
 
 // 使用LazyLock创建全局单例
 static GLOBAL_SWAPL: LazyLock<Swapl> = LazyLock::new(Swapl::new);
@@ -42,13 +42,13 @@ impl Swapl {
     /// 创建一个新的数据交换中枢
     pub fn new() -> Self {
         Swapl {
-            clouds: Arc::new(Mutex::new(Stream::new())),
-            cloud_in_world: Arc::new(Mutex::new(Stream::new())),
-            cld_objs: Arc::new(Mutex::new(Stream::new())),
-            colors: Arc::new(Mutex::new(Stream::new())),
-            clr_objs: Arc::new(Mutex::new(Stream::new())),
-            sights: Arc::new(Mutex::new(Stream::new())),
-            targets: Arc::new(Mutex::new(Stream::new())),
+            clouds: new_eap(Stream::new()),
+            cloud_in_world: new_eap(Stream::new()),
+            cld_objs: new_eap(Stream::new()),
+            colors: new_eap(Stream::new()),
+            clr_objs: new_eap(Stream::new()),
+            sights: new_eap(Stream::new()),
+            targets: new_eap(Stream::new()),
         }
     }
 }

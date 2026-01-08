@@ -10,8 +10,12 @@ image = { version = "0.*" }
 ndarray = { version = "0.*", features = ["rayon"] }
 raqote = "0.*"
 pcd-rs = "0.*"
-nalgebra = {version = "0.*", features = ["std"]}
+nalgebra = { version = "0.*", features = ["std"] }
 toml = "0.*"
 serde = { version = "1.*", features = ["derive"] }
 tokio = { version = "1.*", features = ["full"] }
-redra ={ git = "https://github.com/vesita/redra.git", default-features = false, features = ["client"]}
+redra = { git = "https://github.com/vesita/redra.git", default-features = false, features = [
+    "client",
+] }
+log = "0.*"
+env_logger = "0.*"
