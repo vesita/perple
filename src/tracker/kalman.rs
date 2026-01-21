@@ -35,7 +35,7 @@ pub struct KalmanFilter {
     /// 测量噪声协方差
     measurement_noise: Array2<f64>,
     /// 控制输入矩阵 (暂时不使用)
-    control_matrix: Option<Array2<f64>>,
+    _control_matrix: Option<Array2<f64>>,
     /// 初始化标志
     initialized: bool,
 }
@@ -50,7 +50,7 @@ impl KalmanFilter {
         let covariance = Array2::eye(state_dim);
 
         // 状态转移矩阵 (假设匀速模型)
-        let mut transition_matrix = Array2::eye(state_dim);
+        let transition_matrix = Array2::eye(state_dim);
         // 在匀速模型中，位置会根据速度变化
 
         // 观测矩阵 (只观测位置信息)
@@ -72,7 +72,7 @@ impl KalmanFilter {
             observation_matrix,
             process_noise,
             measurement_noise,
-            control_matrix: None,
+            _control_matrix: None,
             initialized: false,
         })
     }

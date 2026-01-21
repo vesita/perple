@@ -1,9 +1,12 @@
+use std::collections::HashMap;
+
 use log::info;
+use ndarray::arr1;
 
 use crate::{
     cloud::CldBud,
     swapl::global_swapl,
-    tracker::output::Target,
+    tracker::{kalman::KalmanFilter, output::Target},
     utils::{
         sight::Sight,
         stream::{Eap, Stream, StreamError},
@@ -50,14 +53,14 @@ impl std::error::Error for TrackerError {}
 
 /// 跟踪目标信息
 struct TrackedObject {
-    id: usize,
-    kalman_filter: KalmanFilter,
-    class_type: String,
-    last_seen: std::time::SystemTime,
+    _id: usize,
+    _kalman_filter: KalmanFilter,
+    _class_type: String,
+    _last_seen: std::time::SystemTime,
 }
 
 impl TrackedObject {
-    fn new(id: usize, initial_position: (f64, f64, f64), class_type: String) -> Result<Self, crate::tracker::kalman::KalmanError> {
+    pub fn new(id: usize, initial_position: (f64, f64, f64), class_type: String) -> Result<Self, crate::tracker::kalman::KalmanError> {
         let mut kf = KalmanFilter::new(6, 3)?; // 6维状态向量(x,y,z,vx,vy,vz)，3维测量向量(x,y,z)
         let initial_state = arr1(&[
             initial_position.0,
@@ -71,10 +74,10 @@ impl TrackedObject {
         kf.init(initial_state, initial_covariance, 0.1)?;
         
         Ok(Self {
-            id,
-            kalman_filter: kf,
-            class_type,
-            last_seen: std::time::SystemTime::now(),
+            _id: id,
+            _kalman_filter: kf,
+            _class_type: class_type,
+            _last_seen: std::time::SystemTime::now(),
         })
     }
 }
@@ -84,8 +87,8 @@ pub struct Tracker {
     tar3d: Eap<Stream<Vec<CldBud>>>,
     target: Eap<Stream<Vec<Target>>>,
     next_id: usize,
-    tracked_objects: HashMap<usize, TrackedObject>, // 存储已跟踪的对象
-    max_disappeared: u32, // 对象在被认为消失之前可以丢失的最大帧数
+    _tracked_objects: HashMap<usize, TrackedObject>, // 存储已跟踪的对象
+    _max_disappeared: u32, // 对象在被认为消失之前可以丢失的最大帧数
 }
 
 impl Tracker {
@@ -96,8 +99,8 @@ impl Tracker {
             tar3d: swapl.cld_objs.clone(),
             target: swapl.targets.clone(),
             next_id: 1,
-            tracked_objects: HashMap::new(),
-            max_disappeared: 5,
+            _tracked_objects: HashMap::new(),
+            _max_disappeared: 5,
         }
     }
 

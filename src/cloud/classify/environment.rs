@@ -2,7 +2,7 @@ use crate::utils::boxes::Box3D;
 use crate::{cloud::CldBud, config::fixif};
 
 use crate::utils::random::select_some;
-use rand::{Rng, rng};
+use rand::{RngExt, rng};
 
 /// 使用比例过滤和法向量检验的方法提取地面点
 /// 实现三阶段过滤：
