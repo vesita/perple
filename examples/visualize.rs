@@ -4,6 +4,7 @@ use perple::optional::data_loader::DataLoader;
 use perple::perple::Perple;
 use perple::swapl::global_swapl;
 
+use perple::utils::combine::combine_all;
 use redra::client::*;
 use tokio;
 use tokio::time::sleep;
