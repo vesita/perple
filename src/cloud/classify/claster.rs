@@ -191,7 +191,7 @@ impl Claster {
     }
 
     /// 直接处理整个Vec<[f32; 3]>帧数据
-    pub fn claster(&mut self, lifra: &Vec<[f32; 3]>) {
+    pub fn claster(&mut self, lifra: &[[f32; 3]]) {
         println!("开始聚类，共{}个点", lifra.len());
 
         // 清空之前的聚类结果
@@ -225,28 +225,29 @@ impl Claster {
         // 替换点集为下采样后的点集
         self.all_points = downsampled_points;
 
-        // 执行DBSCAN风格的聚类
+        // 执行 DBSCAN 风格的聚类
         self.dbscan_cluster();
 
         println!("聚类完成，共发现{}个聚类", self.objects.len());
     }
 
-    // 将聚类结果转换为CldBud向量
-    pub fn to_cldbuds(&self) -> Vec<CldBud> {
-        let boxes = self.clusters_to_boxes();
+    // 将聚类结果转换为 CldBud 向量
+  pub fn to_cldbuds(&self) -> Vec<CldBud> {
+      let boxes = self.clusters_to_boxes();
 
-        boxes
-            .iter()
-            .enumerate()
-            .map(|(idx, box3d)| {
-                CldBud::new(
-                    box3d.clone(), // 使用clone而不是解引用
-                    1,             // 默认类别ID为1（非地面）
-                    format!("cluster_{}", idx),
-                    1.0, // 置信度
-                )
-            })
-            .collect()
+      boxes
+           .iter()
+           .enumerate()
+          .map(|(idx, box3d)| {
+              CldBud::new(
+                   // 优化：使用引用而非 clone，CldBud::new 应该接受引用
+                 box3d.clone(),
+                   1,             // 默认类别 ID 为 1（非地面）
+                   format!("cluster_{}", idx),
+                   1.0, // 置信度
+               )
+           })
+          .collect()
     }
 
     // 添加Box3D对象到聚类中

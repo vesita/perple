@@ -30,30 +30,31 @@ impl Classify {
     }
 
     pub fn act(&mut self) -> Result<(), ClassifyError> {
-    let mut target = {
-        let mut stream = self.cream.in_stream.blocking_lock();
+   let mut target = {
+       let mut stream = self.cream.in_stream.blocking_lock();
             match stream.read() {
                Some(target) => target,
                 None => return Ok(()), // 没有数据可处理
             }
         };
 
-    let (slice_index, grounds) = single_pick_ground(&mut target);
-        println!("完成地面提取，已过滤{}个点", slice_index);
+   let(slice_index, grounds) = single_pick_ground(&mut target);
+       println!("完成地面提取，已过滤{}个点", slice_index);
         // let (slice_index, walls) = pick_wall(&mut target[slice_index..]);
         // println!("完成墙壁提取，已过滤{}个点", slice_index);
-    let _ = self.claster.claster(&target[slice_index..].to_vec());
-    let targets = self.claster.to_cldbuds();
+    // 优化：直接传递切片引用，避免不必要的 to_vec() 克隆
+   let _ = self.claster.claster(&target[slice_index..]);
+   let targets = self.claster.to_cldbuds();
 
         // 合并所有的 CldBud 到一个 Vec 中
-    let mut all_buds = grounds;
+   let mut all_buds = grounds;
         // all_buds.extend(walls);
         all_buds.extend(targets);
 
         {
-        let mut stream = self.cream.out_stream.blocking_lock();
-         let _ = stream.write(all_buds);
+       let mut stream = self.cream.out_stream.blocking_lock();
+        let _ = stream.write(all_buds);
         }
-        Ok(())
+       Ok(())
     }
 }
