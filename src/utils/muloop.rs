@@ -174,7 +174,7 @@ impl MultiLoop {
     /// # 参数
     /// * `mode` - 循环模式，指定循环的执行方式
     /// * `object` - 需要对其方法进行循环调用的对象引用
-    /// * `method` - 要执行的方法（通常是一个闭包，调用对象的方法）
+    /// * `method` - 要执行的方法（通常是一个闭包，调用对象的同步方法）
     /// * `interval_ms` - 每次循环之间的间隔时间（毫秒）
     ///
     /// # 返回值
@@ -187,109 +187,128 @@ impl MultiLoop {
     /// # 使用注意
     /// - method 闭包参数需要显式类型注解以避免编译错误
     /// - 停止信号被检测到时，当前正在执行的方法可能会完成后再退出
-    pub async fn start_with_method<T, F>(
+  pub async fn start_with_method<T, F>(
         &mut self,
-        mode: LoopMode,
-        object: Eap<T>,
-        method: F,
-        interval_ms: u64,
+       mode: LoopMode,
+       object: Eap<T>,
+      method: F,
+      interval_ms: u64,
     ) -> Result<(), String>
     where
-        T: Send + 'static,
-        F: Fn(&mut T) + Send + 'static,
+       T: Send + 'static,
+       F: Fn(&mut T) + Send + Sync + 'static,
     {
         {
-            let mut running = self.running.lock().await;
-            if *running {
-                error!("循环已在运行中");
+         let mut running = self.running.lock().await;
+          if *running {
+               error!("循环已在运行中");
                 return Err("循环已在运行中".to_string());
             }
-            *running = true;
+           *running = true;
         } // 释放锁
 
-        let loop_running = Arc::clone(&self.running);
-        let loop_object = Arc::clone(&object);
+    let loop_running = Arc::clone(&self.running);
+    let loop_object = Arc::clone(&object);
+    let method = Arc::new(method);
 
         self.coroutine_handle = Some(tokio::spawn(async move {
             match mode {
-                LoopMode::Count(count) => {
-                    let mut counter= 0;
-                    while counter < count {
+             LoopMode::Count(count) => {
+                 let mut counter= 0;
+                   while counter < count {
                         // 检查是否应该停止
-                        let should_stop = {
-                            let running = loop_running.lock().await;
+                    let should_stop = {
+                         let running = loop_running.lock().await;
                             !*running
                         };
-                        
-                        if should_stop {
-                            break;
+
+                     if should_stop {
+                           break;
                         }
-                        
+
+                        // 在 blocking 线程池中执行同步方法
                         {
-                            let mut obj = loop_object.lock().await;
-                            method(&mut *obj);
+                       let obj = Arc::clone(&loop_object);
+                      let method = Arc::clone(&method);
+                        let _ = tokio::task::spawn_blocking(move || {
+                             if let Ok(mut o) = obj.try_lock() {
+                                method(&mut *o);
+                                }
+                           }).await;
                         }
-                        
-                        counter += 1;
-                        
+
+                     counter += 1;
+
                         // 控制处理频率，防止占用过多 CPU 资源
-                        sleep(Duration::from_millis(interval_ms)).await;
+                      sleep(Duration::from_millis(interval_ms)).await;
                     }
-                    
+
                     // 确保退出时将状态设置为 false
-                    let mut running = loop_running.lock().await;
-                    *running = false;
+                 let mut running = loop_running.lock().await;
+                   *running = false;
                 }
-                LoopMode::Duration(duration_ms) => {
-                    let start_time = std::time::Instant::now();
-                    while start_time.elapsed().as_millis() < duration_ms as u128 {
+             LoopMode::Duration(duration_ms) => {
+                 let start_time = std::time::Instant::now();
+                   while start_time.elapsed().as_millis() < duration_ms as u128 {
                         // 检查是否应该停止
-                        let should_stop = {
-                            let running = loop_running.lock().await;
+                    let should_stop = {
+                         let running = loop_running.lock().await;
                             !*running
                         };
-                        
-                        if should_stop {
-                            break;
+
+                     if should_stop {
+                           break;
                         }
-                        
+
+                        // 在 blocking 线程池中执行同步方法
                         {
-                            let mut obj = loop_object.lock().await;
-                            method(&mut *obj);
+                       let obj = Arc::clone(&loop_object);
+                      let method = Arc::clone(&method);
+                        let _ = tokio::task::spawn_blocking(move || {
+                             if let Ok(mut o) = obj.try_lock() {
+                                method(&mut *o);
+                                }
+                           }).await;
                         }
-                        
+
                         // 控制处理频率，防止占用过多 CPU 资源
-                        sleep(Duration::from_millis(interval_ms)).await;
+                      sleep(Duration::from_millis(interval_ms)).await;
                     }
-                    
+
                     // 确保退出时将状态设置为 false
-                    let mut running = loop_running.lock().await;
-                    *running = false;
+                 let mut running = loop_running.lock().await;
+                   *running = false;
                 }
-                LoopMode::Signal => {
+             LoopMode::Signal => {
                     loop {
                         // 检查是否应该停止
-                        let should_stop = {
-                            let running = loop_running.lock().await;
+                    let should_stop = {
+                         let running = loop_running.lock().await;
                             !*running
                         };
-                        
-                        if should_stop {
-                            break;
+
+                     if should_stop {
+                           break;
                         }
-                        
+
+                        // 在 blocking 线程池中执行同步方法
                         {
-                            let mut obj = loop_object.lock().await;
-                            method(&mut *obj);
+                       let obj = Arc::clone(&loop_object);
+                      let method = Arc::clone(&method);
+                        let _ = tokio::task::spawn_blocking(move || {
+                             if let Ok(mut o) = obj.try_lock() {
+                                method(&mut *o);
+                                }
+                           }).await;
                         }
-                        
+
                         // 控制处理频率，防止占用过多 CPU 资源
-                        sleep(Duration::from_millis(interval_ms)).await;
+                      sleep(Duration::from_millis(interval_ms)).await;
                     }
-                    
+
                     // 确保退出时将状态设置为 false
-                    let mut running = loop_running.lock().await;
-                    *running = false;
+                 let mut running = loop_running.lock().await;
+                   *running = false;
                 }
             }
         }));

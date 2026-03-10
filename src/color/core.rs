@@ -128,12 +128,12 @@ impl Color {
     /// 2. 准备模型输入张量
     /// 3. 执行模型推理
     /// 4. 将结果写入输出流
-   pub fn act(&mut self) -> Result<(), ColorError> {
-        // 从输入流中读取图像（使用 blocking_lock 在同步上下文中）
-       let input = {
-           let mut stream = self.cream.in_stream.blocking_lock();
+  pub fn act(&mut self) -> Result<(), ColorError> {
+        // 从输入流中读取图像（使用 try_lock 或 blocking_lock）
+     let input = {
+         let mut stream = self.cream.in_stream.blocking_lock();
             match stream.read() {
-                Some(img) => img,
+               Some(img) => img,
                 None => return Ok(()), // 没有数据可处理，这不是错误
             }
         };
@@ -151,22 +151,22 @@ impl Color {
         );
 
         // 执行推理并计时
-       let start_time = Instant::now();
+      let start_time = Instant::now();
 
         // 获取输出流的引用并填充数据（使用 blocking_lock）
         {
-           let mut output_stream = self.cream.out_stream.blocking_lock();
+          let mut output_stream = self.cream.out_stream.blocking_lock();
 
             // 获取写入位置的可变引用
-           let write_mut_result = output_stream.get_write_mut();
+          let write_mut_result = output_stream.get_write_mut();
             match write_mut_result {
                 Ok(slot) => {
                     // 初始化或获取 Vec<ClrBud> 对象
-                   let bounds = slot.get_or_insert_with(|| Vec::new());
+                  let bounds = slot.get_or_insert_with(|| Vec::new());
                     bounds.clear(); // 清空之前的数据
 
                     // 执行推理
-                   let infer_result = self.model.infer(&self.tensor_value, bounds, &self.message);
+                  let infer_result = self.model.infer(&self.tensor_value, bounds, &self.message);
                     match infer_result {
                         Ok(_) => {
                             // 提交写入操作
@@ -177,7 +177,7 @@ impl Color {
                         Err(e) => {
                            eprintln!("推理过程中发生错误：{:?}", e);
                             // 即使推理出错，也尝试提交写入以保持流的一致性
-                           let _ = output_stream.commit_write();
+                          let _ = output_stream.commit_write();
                             return Err(ColorError::InferenceError(format!("{:?}", e)));
                         }
                     }
@@ -188,7 +188,7 @@ impl Color {
             }
         } // 在这里释放 output_stream 锁
 
-       let duration = start_time.elapsed();
+      let duration = start_time.elapsed();
         println!("模型推理耗时：{:?}", duration);
         Ok(())
     }
@@ -226,24 +226,25 @@ impl Color {
 }
 
 impl Camera {
-    /// 创建Camera实例，通过全局Swapl数据中枢进行数据交互
+    /// 创建 Camera 实例，通过全局 Swapl 数据中枢进行数据交互
     ///
-    /// 所有数据交互都通过全局Swapl完成，实现了模块间的松耦合设计。
-    /// Camera模块内部保留指向各模块的指针，但不再需要外部传入数据流引用
-    pub fn new() -> Self {
+    /// 所有数据交互都通过全局 Swapl 完成，实现了模块间的松耦合设计。
+    /// Camera 模块内部保留指向各模块的指针，但不再需要外部传入数据流引用
+  pub fn new() -> Self {
         // 获取全局数据交换中枢
-        let pool = global_swapl();
+      let pool = global_swapl();
+
+      info!("Camera 模块初始化");
 
         Self {
-            data: Color::new(Arc::clone(&pool.colors), Arc::clone(&pool.clr_objs)),
+           data: Color::new(Arc::clone(&pool.colors), Arc::clone(&pool.clr_objs)),
             look: Look::new(Arc::clone(&pool.clr_objs), Arc::clone(&pool.sights)),
         }
     }
 
     pub fn act(&mut self) -> Result<(), ColorError> {
-        info!("启动Camera模块");
-        let _ = self.data.act();
-        let _ = self.look.act();
+      self.data.act()?;
+      self.look.act();
         Ok(())
     }
 }

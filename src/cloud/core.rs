@@ -67,60 +67,64 @@ pub struct Lidar {
 }
 
 impl Lidar {
-    /// 创建Lidar实例，通过全局Swapl数据中枢进行数据交互
+    /// 创建 Lidar 实例，通过全局 Swapl 数据中枢进行数据交互
     ///
-    /// 所有数据交互都通过全局Swapl完成，实现了模块间的松耦合设计。
-    /// Lidar模块内部保留指向各模块的指针，但不再需要外部传入数据流引用
-    pub fn new() -> Self {
+    /// 所有数据交互都通过全局 Swapl 完成，实现了模块间的松耦合设计。
+    /// Lidar 模块内部保留指向各模块的指针，但不再需要外部传入数据流引用
+   pub fn new() -> Self {
         // 获取全局数据交换中枢
-        let pool = global_swapl();
+       let pool = global_swapl();
 
-        // 从全局配置中获取lidar外参
-        let lidar_config = &fixif().lidar;
+        // 从全局配置中获取 lidar 外参
+       let lidar_config = &fixif().lidar;
 
         // 将数组转换为矩阵
-        let extrinsic = lidar_config.extrinsic.clone();
+       let extrinsic = lidar_config.extrinsic.clone();
+
+       info!("Lidar 模块初始化");
 
         Self {
             cream: Cream {
-                in_stream: pool.clouds.clone(),
+               in_stream: pool.clouds.clone(),
                 out_stream: pool.cloud_in_world.clone(),
             },
-            classify: Classify::new(),
+           classify: Classify::new(),
             extrinsic: extrinsic.into(),
         }
     }
 
-   pub fn act(&mut self) -> Result<(), LidarError> {
-       info!("Lidar 模块启动");
+    pub fn act(&mut self) -> Result<(), LidarError> {
         // 先读取并处理输入数据
         self.read_input()?;
 
         // 创建一个计时器
-      let start = Instant::now();
+        let start = Instant::now();
         // 使用分类器处理数据
-        self.classify.act()?;
+        let classify_result = self.classify.act();
+        if let Err(e) = classify_result {
+            eprintln!("点云分类错误：{:?}", e);
+        }
 
         // 计算处理时间
-      let elapsed = start.elapsed().as_millis();
+        let elapsed = start.elapsed().as_millis();
         println!("点云处理耗时：{}ms", elapsed);
         Ok(())
     }
 
-   pub fn read_input(&mut self) -> Result<(), LidarError> {
-      let data = {
-          let mut stream = self.cream.in_stream.blocking_lock();
+  pub fn read_input(&mut self) -> Result<(), LidarError> {
+    let data = {
+        let mut stream = self.cream.in_stream.blocking_lock();
             match stream.read() {
-                Some(mut data) => {
-                    for point in &mut data {
+              Some(mut data) => {
+                   for point in &mut data {
                         // 使用转换矩阵将点从雷达坐标系转换到世界坐标系
-                      let point_vec = Vector4::new(point[0], point[1], point[2], 1.0);
-                      let point_world = self.extrinsic * point_vec;
-                        point[0] = point_world.x;
-                        point[1] = point_world.y;
-                        point[2] = point_world.z;
+                    let point_vec = Vector4::new(point[0], point[1], point[2], 1.0);
+                     let point_world = self.extrinsic * point_vec;
+                       point[0] = point_world.x;
+                       point[1] = point_world.y;
+                       point[2] = point_world.z;
                     }
-                    data
+                   data
                 },
                 None => return Err(LidarError::Other("没有数据".to_string())),
             }
@@ -128,8 +132,8 @@ impl Lidar {
 
         // 写入处理后的数据到输出流
         {
-          let mut stream = self.cream.out_stream.blocking_lock();
-            stream.write(data)?;
+         let mut stream = self.cream.out_stream.blocking_lock();
+           stream.write(data)?;
         }
         Ok(())
     }

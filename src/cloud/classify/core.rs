@@ -7,6 +7,7 @@ use crate::{
     utils::stream::Cream,
 };
 
+#[derive(Debug)]
 pub enum ClassifyError {
     Error,
 }

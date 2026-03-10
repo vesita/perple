@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use log::info;
 use ndarray::arr1;
 
 use crate::{
@@ -51,7 +50,12 @@ impl std::fmt::Display for TrackerError {
 
 impl std::error::Error for TrackerError {}
 
-/// 跟踪目标信息
+/// 跟踪目标信息（包含卡尔曼滤波器）
+/// 
+/// 注意：这是一个保留的高级功能，预期用于实现基于卡尔曼滤波的目标跟踪。
+/// 当前版本使用简化的直接关联算法，此结构体暂未使用。
+/// 未来扩展时可启用此功能以实现更平滑的轨迹预测和丢失目标处理。
+#[allow(dead_code)]  // 预留功能，暂不使用
 struct TrackedObject {
     _id: usize,
     _kalman_filter: KalmanFilter,
@@ -60,24 +64,34 @@ struct TrackedObject {
 }
 
 impl TrackedObject {
-    pub fn new(id: usize, initial_position: (f64, f64, f64), class_type: String) -> Result<Self, crate::tracker::kalman::KalmanError> {
-        let mut kf = KalmanFilter::new(6, 3)?; // 6维状态向量(x,y,z,vx,vy,vz)，3维测量向量(x,y,z)
-        let initial_state = arr1(&[
-            initial_position.0,
-            initial_position.1,
-            initial_position.2,
-            0.0, // 初始vx
-            0.0, // 初始vy
-            0.0, // 初始vz
+    /// 创建新的跟踪对象实例
+    /// 
+    /// # 参数
+    /// * `id` - 目标唯一标识符
+    /// * `initial_position` - 初始 3D 位置 (x, y, z)
+    /// * `class_type` - 目标类型
+    /// 
+    /// # 返回值
+    /// 返回初始化后的 TrackedObject 实例，包含配置好的卡尔曼滤波器
+    #[allow(dead_code)]  // 预留功能，暂不使用
+   pub fn new(id: usize, initial_position: (f64, f64, f64), class_type: String) -> Result<Self, crate::tracker::kalman::KalmanError> {
+       let mut kf = KalmanFilter::new(6, 3)?; // 6 维状态向量 (x,y,z,vx,vy,vz)，3 维测量向量 (x,y,z)
+      let initial_state = arr1(&[
+          initial_position.0,
+          initial_position.1,
+          initial_position.2,
+           0.0, // 初始 vx
+           0.0, // 初始 vy
+           0.0, // 初始 vz
         ]);
-        let initial_covariance = ndarray::Array2::eye(6) * 10.0; // 初始高不确定性
-        kf.init(initial_state, initial_covariance, 0.1)?;
-        
-        Ok(Self {
-            _id: id,
-            _kalman_filter: kf,
-            _class_type: class_type,
-            _last_seen: std::time::SystemTime::now(),
+      let initial_covariance = ndarray::Array2::eye(6) * 10.0; // 初始高不确定性
+       kf.init(initial_state, initial_covariance, 0.1)?;
+       
+       Ok(Self {
+           _id: id,
+           _kalman_filter: kf,
+           _class_type: class_type,
+           _last_seen: std::time::SystemTime::now(),
         })
     }
 }
@@ -106,36 +120,36 @@ impl Tracker {
 
     pub fn class_sync(&mut self) -> Result<(), TrackerError> {
         // 使用 Stream 的 read 方法直接获取数据并自动推进索引
-      let tar3d_data = {
-          let mut tar3d_guard = self.tar3d.blocking_lock();
+    let tar3d_data = {
+        let mut tar3d_guard = self.tar3d.blocking_lock();
             match tar3d_guard.read() {
-                Some(data) => data,
+              Some(data) => data,
                 None => Vec::new(),
             }
         };
 
         // 使用 Stream 的 read 方法直接获取数据并自动推进索引
-      let sight_data = {
-          let mut sight_guard = self.sight.blocking_lock();
+    let sight_data = {
+        let mut sight_guard = self.sight.blocking_lock();
             match sight_guard.read() {
-                Some(data) => data,
+              Some(data) => data,
                 None => Vec::new(),
             }
         };
 
         // 创建匹配结果容器
-      let mut matched_targets = Vec::new();
+    let mut matched_targets = Vec::new();
 
         // 对每个视线与每个 3D 检测框进行匹配
         for sight in sight_data.iter() {
             for cld_bud in tar3d_data.iter() {
                 // 使用 slab 算法检测视线与 3D 包围盒是否相交
-               if sight.slab(&cld_bud.the_box) {
+             if sight.slab(&cld_bud.the_box) {
                     // 创建匹配的目标对象
-                  let target = Target {
-                        the_box: cld_bud.the_box.clone(),
-                       class_type: cld_bud.class_name.clone(),
-                       id: self.next_id,
+                 let target = Target {
+                       the_box: cld_bud.the_box.clone(),
+                     class_type: cld_bud.class_name.clone(),
+                      id: self.next_id,
                     };
 
                     self.next_id += 1;
@@ -148,7 +162,7 @@ impl Tracker {
 
         // 将匹配结果写入输出流
         {
-         let mut target_guard = self.target.blocking_lock();
+       let mut target_guard = self.target.blocking_lock();
             target_guard.write(matched_targets)?;
         }
 
@@ -174,112 +188,111 @@ impl Tracker {
 
     /// 更新跟踪目标，结合 sight 关联功能
   pub fn run(&mut self) -> Result<(), TrackerError> {
-      info!("跟踪模块启动");
         // 读取最新的 3D 目标检测结果
-     let current_detections = {
-         let mut tar3d_guard = self.tar3d.blocking_lock();
+   let current_detections = {
+       let mut tar3d_guard = self.tar3d.blocking_lock();
             match tar3d_guard.read() {
-                Some(data) => data,
+             Some(data) => data,
                 None => Vec::new(),
             }
         };
 
         // 读取视线数据用于后续分类修正
-     let sight_data = {
-         let mut sight_guard = self.sight.blocking_lock();
+   let sight_data = {
+       let mut sight_guard = self.sight.blocking_lock();
             match sight_guard.read() {
-                Some(data) => data,
+             Some(data) => data,
                 None => Vec::new(),
             }
         };
 
         // 如果没有检测结果，则不进行处理
-      if current_detections.is_empty() {
+    if current_detections.is_empty() {
             return Ok(());
         }
 
         // 读取之前的跟踪目标
-     let previous_targets = {
-         let mut target_guard = self.target.blocking_lock();
+   let previous_targets = {
+       let mut target_guard = self.target.blocking_lock();
             match target_guard.read() {
-                Some(data) => data,
+             Some(data) => data,
                 None => Vec::new(),
             }
         };
 
         // 第一步：基于历史数据进行目标跟踪
-     let mut tracked_targets = Vec::new();
-     let mut used_detections = vec![false; current_detections.len()];
+   let mut tracked_targets = Vec::new();
+   let mut used_detections = vec![false; current_detections.len()];
 
         // 对于每一个之前的跟踪目标，尝试在当前检测中找到匹配
-        for mut target in previous_targets {
-          let mut best_match_index = None;
-          let mut best_distance = f32::MAX;
+       for mut target in previous_targets {
+        let mut best_match_index = None;
+        let mut best_distance = f32::MAX;
 
             // 在当前检测中寻找最近的匹配
-           for (i, detection) in current_detections.iter().enumerate() {
-              if used_detections[i] {
-                   continue;
+          for (i, detection) in current_detections.iter().enumerate() {
+            if used_detections[i] {
+                 continue;
                 }
 
-              let distance = Self::calculate_distance(&target.the_box, &detection.the_box);
-              if distance < best_distance && distance < 1.0 {
-                    // 阈值设为 1 米
-                   best_distance = distance;
-                   best_match_index = Some(i);
+            let distance = Self::calculate_distance(&target.the_box, &detection.the_box);
+            if distance < best_distance && distance < 1.0 {
+                   // 阈值设为 1 米
+                  best_distance = distance;
+                  best_match_index = Some(i);
                 }
             }
 
             // 如果找到了匹配，则更新目标的位置和类型
-          if let Some(index) = best_match_index {
-              let detection = &current_detections[index];
-               target.the_box = detection.the_box.clone();
-                // 保留历史分类信息，稍后用视觉信息修正
-               used_detections[index] = true;
-               tracked_targets.push(target);
+        if let Some(index) = best_match_index {
+            let detection = &current_detections[index];
+              target.the_box = detection.the_box.clone();
+               // 保留历史分类信息，稍后用视觉信息修正
+              used_detections[index] = true;
+              tracked_targets.push(target);
             }
             // 如果没找到匹配，暂时移除该目标（在实际应用中可能需要更复杂的消失处理）
         }
 
         // 为未匹配的检测创建新目标
-       for (i, detection) in current_detections.iter().enumerate() {
-          if !used_detections[i] {
-              let new_target = Target {
-                   the_box: detection.the_box.clone(),
-                  class_type: detection.class_name.clone(),
-                   id: self.next_id,
+      for (i, detection) in current_detections.iter().enumerate() {
+        if !used_detections[i] {
+            let new_target = Target {
+                 the_box: detection.the_box.clone(),
+               class_type: detection.class_name.clone(),
+                  id: self.next_id,
                 };
                 self.next_id += 1;
-               tracked_targets.push(new_target);
+              tracked_targets.push(new_target);
             }
         }
 
         // 第二步：使用视觉信息对分类结果进行修正
-      if !sight_data.is_empty() {
+    if !sight_data.is_empty() {
             // 对每个跟踪目标，使用视线数据进行分类修正
-           for target in tracked_targets.iter_mut() {
-              let mut matched = false;
+          for target in tracked_targets.iter_mut() {
+            let mut matched = false;
 
                 // 检查目标是否与任何视线相交
-               for sight in &sight_data {
-                  if sight.slab(&target.the_box) {
-                        // 如果相交，将其分类修正为"person"
-                       target.class_type = "person".to_string();
-                       matched = true;
-                       break;
+              for sight in &sight_data {
+                if sight.slab(&target.the_box) {
+                       // 如果相交，将其分类修正为"person"
+                      target.class_type = "person".to_string();
+                      matched = true;
+                      break;
                     }
                 }
 
                 // 如果没有匹配到视线，且原分类为空，则标记为"obstacle"
-              if !matched && target.class_type.is_empty() {
-                   target.class_type = "obstacle".to_string();
+            if !matched && target.class_type.is_empty() {
+                  target.class_type = "obstacle".to_string();
                 }
             }
         }
 
         // 将更新后的跟踪结果写入输出流
         {
-        let mut target_guard = self.target.blocking_lock();
+      let mut target_guard = self.target.blocking_lock();
             target_guard.write(tracked_targets)?;
         }
 
