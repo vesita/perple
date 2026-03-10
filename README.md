@@ -17,7 +17,7 @@
 
 ## 目录结构
 
-```
+```file
 .
 ├── examples
 │   ├── image_test.rs
@@ -142,3 +142,4 @@ python scripts/dev/continuous_train.py
 4. libwayland-dev
 5. libasound2-dev
 6. libudev-dev
+7. libblas-dev

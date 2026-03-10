@@ -3,7 +3,7 @@ use std::path::Path;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let file_path = "data/lidar/000000.pcd";
-    
+
     // 检查文件是否存在
     if !Path::new(file_path).exists() {
         println!("错误: 文件 {} 不存在", file_path);
@@ -12,10 +12,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 打开PCD文件
     let mut reader = DynReader::open(file_path)?;
-    
+
     println!("正在读取点云文件: {}", file_path);
     println!("点云数据格式信息:");
-    
+
     // 获取点云的基本信息
     let header = reader.meta();
     println!("  字段: {:?}", header.field_defs.fields);
@@ -24,7 +24,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  高度: {}", header.height);
     println!("  视点信息: {:?}", header.viewpoint);
     println!("  数据存储类型: {:?}", header.data);
-    
+
     // 读取前几个点以查看数据结构
     println!("\n前10个点的数据:");
     for i in 0..10 {

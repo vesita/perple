@@ -4,7 +4,7 @@ use crate::utils::boxes::Box3D;
 pub struct Target {
     pub the_box: Box3D,
     pub class_type: String,
-    pub id: usize,      // 全局id
+    pub id: usize, // 全局id
 }
 
 impl Target {
@@ -15,7 +15,7 @@ impl Target {
             id,
         }
     }
-    
+
     pub fn default() -> Self {
         Self {
             the_box: Box3D::empty_box(),

@@ -1,8 +1,7 @@
 // todo
 // 索引数学组合枚举
 
-
-pub fn combine_all(all: usize, select: usize) -> Vec<Vec<usize>> { 
+pub fn combine_all(all: usize, select: usize) -> Vec<Vec<usize>> {
     let mut result = Vec::new();
     let mut path = Vec::new();
     pick(all, select, &mut path, &mut result);
@@ -22,7 +21,6 @@ fn pick(target: usize, take: usize, path: &mut Vec<usize>, result: &mut Vec<Vec<
     pick(target - 1, take, path, result);
     path.pop();
 }
-
 
 // impl Solution {
 //     pub fn combine(n: i32, k: i32) -> Vec<Vec<i32>> {

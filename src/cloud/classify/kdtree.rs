@@ -49,10 +49,12 @@ impl KdTree {
                 let dim = depth % 3;
                 match point[dim].partial_cmp(&node.point[dim]).unwrap() {
                     Ordering::Less => {
-                        node.left = Self::insert_recursive(node.left.take(), point, index, depth + 1);
+                        node.left =
+                            Self::insert_recursive(node.left.take(), point, index, depth + 1);
                     }
                     _ => {
-                        node.right = Self::insert_recursive(node.right.take(), point, index, depth + 1);
+                        node.right =
+                            Self::insert_recursive(node.right.take(), point, index, depth + 1);
                     }
                 }
                 Some(node)
@@ -82,7 +84,7 @@ impl KdTree {
         if let Some(node) = node {
             // 计算当前点到目标点的距离
             let distance = squared_distance(&node.point, target);
-            
+
             // 更新最佳匹配
             match best {
                 None => *best = Some((node.index, distance)),

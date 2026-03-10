@@ -4,14 +4,19 @@ version = "0.2.0"
 edition = "2024"
 
 [dependencies]
-rand = "*"
+rand = "0.10"
 ort = "=2.0.0-rc.10"
-image = { version = "0.*" }
-ndarray = { version = "0.*", features = ["rayon"] }
-raqote = "0.*"
-pcd-rs = "0.*"
-nalgebra = {version = "0.*", features = ["std"]}
-toml = "0.*"
-serde = { version = "1.*", features = ["derive"] }
-tokio = { version = "1.*", features = ["full"] }
-redra ={ git = "https://github.com/vesita/redra.git", default-features = false, features = ["client"]}
+image = { version = "0.25" }
+ndarray = { version = "0.17", features = ["rayon"] }
+raqote = "0.8"
+pcd-rs = "0.12"
+nalgebra = { version = "0.34", features = ["std"] }
+toml = "0.9"
+serde = { version = "1.0", features = ["derive"] }
+tokio = { version = "1.50", features = ["full"] }
+redra = { git = "https://github.com/vesita/redra.git", default-features = false, features = [
+    "client",
+] }
+log = "0.4"
+env_logger = "0.11"
+ndarray-linalg = { version = "0.18", features = ["openblas-system"] }
