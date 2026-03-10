@@ -91,39 +91,47 @@ impl Lidar {
         }
     }
 
-    pub async fn act(&mut self) -> Result<(), LidarError> {
-        info!("Lidar模块启动");
+   pub fn act(&mut self) -> Result<(), LidarError> {
+       info!("Lidar 模块启动");
         // 先读取并处理输入数据
-        self.read_input().await?;
+        self.read_input()?;
 
         // 创建一个计时器
-        let start = Instant::now();
+      let start = Instant::now();
         // 使用分类器处理数据
-        self.classify.act().await?;
+        self.classify.act()?;
 
         // 计算处理时间
-        let elapsed = start.elapsed().as_millis();
+      let elapsed = start.elapsed().as_millis();
         println!("点云处理耗时：{}ms", elapsed);
         Ok(())
     }
 
-    pub async fn read_input(&mut self) -> Result<(), LidarError> {
-        if let Some(mut data) = self.cream.read().await {
-            for point in &mut data {
-                // 使用转换矩阵将点从雷达坐标系转换到世界坐标系
-                let point_vec = Vector4::new(point[0], point[1], point[2], 1.0);
-                let point_world = self.extrinsic * point_vec;
-                point[0] = point_world.x;
-                point[1] = point_world.y;
-                point[2] = point_world.z;
+   pub fn read_input(&mut self) -> Result<(), LidarError> {
+      let data = {
+          let mut stream = self.cream.in_stream.blocking_lock();
+            match stream.read() {
+                Some(mut data) => {
+                    for point in &mut data {
+                        // 使用转换矩阵将点从雷达坐标系转换到世界坐标系
+                      let point_vec = Vector4::new(point[0], point[1], point[2], 1.0);
+                      let point_world = self.extrinsic * point_vec;
+                        point[0] = point_world.x;
+                        point[1] = point_world.y;
+                        point[2] = point_world.z;
+                    }
+                    data
+                },
+                None => return Err(LidarError::Other("没有数据".to_string())),
             }
+        };
 
-            // 写入处理后的数据到输出流
-            self.cream.write(data).await?;
-            Ok(())
-        } else {
-            return Err(LidarError::Other("没有数据".to_string()));
+        // 写入处理后的数据到输出流
+        {
+          let mut stream = self.cream.out_stream.blocking_lock();
+            stream.write(data)?;
         }
+        Ok(())
     }
 }
 

@@ -128,18 +128,21 @@ impl Color {
     /// 2. 准备模型输入张量
     /// 3. 执行模型推理
     /// 4. 将结果写入输出流
-    pub async fn act(&mut self) -> Result<(), ColorError> {
-        // 从输入流中读取图像
-        let input = match self.cream.read().await {
-            Some(img) => img,
-            None => return Ok(()), // 没有数据可处理，这不是错误
+   pub fn act(&mut self) -> Result<(), ColorError> {
+        // 从输入流中读取图像（使用 blocking_lock 在同步上下文中）
+       let input = {
+           let mut stream = self.cream.in_stream.blocking_lock();
+            match stream.read() {
+                Some(img) => img,
+                None => return Ok(()), // 没有数据可处理，这不是错误
+            }
         };
 
         // 处理图像
         self.message.o_width = input.width();
         self.message.o_height = input.height();
 
-        // 填充tensor value，避免拷贝
+        // 填充 tensor value，避免拷贝
         fill_input_image(
             &input,
             self.model.input_height(),
@@ -148,43 +151,45 @@ impl Color {
         );
 
         // 执行推理并计时
-        let start_time = Instant::now();
+       let start_time = Instant::now();
 
-        // 获取输出流的可变引用并填充数据
-        let mut output_stream = self.cream.out_stream.lock().await;
+        // 获取输出流的引用并填充数据（使用 blocking_lock）
+        {
+           let mut output_stream = self.cream.out_stream.blocking_lock();
 
-        // 获取写入位置的可变引用
-        let write_mut_result = output_stream.get_write_mut();
-        match write_mut_result {
-            Ok(slot) => {
-                // 初始化或获取Vec<ClrBud>对象
-                let bounds = slot.get_or_insert_with(|| Vec::new());
-                bounds.clear(); // 清空之前的数据
+            // 获取写入位置的可变引用
+           let write_mut_result = output_stream.get_write_mut();
+            match write_mut_result {
+                Ok(slot) => {
+                    // 初始化或获取 Vec<ClrBud> 对象
+                   let bounds = slot.get_or_insert_with(|| Vec::new());
+                    bounds.clear(); // 清空之前的数据
 
-                // 执行推理
-                let infer_result = self.model.infer(&self.tensor_value, bounds, &self.message);
-                match infer_result {
-                    Ok(_) => {
-                        // 提交写入操作
-                        output_stream
-                            .commit_write()
-                            .map_err(|e| ColorError::CommitError(format!("{:?}", e)))?;
-                    }
-                    Err(e) => {
-                        eprintln!("推理过程中发生错误: {:?}", e);
-                        // 即使推理出错，也尝试提交写入以保持流的一致性
-                        let _ = output_stream.commit_write();
-                        return Err(ColorError::InferenceError(format!("{:?}", e)));
+                    // 执行推理
+                   let infer_result = self.model.infer(&self.tensor_value, bounds, &self.message);
+                    match infer_result {
+                        Ok(_) => {
+                            // 提交写入操作
+                            output_stream
+                                .commit_write()
+                                .map_err(|e| ColorError::CommitError(format!("{:?}", e)))?;
+                        }
+                        Err(e) => {
+                           eprintln!("推理过程中发生错误：{:?}", e);
+                            // 即使推理出错，也尝试提交写入以保持流的一致性
+                           let _ = output_stream.commit_write();
+                            return Err(ColorError::InferenceError(format!("{:?}", e)));
+                        }
                     }
                 }
+                Err(e) => {
+                    return Err(ColorError::from(e));
+                }
             }
-            Err(e) => {
-                return Err(ColorError::from(e));
-            }
-        }
+        } // 在这里释放 output_stream 锁
 
-        let duration = start_time.elapsed();
-        println!("模型推理耗时: {:?}", duration);
+       let duration = start_time.elapsed();
+        println!("模型推理耗时：{:?}", duration);
         Ok(())
     }
 
