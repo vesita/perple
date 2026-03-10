@@ -9,9 +9,9 @@ ort = "=2.0.0-rc.10"
 image = { version = "0.25" }
 ndarray = { version = "0.17", features = ["rayon"] }
 raqote = "0.8"
-pcd-rs = "0.12"
+pcd-rs = "0.13"
 nalgebra = { version = "0.34", features = ["std"] }
-toml = "0.9"
+toml = "1.1"
 serde = { version = "1.0", features = ["derive"] }
 tokio = { version = "1.50", features = ["full"] }
 redra = { git = "https://github.com/vesita/redra.git", default-features = false, features = [
@@ -20,3 +20,6 @@ redra = { git = "https://github.com/vesita/redra.git", default-features = false,
 log = "0.4"
 env_logger = "0.11"
 ndarray-linalg = { version = "0.18", features = ["openblas-system"] }
+# 卡尔曼滤波库 (本地路径)
+adskalman = { path = "crates/adskalman-rs" }
+approx = "0.5"
