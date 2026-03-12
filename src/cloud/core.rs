@@ -2,7 +2,7 @@ use std::fmt;
 use std::sync::PoisonError;
 use std::time::Instant;
 
-use log::info;
+use log::{error, info};
 use nalgebra::{Matrix4, Vector3, Vector4};
 
 use crate::cloud::classify::core::{Classify, ClassifyError};
@@ -102,12 +102,12 @@ impl Lidar {
         // 使用分类器处理数据
         let classify_result = self.classify.act();
         if let Err(e) = classify_result {
-            eprintln!("点云分类错误：{:?}", e);
+            error!("点云分类错误：{:?}", e);
         }
 
         // 计算处理时间
         let elapsed = start.elapsed().as_millis();
-        println!("点云处理耗时：{}ms", elapsed);
+        info!("点云处理耗时：{}ms", elapsed);
         Ok(())
     }
 

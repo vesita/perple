@@ -1,4 +1,5 @@
 use std::{fs, sync::LazyLock};
+use log::error;
 use serde::{Deserialize, Serialize};
 
 // 调查到一般使用LazyLock和OnceLock替换lazy_static和once_cell
@@ -71,15 +72,15 @@ impl Config {
                 match toml::from_str(&config_str) {
                     Ok(config) => config,
                     Err(e) => {
-                        eprintln!("解析配置文件 {} 失败: {}", config_path, e);
-                        eprintln!("请检查配置文件格式是否正确");
+                        error!("解析配置文件 {} 失败: {}", config_path, e);
+                        error!("请检查配置文件格式是否正确");
                         std::process::exit(1);
                     }
                 }
             },
             Err(e) => {
-                eprintln!("读取配置文件 {} 失败: {}", config_path, e);
-                eprintln!("请确保配置文件存在且路径正确");
+                error!("读取配置文件 {} 失败: {}", config_path, e);
+                error!("请确保配置文件存在且路径正确");
                 std::process::exit(1);
             }
         }

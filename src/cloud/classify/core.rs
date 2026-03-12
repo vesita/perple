@@ -1,3 +1,5 @@
+use log::info;
+
 use crate::{
     cloud::{
         CldBud,
@@ -39,9 +41,9 @@ impl Classify {
         };
 
    let(slice_index, grounds) = single_pick_ground(&mut target);
-       println!("完成地面提取，已过滤{}个点", slice_index);
+       info!("完成地面提取，已过滤{}个点", slice_index);
         // let (slice_index, walls) = pick_wall(&mut target[slice_index..]);
-        // println!("完成墙壁提取，已过滤{}个点", slice_index);
+        // info!("完成墙壁提取，已过滤{}个点", slice_index);
     // 优化：直接传递切片引用，避免不必要的 to_vec() 克隆
    let _ = self.claster.claster(&target[slice_index..]);
    let targets = self.claster.to_cldbuds();

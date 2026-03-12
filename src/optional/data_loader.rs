@@ -1,5 +1,5 @@
 use image::DynamicImage;
-use log::info;
+use log::{error, info};
 use pcd_rs::DynReader;
 use std::collections::HashMap;
 use std::{fs, io, sync::Arc, thread, time::Duration};
@@ -133,15 +133,15 @@ impl DataLoader {
             match load_image(&camera_file) {
                 Ok(image) => {
                     if let Err(StreamError::BufferFull) = clr_stream.write(image) {
-                        eprintln!("警告：颜色流缓冲区已满");
+                        error!("颜色流缓冲区已满");
                     }
                 }
                 Err(e) => {
-                    eprintln!("加载图像 {} 时出错：{}", camera_file, e);
+                    error!("加载图像 {} 时出错：{}", camera_file, e);
                     if let Err(StreamError::BufferFull) =
                         clr_stream.write_direct(|slot| *slot = None)
                     {
-                        eprintln!("警告：写入None时颜色流缓冲区已满");
+                        error!("写入None时颜色流缓冲区已满");
                     }
                 }
             }
@@ -151,15 +151,15 @@ impl DataLoader {
                 Ok(mut reader) => {
                     let lifra = load_cloud(&mut reader);
                     if let Err(StreamError::BufferFull) = cld_stream.write(lifra) {
-                        eprintln!("警告：点云流缓冲区已满");
+                        error!("点云流缓冲区已满");
                     }
                 }
                 Err(e) => {
-                    eprintln!("打开PCD文件 {} 时出错：{}", lidar_file, e);
+                    error!("打开PCD文件 {} 时出错：{}", lidar_file, e);
                     if let Err(StreamError::BufferFull) =
                         cld_stream.write_direct(|slot| *slot = None)
                     {
-                        eprintln!("警告：写入None时点云流缓冲区已满");
+                        error!("写入None时点云流缓冲区已满");
                     }
                 }
             }
@@ -192,15 +192,15 @@ impl DataLoader {
                     match image_result {
                         Ok(image) => {
                             if let Err(StreamError::BufferFull) = clr_stream.write(image) {
-                                eprintln!("警告：颜色流缓冲区已满");
+                                error!("颜色流缓冲区已满");
                             }
                         }
                         Err(e) => {
-                            eprintln!("加载图像 {} 时出错：{}", camera_file, e);
+                            error!("加载图像 {} 时出错：{}", camera_file, e);
                             if let Err(StreamError::BufferFull) =
                                 clr_stream.write_direct(|slot| *slot = None)
                             {
-                                eprintln!("警告：写入None时颜色流缓冲区已满");
+                                error!("写入None时颜色流缓冲区已满");
                             }
                         }
                     }
@@ -211,15 +211,15 @@ impl DataLoader {
                     match cloud_result {
                         Ok(lifra) => {
                             if let Err(StreamError::BufferFull) = cld_stream.write(lifra) {
-                                eprintln!("警告：点云流缓冲区已满");
+                                error!("点云流缓冲区已满");
                             }
                         }
                         Err(e) => {
-                            eprintln!("打开PCD文件 {} 时出错：{}", lidar_file, e);
+                            error!("打开PCD文件 {} 时出错：{}", lidar_file, e);
                             if let Err(StreamError::BufferFull) =
                                 cld_stream.write_direct(|slot| *slot = None)
                             {
-                                eprintln!("警告：写入None时点云流缓冲区已满");
+                                error!("写入None时点云流缓冲区已满");
                             }
                         }
                     }

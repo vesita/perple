@@ -175,7 +175,7 @@ impl Color {
                                 .map_err(|e| ColorError::CommitError(format!("{:?}", e)))?;
                         }
                         Err(e) => {
-                           eprintln!("推理过程中发生错误：{:?}", e);
+                           info!("推理过程中发生错误：{:?}", e);
                             // 即使推理出错，也尝试提交写入以保持流的一致性
                           let _ = output_stream.commit_write();
                             return Err(ColorError::InferenceError(format!("{:?}", e)));
@@ -189,7 +189,7 @@ impl Color {
         } // 在这里释放 output_stream 锁
 
       let duration = start_time.elapsed();
-        println!("模型推理耗时：{:?}", duration);
+        info!("模型推理耗时：{:?}", duration);
         Ok(())
     }
 

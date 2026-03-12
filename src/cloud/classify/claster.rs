@@ -1,3 +1,5 @@
+use log::info;
+
 use super::quadtree::QuadTreeNode;
 use crate::{cloud::CldBud, config::fixif, utils::Box3D};
 use std::collections::{HashMap, HashSet};
@@ -192,7 +194,7 @@ impl Claster {
 
     /// 直接处理整个Vec<[f32; 3]>帧数据
     pub fn claster(&mut self, lifra: &[[f32; 3]]) {
-        println!("开始聚类，共{}个点", lifra.len());
+        info!("开始聚类，共{}个点", lifra.len());
 
         // 清空之前的聚类结果
         self.clear();
@@ -214,7 +216,7 @@ impl Claster {
             }
         }
 
-        println!("下采样后剩余 {} 个点", downsampled_indices.len());
+        info!("下采样后剩余 {} 个点", downsampled_indices.len());
 
         // 创建下采样后的点列表用于聚类
         let downsampled_points: Vec<[f32; 3]> = downsampled_indices
@@ -228,7 +230,7 @@ impl Claster {
         // 执行 DBSCAN 风格的聚类
         self.dbscan_cluster();
 
-        println!("聚类完成，共发现{}个聚类", self.objects.len());
+        info!("聚类完成，共发现{}个聚类", self.objects.len());
     }
 
     // 将聚类结果转换为 CldBud 向量

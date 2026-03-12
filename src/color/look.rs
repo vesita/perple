@@ -7,6 +7,7 @@ use crate::{
     },
 };
 use nalgebra::{Matrix3, Matrix4, Vector2, Vector3};
+use log::error;
 
 pub struct Look {
     pub cream: Cream<Vec<ClrBud>, Vec<Sight>>,
@@ -143,7 +144,7 @@ impl Look {
         {
          let mut stream = self.cream.out_stream.blocking_lock();
           if stream.write(sights).is_err() {
-              eprintln!("写入视线向量到输出流失败");
+              error!("写入视线向量到输出流失败");
             }
         }
     }

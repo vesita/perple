@@ -68,7 +68,7 @@ async fn show_stream_status() -> Result<(), Box<dyn std::error::Error>> {
 
     // 准备异步任务
     let point_task = if let Some(frame) = cloud_in_world_stream.get_at(0) {
-        println!("  点云数据对象数量: {}", frame.len());
+        info!("  点云数据对象数量: {}", frame.len());
         let points = frame.clone();
         drop(cloud_in_world_stream); // 释放锁
         Some(tokio::spawn(async move {
@@ -81,7 +81,7 @@ async fn show_stream_status() -> Result<(), Box<dyn std::error::Error>> {
 
     // 准备3D框发送任务
     let box_task = if let Some(bounds) = cld_objs_stream.get_at(0) {
-        println!("  3D检测结果对象数量: {}", bounds.len());
+        info!("  3D检测结果对象数量: {}", bounds.len());
         let bounds_data = bounds.clone();
         drop(cld_objs_stream); // 释放锁
         Some(tokio::spawn(async move {

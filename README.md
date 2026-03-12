@@ -142,4 +142,4 @@ python scripts/dev/continuous_train.py
 4. libwayland-dev
 5. libasound2-dev
 6. libudev-dev
-7. libblas-dev
+7. libopenblas-dev

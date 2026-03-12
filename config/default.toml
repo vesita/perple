@@ -19,7 +19,7 @@ dbscan_min_points = 3
 
 # 地面检测参数
 default_ground_vector = [0.0, 0.0, 1.0]
-ground_filter_threshold = 0.3
+ground_filter_threshold = 0.2
 ground_cross_product_patience = 3
 ground_sample_test_count = 23
 
