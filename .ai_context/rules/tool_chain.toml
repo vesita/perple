@@ -1,0 +1,64 @@
+# =============================================================================
+# 工具链配置规则
+# 优先级：2
+# =============================================================================
+
+[rule_index]
+id = "tool_001"
+version = "1.0.0"
+rule_order = 2
+category = "development_environment"
+tags = ["tools", "build", "runtime", "version_control"]
+author = "vesita"
+review_date = "2026-03-27"
+depends_on = ["lang_001"]
+optional = false
+scope_override = false
+
+# -----------------------------------------------------------------------------
+# 基础开发工具
+# -----------------------------------------------------------------------------
+[basic_tools]
+ide = "VS Code"
+version_control = "Git"
+terminal = "bash"
+
+# -----------------------------------------------------------------------------
+# 语言版本和工具链
+# -----------------------------------------------------------------------------
+[language.rust]
+version = "1.92.0"
+edition = "2024"
+toolchain = "stable"
+
+[language.python]
+version = "3.8+"
+environment_manager = "uv"
+config_file = "pyproject.toml"
+
+# -----------------------------------------------------------------------------
+# 构建和运行命令
+# -----------------------------------------------------------------------------
+[commands]
+rust_build_debug = "cargo build"
+rust_build_release = "cargo build --release"
+rust_test = "cargo test --all"
+rust_format = "cargo fmt --all"
+rust_lint = "cargo clippy -- -D warnings"
+
+python_run = "uv run python"
+python_install = "uv pip install"
+python_sync = "uv sync"
+python_format = "black ."
+
+# -----------------------------------------------------------------------------
+# 环境检测
+# -----------------------------------------------------------------------------
+[environment_checks]
+rust_required = true
+python_required = true
+git_required = true
+
+# -----------------------------------------------------------------------------
+# 规则应用范围（使用全局 scope，此处不重复定义）
+# -----------------------------------------------------------------------------
