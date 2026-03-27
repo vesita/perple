@@ -1,0 +1,149 @@
+# ============================================================================
+# Git 提交规范 - 定义 commit message 的格式和语言规范
+# ============================================================================
+# 📌 定位：示例规则插件 (演示如何扩展规则系统)
+# 优先级：P4 | mandatory: false (建议遵守，允许例外)
+# 依赖：lang_001 (语言偏好 - commit message 使用中文)
+# 
+# 💡 用途：
+#   - 作为教学示例展示如何创建新的规则插件
+#   - 可根据项目需要启用或禁用
+#   - 不是核心规则的一部分
+# ============================================================================
+
+rule_index:
+  id: "git_001"
+  category: "development_workflow"
+  plugin: true                   # 标记为插件规则
+  enabled: true                 # 默认不启用，需手动开启
+  depends_on: ["lang_001"]
+
+# 📝 Commit Message 基本格式
+# 格式：<type>(<scope>): <subject>
+# 示例：feat(tracker): 集成卡尔曼滤波库并升级依赖版本
+commit_format:
+  # 单行格式 (推荐保持在 50 字符以内，最多不超过 72 字符)
+  single_line:
+    enabled: true
+    max_length: 72
+    recommended_length: 50
+  
+  # 多行格式 (可选，用于详细说明)
+  multi_line:
+    enabled: true
+    separator: "空行分隔"          # body 与 subject 之间用空行分隔
+    line_length: 72                # 每行最多 72 字符
+
+# 🏷️ Commit Type 类型定义
+commit_types:
+  # 主要类型
+  feat: "新功能 (feature)"
+  fix: "修复 bug"
+  docs: "文档更新 (documentation)"
+  style: "代码格式调整 (不影响代码运行)"
+  refactor: "代码重构 (既不是新功能也不是 bug 修复)"
+  perf: "性能优化 (performance)"
+  test: "添加或修改测试"
+  chore: "构建过程或辅助工具变动"
+  
+  # 特殊类型
+  revert: "回滚之前的提交"
+  merge: "合并分支"
+  ci: "CI/CD 配置更新"
+  build: "构建系统或外部依赖变动"
+
+# 🎯 Scope 范围定义 (可选)
+# 用于标识改动涉及的模块或组件
+scopes:
+  - "tracker"           # 追踪器模块
+  - "cloud"             # 点云处理模块
+  - "color"             # 颜色检测模块
+  - "config"            # 配置模块
+  - "utils"             # 工具函数
+  - "deps"              # 依赖管理
+  - "ci"                # 持续集成
+  - "docs"              # 文档
+  - "ui"                # 用户界面 (如果有)
+
+# 🗣️ 语言规范
+language:
+  # Subject(主题行) 语言
+  subject_language: "Chinese"      # 遵循 lang_001
+  imperative_mood: true            # 使用祈使句语气
+  
+  # 示例:
+  # ✅ 正确："添加卡尔曼滤波器" (祈使句)
+  # ❌ 错误："添加了卡尔曼滤波器" (完成时)
+  # ❌ 错误："Adding Kalman Filter" (英文)
+
+# 📋 Body 和 Footer (可选)
+body_and_footer:
+  # Body: 详细描述为什么做这个改动 (是什么问题，而不是做了什么)
+  body_required: false             # 不强制要求，但建议复杂改动添加
+  body_language: "Chinese"
+  
+  # Footer: 引用 issue、破坏性变更说明等
+  footer_keywords:
+    - "Closes"                      # 关闭 issue
+    - "Fixes"                       # 修复 issue
+    - "Refs"                        # 引用 issue
+    - "BREAKING CHANGE"             # 破坏性变更
+  
+  # 示例:
+  # Fixes: #123
+  # BREAKING CHANGE: API 接口签名变更
+
+# ✨ 完整示例
+examples:
+  # 简单提交 (单行)
+  simple:
+    - "feat(tracker): 集成卡尔曼滤波库"
+    - "fix(cloud): 修复点云分类错误"
+    - "docs: 更新快速指南"
+    - "refactor(utils): 简化排序逻辑"
+  
+  # 详细提交 (带 body 和 footer)
+  detailed: |
+    feat(tracker): 集成卡尔曼滤波库并升级依赖版本
+    
+    - 将 pcd-rs 从 0.12 升级到 0.13
+    - 将 toml 从 0.9 升级到 1.1
+    - 添加 adskalman 本地依赖（卡尔曼滤波库）
+    - 添加 approx 0.5 依赖
+    - 新增 crates/adskalman-rs 子目录
+    
+    Closes: #45
+    BREAKING CHANGE: Tracker API 需要更新参数
+
+# ⚠️ 常见错误示例
+common_mistakes:
+  invalid:
+    - "更新了代码"                    # ❌ 太模糊，没有 type 和 scope
+    - "feat: 修复了一个 bug"         # ❌ type 和实际内容不符
+    - "Fixed some bugs"               # ❌ 使用了英文
+    - "feat(tracker): 添加了新功能"   # ❌ 描述过于笼统
+    - "fix: 修改了 tracker 模块的一些问题，然后还优化了性能，顺便重构了代码"  # ❌ 一次提交做了太多事
+  
+  valid:
+    - "feat(tracker): 集成卡尔曼滤波库"
+    - "fix(tracker): 修复目标丢失问题"
+    - "perf(tracker): 优化预测算法性能"
+
+# 💡 应用提示
+# ────────────────────────────────────────
+# ✅ 推荐做法:
+#   1. 一次提交只做一件事
+#   2. 使用清晰的 type 和 scope
+#   3. Subject 用祈使句、中文、简洁明了
+#   4. 复杂改动在 body 中说明原因
+#   5. 相关 issue 在 footer 中引用
+# 
+# 🛠️ 工具辅助 (可选):
+#   - commitlint: commit message 检查工具
+#   - cz-cli: Commitizen 交互式提交工具
+#   - gitmoji: emoji commit 规范 (可选)
+# 
+# ⚠️ 注意:
+#   - 这是建议性规范 (mandatory: false)
+#   - 紧急修复可以简化格式
+#   - 合并提交等特殊场景可以例外

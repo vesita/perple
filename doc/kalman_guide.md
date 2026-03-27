@@ -110,21 +110,30 @@ let mut kf = KalmanFilterWrapper::new(config)?;
 
 ### 3. 在 Tracker 中的应用
 
+在 `Tracker` 模块中，每个跟踪的目标都包含一个 `KalmanFilterWrapper` 实例：
+
 ```rust
 use perple::tracker::Tracker;
 
 // 创建跟踪器
 let mut tracker = Tracker::new();
 
+// 配置参数（可选）
+tracker.set_association_threshold(2.0);
+tracker.set_max_disappeared(10);
+tracker.set_min_confidence(0.3);
+
 // 运行跟踪循环
 loop {
     // 读取点云检测结果
     // 执行数据关联
     // 更新卡尔曼滤波器
-    tracker.run()?;
+    if let Err(e) = tracker.run() {
+        eprintln!("跟踪器运行错误：{}", e);
+    }
     
     // 获取跟踪结果
-    let targets = tracker.get_tracked_objects();
+    let targets = tracker.get_tracked_ids();
 }
 ```
 
@@ -217,6 +226,33 @@ kf.set_dt(new_dt);
 kf.reset();  // 回到初始零状态
 ```
 
+### 不确定性评估
+
+```rust
+// 获取位置和速度的不确定性（标准差）
+let pos_uncertainty = kf.get_position_uncertainty();
+let vel_uncertainty = kf.get_velocity_uncertainty();
+
+println!(
+    "位置不确定性：({:.4}, {:.4}, {:.4})",
+    pos_uncertainty.x, pos_uncertainty.y, pos_uncertainty.z
+);
+```
+
+### 新息分析
+
+```rust
+// 计算新息（测量残差）
+let innovation = kf.get_innovation(measurement);
+
+// 计算归一化新息平方 (NIS) 用于卡方检验
+let nis = kf.normalized_innovation_squared(measurement);
+
+if nis > threshold {
+    println!("检测到异常测量！");
+}
+```
+
 ## 性能指标
 
 ### 延迟
@@ -263,13 +299,26 @@ kf.reset();  // 回到初始零状态
 ### 运行示例
 
 ```bash
-cargo run --example kalman_filter
+cargo test --package perple --lib tracker::kalman
 ```
 
-### 单元测试
+### 单元测试示例
 
-```bash
-cargo test --package perple --lib tracker::kalman
+```rust
+#[test]
+fn test_predict_step() {
+    let mut kf = KalmanFilterWrapper::new(KalmanConfig::default()).unwrap();
+    let position = Vector3::new(1.0, 0.0, 0.0);
+    let velocity = Some(Vector3::new(1.0, 0.0, 0.0));
+    kf.init_with_state(position, velocity);
+    
+    // 预测一步
+    kf.predict().unwrap();
+    
+    let pos = kf.get_position();
+    // x = x0 + vx * dt = 1.0 + 1.0 * 0.1 = 1.1
+    assert_relative_eq!(pos.x, 1.1, epsilon = 1e-10);
+}
 ```
 
 ## 参考资料

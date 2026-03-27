@@ -1,0 +1,88 @@
+# ============================================================================
+# AI 协作规则配置 - 主入口文件
+# ============================================================================
+# 用途：定义 AI 助手的行为准则和代码规范
+# 维护者：项目团队
+# 最后更新：2026-03-27
+# ============================================================================
+
+# 📊 元数据
+meta:
+  version: "1.1.0"
+  description: "AI 协作规则配置"
+  last_updated: "2026-03-27"
+
+# 🎯 核心规则 (必须遵守)
+# ────────────────────────────────────────
+# 这些是基础规则，所有项目都必须遵守
+# ────────────────────────────────────────
+core_rules:
+  - { order: 1, file: "normal_language.yaml", name: "语言偏好", mandatory: true }
+  - { order: 2, file: "tool_chain.yaml",     name: "工具链配置", mandatory: true }
+  - { order: 3, file: "preference.yaml",     name: "格式偏好", mandatory: false }
+
+# 🔌 扩展规则插件 (可选加载)
+# ────────────────────────────────────────
+# 这些是可选的规则插件，根据项目需要启用
+# 添加新插件：在此处注册，并在 prompt/rules/ 创建对应文件
+# ────────────────────────────────────────
+plugins:
+  # 📘 示例插件：Git 提交规范 (用作教学示范)
+  - { order: 4, file: "git_commit.yaml", name: "Git 提交规范", enabled: false, category: "example" }
+  
+  # ────────────────────────────────────────
+  # 新增插件模板:
+  # - { order: 5, file: "your_rule.yaml", name: "规则名称", enabled: false, category: "your_category" }
+  # ────────────────────────────────────────
+
+# 🌍 作用域配置
+scope:
+  includes:
+    - "*.rs"
+    - "*.py"
+    - "*.md"
+    - "*.toml"
+    - "*.yaml"
+    - "*.json"
+  
+  excludes:
+    - "vendor/"
+    - "target/"
+    - "node_modules/"
+    - "generated/"
+    - "**/test_data/**"
+
+# ⚖️ 冲突解决原则
+conflict_resolution:
+  priority_first: true           # order 小的优先
+  mandatory_first: true          # mandatory:true 优先
+  specific_over_general: true    # 具体规则优先
+
+# 💡 快速指南
+# ────────────────────────────────────────
+# 应用流程:
+#   1. 检查 scope → 排除的文件跳过规则
+#   2. 应用 core_rules (按 order 顺序)
+#   3. 应用启用的 plugins (按 order 顺序)
+# 
+# 添加新规则插件:
+#   1. 在 prompt/rules/ 创建 YAML 文件
+#   2. 在 plugins 列表中注册
+#   3. 设置 enabled: true 启用
+# 
+# 子规则文件模板:
+#   ```yaml
+#   rule_index:
+#     id: "xxx_001"
+#     category: "your_category"
+#     mandatory: true/false
+#     depends_on: ["依赖的规则 id"]
+#   
+#   # 规则内容...
+#   ```
+# 
+# 设计哲学:
+#   - 核心规则保持最小化 (仅必要的基础规范)
+#   - 通过插件系统灵活扩展
+#   - git_commit.yaml 作为示例插件展示如何扩展
+# ────────────────────────────────────────
