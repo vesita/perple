@@ -16,13 +16,23 @@ format:
   doc_format: "Markdown"
   config_format: "TOML"
 
+# 🔗 文档中的路径规范
+path_conventions:
+  # 文档中引用其他文件时应使用相对路径
+  use_relative_paths: true
+  # 相对路径的基准：项目根目录
+  relative_to: "project_root"
+
 # ⚠️ 代码风格提示
 tips:
   markdown_minimal_warnings: true
   markdown_syntax_shooting_tool: "markdownlint"
   rust_auto_fix_warnings: true
   python_pep8_compliant: true
-  change_without_doc: true
+  # 编辑完成后是否需要生成文档
+  change_with_doc: false
+  # 文档风格：保持客观简洁，避免说教和鼓吹式内容
+  doc_no_preaching: true
 
 # 🏷️ 命名规范
 naming_conventions:

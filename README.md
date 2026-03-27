@@ -2,23 +2,24 @@
 
 ## 项目介绍
 
-本项目是一个基于 Rust 实现的相机与雷达多模态障碍物检测系统。
+本项目是一个基于 Rust 实现的相机与雷达多模态障碍物检测系统，采用常速模型 (Constant Velocity Model) 卡尔曼滤波进行多目标跟踪。
 
 开发于 Linux 环境
 
 ### 项目特点
 
 - **高性能数据处理**: 使用 Rust 实现图像和点云数据的高效处理
-- **卡尔曼滤波跟踪**: 基于 adskalman 库实现常速模型的多目标跟踪
+- **卡尔曼滤波跟踪**: 基于 `adskalman` 库实现常速模型的多目标跟踪
 - **灵活训练控制**: Python 脚本提供灵活的训练流程控制
 - **持续训练机制**: 自动化的训练 - 评估 - 归档闭环，解决数据增强导致的初期性能波动问题
 - **多模态融合**: 同时支持图像和 LiDAR 点云数据处理及融合
 - **模型导出**: 支持将训练好的模型导出为 ONNX 格式便于部署
 - **可视化工具**: 使用 rerun 进行 3D 数据可视化
+- **配置管理**: 支持 TOML 格式的全量和增量配置更新
 
 ## 目录结构
 
-```file
+```
 .
 ├── config
 │   ├── default.toml
@@ -128,58 +129,88 @@
 
 基于 YOLO 模型的图像目标检测模块：
 
-- **model.rs**: ONNX 模型加载
-- **image.rs**: 图像预处理和加载
-- **detect.rs**: YOLO 检测器实现
-- **output.rs**: 检测结果输出容器
-- **utils.rs**: 可视化和后处理工具
-- **core.rs**: 核心检测逻辑
-- **look.rs**: 视觉分析功能
+- **model.rs**: ONNX(Open Neural Network Exchange) 模型加载和推理引擎封装
+- **image.rs**: 图像预处理和加载（包括缩放、归一化等）
+- **detect.rs**: YOLO 检测器实现（包含置信度阈值和 NMS 后处理）
+- **output.rs**: 检测结果输出容器 `ClrBud`（固定容量，避免动态内存分配）
+- **utils.rs**: 可视化和后处理工具（边界框绘制、坐标转换）
+- **core.rs**: 核心检测逻辑（整合各组件）
+- **look.rs**: 视觉分析功能（场景理解、统计信息）
 
 ### 2. Cloud 模块 (`src/cloud/`)
 
 LiDAR 点云数据处理模块：
 
-- **core.rs**: 点云数据核心处理
-- **classify/**: 点云分类子模块（包含聚类、KD-Tree、四叉树等）
-- **output.rs**: 点云检测结果输出
+- **core.rs**: 点云数据核心处理（PCD 格式读取、无效点过滤）
+- **classify/**: 点云分类子模块
+  - **claster.rs**: DBSCAN 聚类算法实现（基于距离阈值和最小点数）
+  - **core.rs**: 分类核心逻辑（类别判定、置信度计算）
+  - **environment.rs**: 环境分析（地面检测、空间结构分析）
+  - **kdtree.rs**: KD-Tree 空间索引（快速近邻搜索）
+  - **quadtree.rs**: 四叉树空间索引（平面区域分割）
+  - **somecode.rs**: 辅助代码和工具函数
+- **output.rs**: 点云检测结果输出容器 `CldBud`（存储 3D 边界框）
 
 ### 3. Tracker 模块 (`src/tracker/`)
 
-多目标跟踪模块：
+多目标跟踪模块，基于卡尔曼滤波的数据关联和轨迹管理：
 
-- **core.rs**: 跟踪器核心逻辑，数据关联和轨迹管理
-- **kalman.rs**: 卡尔曼滤波器实现（常速模型）
-- **output.rs**: 跟踪结果输出
+- **core.rs**: 跟踪器核心逻辑
+  - 数据关联（匈牙利算法或最近邻匹配）
+  - 轨迹管理（创建、更新、删除）
+  - 失踪目标处理（最大失踪帧数控制）
+  - 置信度门控（过滤低置信度检测）
+- **kalman.rs**: 卡尔曼滤波器实现
+  - 常速运动模型 (Constant Velocity Model)
+  - 6 维状态向量 `[x, y, z, vx, vy, vz]ᵀ`
+  - 位置观测模型
+  - 协方差管理和数值稳定性优化
+- **output.rs**: 跟踪结果输出容器 `Target`（包含轨迹 ID、估计状态、不确定性）
 
 ### 4. Utils 模块 (`src/utils/`)
 
-通用工具函数：
+通用工具函数和数据结构：
 
 - **boxes.rs**: 2D/3D 边界框定义
+  - `Box2D`: 二维边界框（图像检测）
+  - `Box3D`: 三维边界框（点云检测），支持体积、面积、IoU 计算
 - **stream.rs**: 数据流管理
-- **muloop.rs**: 多循环模式支持
-- **sight.rs**: 视线检测
-- **sort.rs**: 排序算法
-- 其他工具函数
+  - `Stream<T>`: 固定容量的循环缓冲区
+  - `Eap`: 早期访问协议 trait
+- **muloop.rs**: 多循环模式支持（多传感器同步）
+- **random.rs**: 随机数生成工具
+- **sight.rs**: 视线检测（可见性判断）
+- **sort.rs**: 排序算法（按置信度、距离等）
+- **combine.rs**: 多模态融合工具
+- **world.rs**: 世界坐标系管理
 
 ### 5. Config 模块 (`src/config.rs`)
 
 配置管理系统：
 
-- 支持 TOML 格式配置
-- 全量配置加载和增量更新
-- 全局配置单例访问
+- 支持 TOML 格式配置文件
+- **全量配置加载**: 从 `config/default.toml` 加载完整配置
+- **增量配置更新**: 运行时通过增量文件更新部分配置项
+- **全局配置单例**: 通过 `fixif()` 函数访问（懒加载、线程安全）
+- **支持的配置项**:
+  - 基础配置（流容量、分辨率、类别标签）
+  - 目标检测参数（置信度阈值、NMS 阈值、模型路径）
+  - DBSCAN 聚类参数（最小点数、距离阈值）
+  - 地面检测参数（法向量、过滤阈值）
+  - 相机内参和外参矩阵
+  - 雷达外参矩阵
+  - 点云聚类参数（合并耐心值、体素大小）
 
 ## 环境搭建与部署
 
 ### 必需工具
 
-- Rust toolchain (edition 2024)
-- Python 3.8+
-- pip / pip-tools
-- ONNX Runtime
-- PyTorch
+- **Rust toolchain**: 版本 1.92.0+, Edition 2024, stable 通道
+- **Python**: 3.8+
+- **uv**: Python 环境管理工具
+- **ONNX Runtime**: 模型推理引擎
+- **PyTorch**: 模型训练框架
+- **Git**: 版本控制
 
 ### 安装步骤
 
@@ -209,27 +240,48 @@ LiDAR 点云数据处理模块：
 
 ### 构建项目
 
-```bash
-# 开发构建
+```
+# 开发构建（调试模式）
 cargo build
+
+# 发布构建（优化模式）
+cargo build --release
+
+# 运行测试
+cargo test --all
+
+# 代码格式化检查
+cargo fmt --all
+
+# 代码 lint 检查
+cargo clippy -- -D warnings
 ```
 
 ### 配置 Python 环境
 
-```bash
+```
+# 同步依赖（创建虚拟环境并安装依赖）
 uv sync
+
+# 运行 Python 脚本
+uv run python scripts/dev/train.py
 ```
 
 ### 运行示例
 
-```bash
-# 运行示例程序
+```
+# 运行 Rust 示例程序
 cargo run --example lidar_reader
 cargo run --example muloop_example
+cargo run --example visualize
 
 # 运行 Python 训练脚本
-python scripts/dev/train.py
-python scripts/dev/continuous_train.py
+uv run python scripts/dev/train.py
+uv run python scripts/dev/continuous_train.py
+uv run python scripts/dev/eval.py
+
+# 模型导出为 ONNX
+uv run python scripts/dev/to_onnx.py
 ```
 
 ## 需要预先安装的依赖包
