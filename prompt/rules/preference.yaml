@@ -1,0 +1,74 @@
+# ============================================================================
+# 格式偏好规则 - 定义代码和文档的格式规范
+# ============================================================================
+# 优先级：P2 (低) | mandatory: false (建议遵守，允许例外)
+# 依赖：tool_001 (工具链配置)
+# ============================================================================
+
+rule_index:
+  id: "fmt_001"
+  category: "formatting"
+  mandatory: false
+  depends_on: ["tool_001"]
+
+# 📄 文档和配置格式
+format:
+  doc_format: "Markdown"
+  config_format: "TOML"
+
+# 🔗 文档中的路径规范
+path_conventions:
+  # 文档中引用其他文件时应使用相对路径
+  use_relative_paths: true
+  # 相对路径的基准：项目根目录
+  relative_to: "project_root"
+
+# ⚠️ 代码风格提示
+tips:
+  markdown_minimal_warnings: true
+  markdown_syntax_shooting_tool: "markdownlint"
+  rust_auto_fix_warnings: true
+  python_pep8_compliant: true
+  # 编辑完成后是否需要生成文档
+  change_with_doc: false
+  # 文档风格：保持客观简洁，避免说教和鼓吹式内容
+  doc_no_preaching: true
+
+# 🏷️ 命名规范
+naming_conventions:
+  # Rust 命名
+  rust_variables: "snake_case"
+  rust_structs: "PascalCase"
+  rust_traits: "PascalCase"
+  rust_functions: "snake_case"
+  rust_modules: "snake_case"
+  
+  # Python 命名
+  python_variables: "snake_case"
+  python_classes: "PascalCase"
+  python_constants: "UPPER_CASE"
+  python_functions: "snake_case"
+  python_modules: "snake_case"
+
+# 📦 文件组织
+file_organization:
+  max_file_length_lines: 500
+  prefer_small_modules: true
+  one_class_per_file: false
+
+# 🔧 外部格式化配置引用
+external_configs:
+  rust_formatter: ".rustfmt.toml"
+  python_formatter: "pyproject.toml"
+  markdown_linter: ".markdownlint.json"
+
+# 💡 应用提示
+# ────────────────────────────────────────
+# ✅ 建议遵循，但允许例外情况：
+#   - 如果为了性能优化需要长文件，可以超过 500 行
+#   - 如果多个相关类在一个文件中更清晰，可以 one_class_per_file: false
+#   - 如果是自动生成的代码，可以忽略命名规范
+# 
+# ⚠️ 与高优先级规则冲突时：
+#   - 服从 lang_001 (语言偏好) → 注释必须用中文
+#   - 服从 tool_001 (工具链) → 使用指定的格式化工具
