@@ -7,6 +7,7 @@ use crate::{
     cloud::CldBud,
     swapl::global_swapl,
     tracker::{
+        hungarian::hungarian,
         kalman::{KalmanConfig, KalmanFilterWrapper},
         output::Target,
     },
@@ -49,7 +50,7 @@ impl std::fmt::Display for TrackerError {
         match self {
             TrackerError::StreamError(e) => write!(f, "流错误：{}", e),
             TrackerError::PoisonError(e) => write!(f, "线程锁中毒：{}", e),
-            TrackerError::KalmanError(e) => write!(f, "卡尔曼滤波错误：{}", e),
+            TrackerError::KalmanError(e) => write!(f, "卡尔曼滤波错误：{:?}", e),
             TrackerError::AssociationError(e) => write!(f, "数据关联错误：{}", e),
         }
     }
@@ -57,34 +58,31 @@ impl std::fmt::Display for TrackerError {
 
 impl std::error::Error for TrackerError {}
 
+/// 目标分类
+#[derive(Debug, Clone, PartialEq)]
+enum TargetClass {
+    Unknown,
+    Static,
+    Dynamic,
+    Movable,
+}
+
 /// 跟踪目标信息（包含卡尔曼滤波器）
 struct TrackedObject {
-    /// 目标唯一 ID（保留用于未来扩展）
-    #[allow(dead_code)]
     id: usize,
-    /// 目标类型
     class_type: String,
-    /// 最后可见时间
     last_seen: SystemTime,
-    /// 连续丢失的帧数
     disappeared_count: u32,
-    /// 置信度
     confidence: f32,
-    /// 卡尔曼滤波器
     kalman_filter: KalmanFilterWrapper,
+    velocity_history: Vec<[f32; 3]>,
+    classification: TargetClass,
+    classification_history: Vec<TargetClass>,
+    /// 关联时缓存最近的检测框，避免输出阶段二次搜索
+    last_box: Option<Box3D>,
 }
 
 impl TrackedObject {
-    /// 创建新的跟踪对象实例
-    /// 
-    /// # 参数
-    /// * `id` - 目标唯一标识符
-    /// * `initial_box` - 初始 3D 边界框
-    /// * `class_type` - 目标类型
-    /// * `confidence` - 置信度
-    /// 
-    /// # 返回值
-    /// 返回初始化后的 TrackedObject 实例，包含配置好的卡尔曼滤波器
     fn new(
         id: usize,
         initial_box: &Box3D,
@@ -92,14 +90,11 @@ impl TrackedObject {
         confidence: f32,
     ) -> Result<Self, adskalman::Error> {
         let mut kalman_filter = KalmanFilterWrapper::new(KalmanConfig::default())?;
-        
-        // 从边界盒中心提取初始位置
         let center = initial_box.center();
-        let position = Vector3::new(center.x as f64, center.y as f64, center.z as f64);
-        
-        // 初始化卡尔曼滤波器状态
-        kalman_filter.init_with_state(position, None);
-        
+        kalman_filter.init_with_state(
+            Vector3::new(center.x as f64, center.y as f64, center.z as f64),
+            None,
+        );
         Ok(Self {
             id,
             class_type,
@@ -107,16 +102,20 @@ impl TrackedObject {
             disappeared_count: 0,
             confidence,
             kalman_filter,
+            velocity_history: Vec::with_capacity(10),
+            classification: TargetClass::Unknown,
+            classification_history: Vec::with_capacity(10),
+            last_box: Some(initial_box.clone()),
         })
     }
-    
-    /// 更新目标状态
-    /// 
-    /// # 参数
-    /// * `new_box` - 新的 3D 边界框
-    /// * `new_class_type` - 新的目标类型
-    /// * `new_confidence` - 新的置信度
-    fn update(
+
+    /// 预测：将状态前推 dt 秒
+    fn predict(&mut self, dt: f64) -> Result<(), adskalman::Error> {
+        self.kalman_filter.predict(dt)
+    }
+
+    /// 修正：用观测值校正状态（不含预测）
+    fn correct(
         &mut self,
         new_box: &Box3D,
         new_class_type: String,
@@ -124,82 +123,71 @@ impl TrackedObject {
     ) -> Result<(), adskalman::Error> {
         let center = new_box.center();
         let measurement = Vector3::new(center.x as f64, center.y as f64, center.z as f64);
-        
-        // 使用卡尔曼滤波更新状态
-        self.kalman_filter.update(measurement)?;
-        
-        // 更新其他属性
+        self.kalman_filter.correct(measurement)?;
+
+        // 记录速度用于聚类
+        let v = self.kalman_filter.get_velocity();
+        if self.velocity_history.len() >= 10 {
+            self.velocity_history.remove(0);
+        }
+        self.velocity_history.push([v.x as f32, v.y as f32, v.z as f32]);
+
         self.class_type = new_class_type;
         self.confidence = new_confidence;
         self.last_seen = SystemTime::now();
         self.disappeared_count = 0;
-        
+        self.last_box = Some(new_box.clone());
         Ok(())
     }
-    
-    /// 预测目标的下一位置
-    fn predict(&mut self) -> Result<(), adskalman::Error> {
-        self.kalman_filter.predict()?;
+
+    /// 帧增长（未匹配时调用）
+    fn on_missed(&mut self) {
         self.disappeared_count += 1;
-        Ok(())
     }
-    
-    /// 获取预测的位置
-    fn get_predicted_position(&self) -> (f32, f32, f32) {
-        let pos = self.kalman_filter.get_position();
-        (pos.x as f32, pos.y as f32, pos.z as f32)
-    }
-    
-    /// 检查目标是否应该被移除
+
     fn is_permanently_lost(&self, max_disappeared: u32) -> bool {
         self.disappeared_count >= max_disappeared
     }
+
+    /// 获取 Kalman 估计速度（取最近几帧平滑值）
+    fn smoothed_velocity(&self) -> [f32; 3] {
+        let v = self.kalman_filter.get_velocity();
+        if self.velocity_history.is_empty() {
+            return [v.x as f32, v.y as f32, v.z as f32];
+        }
+        // 历史均值与当前 Kalman 速度混合（50/50）
+        let mut avg = [0.0f32; 3];
+        for hv in &self.velocity_history {
+            avg[0] += hv[0];
+            avg[1] += hv[1];
+            avg[2] += hv[2];
+        }
+        let n = self.velocity_history.len() as f32;
+        [
+            0.5 * (v.x as f32) + 0.5 * avg[0] / n,
+            0.5 * (v.y as f32) + 0.5 * avg[1] / n,
+            0.5 * (v.z as f32) + 0.5 * avg[2] / n,
+        ]
+    }
+
+    fn speed(&self) -> f32 {
+        let v = self.smoothed_velocity();
+        (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
+    }
 }
 
-/// 主跟踪器类
-/// 
-/// 负责多目标跟踪，包括：
-/// - 数据关联（将检测与现有轨迹匹配）
-/// - 状态估计（使用卡尔曼滤波）
-/// - 轨迹管理（创建、更新、删除轨迹）
-/// 
-/// # 示例
-/// ```rust,no_run
-/// use crate::tracker::core::Tracker;
-/// 
-/// let mut tracker = Tracker::new();
-/// // 设置自定义参数
-/// // tracker.set_association_threshold(2.0);
-/// // tracker.set_max_disappeared(10);
-/// 
-/// // 在主循环中调用
-/// loop {
-///     if let Err(e) = tracker.run() {
-///         eprintln!("跟踪器运行错误：{}", e);
-///     }
-/// }
-/// ```
+/// 主跟踪器
 pub struct Tracker {
-    /// 视线数据流
     sight: Eap<Stream<Vec<Sight>>>,
-    /// 3D 检测结果流
     tar3d: Eap<Stream<Vec<CldBud>>>,
-    /// 跟踪输出流
     target: Eap<Stream<Vec<Target>>>,
-    /// 下一个可用的目标 ID
     next_id: usize,
-    /// 已跟踪的目标集合
     tracked_objects: HashMap<usize, TrackedObject>,
-    /// 目标在被认为永久消失前可以丢失的最大帧数
     max_disappeared: u32,
-    /// 匹配距离阈值（米）
-    association_threshold: f32,
-    /// 最小检测置信度
     min_confidence: f32,
 }
 
 impl Tracker {
-    /// 创建新的跟踪器实例
     pub fn new() -> Self {
         let swapl = global_swapl();
         Self {
@@ -208,133 +196,205 @@ impl Tracker {
             target: swapl.targets.clone(),
             next_id: 1,
             tracked_objects: HashMap::new(),
-            max_disappeared: 5,           // 5 帧未出现则认为消失
-            association_threshold: 1.5,   // 1.5 米匹配阈值
-            min_confidence: 0.3,          // 最小置信度 0.3
+            max_disappeared: 5,
+            min_confidence: 0.3,
         }
     }
 
-    /// 设置匹配距离阈值（米）
-    pub fn set_association_threshold(&mut self, threshold: f32) {
-        self.association_threshold = threshold;
-    }
-
-    /// 设置最大消失帧数
     pub fn set_max_disappeared(&mut self, max: u32) {
         self.max_disappeared = max;
     }
 
-    /// 设置最小检测置信度
     pub fn set_min_confidence(&mut self, confidence: f32) {
         self.min_confidence = confidence;
     }
 
-    /// 计算两个 3D 边界框之间的距离（保留用于未来扩展）
-    #[allow(dead_code)]
-    fn calculate_distance(box1: &Box3D, box2: &Box3D) -> f32 {
-        let center1 = box1.center();
-        let center2 = box2.center();
+    /// 马氏距离门控阈值
+    ///
+    /// χ²(3) 在 α=0.05 时阈值为 7.815
+    /// sqrt(7.815) ≈ 2.795 用于距离比较
+    const MAHALANOBIS_THRESHOLD: f64 = 2.796;
 
-        let dx = center1.x - center2.x;
-        let dy = center1.y - center2.y;
-        let dz = center1.z - center2.z;
-
-        (dx * dx + dy * dy + dz * dz).sqrt()
-    }
-
-    /// 匈牙利算法进行数据关联（简化版本）
-    /// 
-    /// # 参数
-    /// * `predictions` - 预测位置列表
-    /// * `detections` - 检测位置列表
-    /// 
-    /// # 返回值
-    /// 返回匹配对 (prediction_index, detection_index) 和未匹配的 detections
+    /// 马氏距离关联（匈牙利算法最优指派）
     fn associate(
-        predictions: &[(f32, f32, f32)],
+        objects: &HashMap<usize, TrackedObject>,
         detections: &[CldBud],
-        threshold: f32,
     ) -> (Vec<(usize, usize)>, Vec<usize>) {
-        let mut matches = Vec::new();
-        let mut used_detections = vec![false; detections.len()];
-        let mut used_predictions = vec![false; predictions.len()];
+        let n_objects = objects.len();
+        let n_detections = detections.len();
 
-        // 贪心匹配（可以用匈牙利算法优化）
-        for (pred_idx, pred_pos) in predictions.iter().enumerate() {
-            let mut best_match_idx = None;
-            let mut best_distance = f32::MAX;
+        if n_objects == 0 || n_detections == 0 {
+            return (Vec::new(), (0..n_detections).collect());
+        }
 
-            for (det_idx, detection) in detections.iter().enumerate() {
-                if used_detections[det_idx] {
-                    continue;
+        let obj_ids: Vec<usize> = objects.keys().copied().collect();
+
+        // 构建代价矩阵：马氏距离，超门限的标记为 INF
+        let mut cost = vec![vec![f64::MAX; n_detections]; n_objects];
+        for (obj_idx, &obj_id) in obj_ids.iter().enumerate() {
+            let obj = &objects[&obj_id];
+            for (det_idx, det) in detections.iter().enumerate() {
+                let center = det.the_box.center();
+                let meas = Vector3::new(center.x as f64, center.y as f64, center.z as f64);
+                let dist = obj.kalman_filter.mahalanobis_distance(meas);
+                if dist < Self::MAHALANOBIS_THRESHOLD {
+                    cost[obj_idx][det_idx] = dist;
                 }
-
-                let det_center = detection.the_box.center();
-                let distance = ((pred_pos.0 - det_center.x).powi(2)
-                    + (pred_pos.1 - det_center.y).powi(2)
-                    + (pred_pos.2 - det_center.z).powi(2))
-                .sqrt();
-
-                if distance < best_distance && distance < threshold {
-                    best_distance = distance;
-                    best_match_idx = Some(det_idx);
-                }
-            }
-
-            if let Some(match_idx) = best_match_idx {
-                matches.push((pred_idx, match_idx));
-                used_predictions[pred_idx] = true;
-                used_detections[match_idx] = true;
             }
         }
 
-        // 收集未匹配的 detections
-        let unmatched_detections: Vec<usize> = used_detections
-            .iter()
-            .enumerate()
-            .filter(|&(_, &used)| !used)
-            .map(|(idx, _)| idx)
+        // 匈牙利最优指派
+        let assignment = hungarian(&cost);
+
+        // 提取匹配结果
+        let mut used_det = vec![false; n_detections];
+        let mut matches = Vec::new();
+
+        for (obj_idx, &det_idx) in assignment.iter().enumerate() {
+            if det_idx < n_detections && cost[obj_idx][det_idx] < f64::MAX / 2.0 {
+                matches.push((obj_idx, det_idx));
+                used_det[det_idx] = true;
+            }
+        }
+
+        let unmatched: Vec<usize> = (0..n_detections)
+            .filter(|&i| !used_det[i])
             .collect();
 
-        (matches, unmatched_detections)
+        (matches, unmatched)
     }
 
-    /// 使用视觉信息修正分类
-    /// 
-    /// # 参数
-    /// * `target` - 要修正的目标
-    /// * `sight_data` - 视线数据
-    fn refine_classification_with_sight(
-        target: &mut Target,
-        sight_data: &[Sight],
-    ) {
+    /// 速度空间聚类分类
+    ///
+    /// 所有目标在 LiDAR 帧中跟踪，自车运动导致静态目标呈现相同速度（-v_car）。
+    /// 找到最大速度簇 → 标记为 Static，偏离者 → Dynamic/Movable。
+    fn classify_by_velocity(objects: &mut HashMap<usize, TrackedObject>) {
+        if objects.is_empty() {
+            return;
+        }
+
+        let ids: Vec<usize> = objects.keys().copied().collect();
+        let n = ids.len();
+        if n < 2 {
+            // 只有一个目标，通过绝对速度判断
+            let obj = objects.get_mut(&ids[0]).unwrap();
+            let spd = obj.speed();
+            if spd < 0.3 {
+                set_classification(obj, TargetClass::Static);
+            } else {
+                set_classification(obj, TargetClass::Dynamic);
+            }
+            return;
+        }
+
+        // 收集所有速度向量
+        let velocities: Vec<[f32; 3]> = ids.iter().map(|id| objects[id].smoothed_velocity()).collect();
+
+        // DBSCAN 简化版：ε = 0.3 m/s，min_pts = 2
+        let eps = 0.3f32;
+        let min_pts = 2;
+
+        // 计算每个点的邻居数
+        let mut neighbor_counts = vec![0; n];
+        let mut clusters: Vec<Vec<usize>> = Vec::new();
+        let mut assigned = vec![false; n];
+
+        for i in 0..n {
+            for j in 0..n {
+                if i == j { continue; }
+                let d = ((velocities[i][0] - velocities[j][0]).powi(2)
+                    + (velocities[i][1] - velocities[j][1]).powi(2)
+                    + (velocities[i][2] - velocities[j][2]).powi(2))
+                .sqrt();
+                if d < eps {
+                    neighbor_counts[i] += 1;
+                }
+            }
+        }
+
+        // 构建簇：从每个未分配的 core 点开始
+        for i in 0..n {
+            if assigned[i] { continue; }
+            if neighbor_counts[i] < min_pts { continue; } // noise
+
+            // 新簇
+            let mut cluster = Vec::new();
+            let mut stack = vec![i];
+            assigned[i] = true;
+
+            while let Some(idx) = stack.pop() {
+                cluster.push(idx);
+                for j in 0..n {
+                    if assigned[j] { continue; }
+                    let d = ((velocities[idx][0] - velocities[j][0]).powi(2)
+                        + (velocities[idx][1] - velocities[j][1]).powi(2)
+                        + (velocities[idx][2] - velocities[j][2]).powi(2))
+                    .sqrt();
+                    if d < eps {
+                        assigned[j] = true;
+                        stack.push(j);
+                    }
+                }
+            }
+            clusters.push(cluster);
+        }
+
+        // 未分配的点 = noise
+        let noise: Vec<usize> = (0..n).filter(|&i| !assigned[i]).collect();
+
+        // 找到最大簇 → Static
+        if let Some(largest) = clusters.iter().max_by_key(|c| c.len()) {
+            let largest_set: std::collections::HashSet<usize> = largest.iter().copied().collect();
+            for (pos, id) in ids.iter().enumerate() {
+                if let Some(obj) = objects.get_mut(id) {
+                    if largest_set.contains(&pos) {
+                        set_classification(obj, TargetClass::Static);
+                    } else if noise.contains(&pos) {
+                        let spd = obj.speed();
+                        if spd > 0.5 {
+                            set_classification(obj, TargetClass::Dynamic);
+                        } else {
+                            set_classification(obj, TargetClass::Movable);
+                        }
+                    } else {
+                        // 属于非最大簇
+                        let spd = obj.speed();
+                        if spd > 0.5 {
+                            set_classification(obj, TargetClass::Dynamic);
+                        } else {
+                            set_classification(obj, TargetClass::Movable);
+                        }
+                    }
+                }
+            }
+        } else {
+            // 没有形成簇，全部是 noise
+            for id in &ids {
+                if let Some(obj) = objects.get_mut(id) {
+                    let spd = obj.speed();
+                    if spd > 0.5 {
+                        set_classification(obj, TargetClass::Dynamic);
+                    } else {
+                        set_classification(obj, TargetClass::Static);
+                    }
+                }
+            }
+        }
+    }
+
+    fn refine_classification_with_sight(target: &mut Target, sight_data: &[Sight]) {
         for sight in sight_data {
             if sight.slab(&target.the_box) {
-                // 如果与视线相交，分类为"person"
                 target.class_type = "person".to_string();
                 return;
             }
         }
-
-        // 如果没有匹配到视线且原分类为空，标记为"obstacle"
         if target.class_type.is_empty() {
             target.class_type = "obstacle".to_string();
         }
     }
 
-    /// 主跟踪循环
-    /// 
-    /// 执行以下步骤：
-    /// 1. 读取最新检测结果
-    /// 2. 对所有活跃轨迹进行预测
-    /// 3. 数据关联（匹配预测与检测）
-    /// 4. 更新匹配轨迹的状态
-    /// 5. 创建新轨迹
-    /// 6. 处理消失的轨迹
-    /// 7. 使用视觉信息修正分类
-    /// 8. 输出跟踪结果
     pub fn run(&mut self) -> Result<(), TrackerError> {
-        // 读取最新的 3D 目标检测结果
         let current_detections = {
             let mut tar3d_guard = self.tar3d.blocking_lock();
             match tar3d_guard.read() {
@@ -345,7 +405,6 @@ impl Tracker {
             }
         };
 
-        // 读取视线数据用于分类修正
         let sight_data = {
             let mut sight_guard = self.sight.blocking_lock();
             match sight_guard.read() {
@@ -354,64 +413,73 @@ impl Tracker {
             }
         };
 
-        // 步骤 1: 对所有现有轨迹进行预测
-        for tracked_obj in self.tracked_objects.values_mut() {
-            tracked_obj.predict()?;
+        let now = SystemTime::now();
+
+        // 步骤 1: 对所有轨迹做预测
+        for obj in self.tracked_objects.values_mut() {
+            let dt = now.duration_since(obj.last_seen)
+                .unwrap_or_default()
+                .as_secs_f64();
+            // 限幅：最大 1s，最小 1ms
+            let dt = dt.clamp(0.001, 1.0);
+            obj.predict(dt)?;
         }
 
-        // 步骤 2: 准备预测位置用于关联
-        let predictions: Vec<(f32, f32, f32)> = self.tracked_objects
-            .values()
-            .map(|obj| obj.get_predicted_position())
-            .collect();
-
-        // 步骤 3: 数据关联
+        // 步骤 2: 关联
         let (matches, unmatched_detections) = Self::associate(
-            &predictions,
+            &self.tracked_objects,
             &current_detections,
-            self.association_threshold,
         );
 
-        // 步骤 4: 更新匹配的轨迹
-        let mut tracked_ids: Vec<usize> = Vec::new();
-        for (pred_idx, det_idx) in matches {
-            let tracked_id: usize = self.tracked_objects.keys().nth(pred_idx).copied().unwrap();
-            let detection = &current_detections[det_idx];
-            
-            if let Some(tracked_obj) = self.tracked_objects.get_mut(&tracked_id) {
-                tracked_obj.update(
+        // 步骤 3: 更新匹配的轨迹（只修正，不预测）
+        let mut updated_ids: Vec<usize> = Vec::new();
+        for (obj_idx, det_idx) in &matches {
+            let obj_id: usize = self.tracked_objects.keys().nth(*obj_idx).copied().unwrap();
+            let detection = &current_detections[*det_idx];
+            if let Some(obj) = self.tracked_objects.get_mut(&obj_id) {
+                obj.correct(
                     &detection.the_box,
                     detection.class_name.clone(),
                     detection.confidence,
                 )?;
-                
-                tracked_ids.push(tracked_id);
+                updated_ids.push(obj_id);
             }
         }
 
-        // 步骤 5: 为未匹配的检测创建新轨迹
+        // 步骤 4: 创建新轨迹
         for det_idx in unmatched_detections {
             let detection = &current_detections[det_idx];
             let new_id = self.next_id;
             self.next_id += 1;
-
             match TrackedObject::new(
                 new_id,
                 &detection.the_box,
                 detection.class_name.clone(),
                 detection.confidence,
             ) {
-                Ok(new_object) => {
-                    self.tracked_objects.insert(new_id, new_object);
-                    tracked_ids.push(new_id);
+                Ok(obj) => {
+                    self.tracked_objects.insert(new_id, obj);
+                    updated_ids.push(new_id);
                 }
                 Err(e) => {
-                    eprintln!("创建新跟踪对象失败：{}", e);
+                    eprintln!("创建新跟踪对象失败：{:?}", e);
                 }
             }
         }
 
-        // 步骤 6: 移除永久消失的轨迹
+        // 步骤 5: 未匹配的轨迹标记丢失
+        let matched_obj_indices: std::collections::HashSet<usize> =
+            matches.iter().map(|(oi, _)| *oi).collect();
+        let all_ids: Vec<usize> = self.tracked_objects.keys().copied().collect();
+        for (idx, obj_id) in all_ids.iter().enumerate() {
+            if !matched_obj_indices.contains(&idx) {
+                if let Some(obj) = self.tracked_objects.get_mut(obj_id) {
+                    obj.on_missed();
+                }
+            }
+        }
+
+        // 步骤 6: 移除永久丢失的轨迹
         self.tracked_objects.retain(|id, obj| {
             if obj.is_permanently_lost(self.max_disappeared) {
                 eprintln!("移除消失的目标 ID: {}, 丢失帧数：{}", id, obj.disappeared_count);
@@ -421,52 +489,52 @@ impl Tracker {
             }
         });
 
-        // 步骤 7: 生成输出并应用视觉分类修正
+        // 步骤 7: 速度聚类分类
+        Self::classify_by_velocity(&mut self.tracked_objects);
+
+        // 步骤 8: 生成输出
         let mut output_targets = Vec::new();
-        for tracked_id in tracked_ids {
-            if let Some(tracked_obj) = self.tracked_objects.get(&tracked_id) {
-                // 获取预测位置
-                let pos = tracked_obj.kalman_filter.get_position();
-                
-                // 使用原始检测的尺寸（这里取第一个匹配的检测或使用默认值）
-                let default_box = Box3D::empty_box();
-                let reference_box = current_detections
-                    .iter()
-                    .find(|d| {
-                        let center = d.the_box.center();
-                        ((center.x as f64 - pos.x).powi(2) 
-                            + (center.y as f64 - pos.y).powi(2) 
-                            + (center.z as f64 - pos.z).powi(2)).sqrt() < 1.0
-                    })
-                    .map(|d| &d.the_box)
-                    .unwrap_or(&default_box);
-                
-                // 创建新的 Box3D，使用预测的位置和参考尺寸
+        for tracked_id in &updated_ids {
+            if let Some(obj) = self.tracked_objects.get(tracked_id) {
+                let pos = obj.kalman_filter.get_position();
+                let vel = obj.smoothed_velocity();
+                let spd = obj.speed();
+
+                let ref_box = obj.last_box.as_ref().cloned().unwrap_or_else(Box3D::empty_box);
                 let mut predicted_box = Box3D::from_position_and_angles(
                     pos.x as f32,
                     pos.y as f32,
                     pos.z as f32,
-                    0.0, 0.0, 0.0,  // 无旋转
-                    reference_box.length,
-                    reference_box.width,
-                    reference_box.height,
+                    0.0, 0.0, 0.0,
+                    ref_box.length,
+                    ref_box.width,
+                    ref_box.height,
                 );
-                predicted_box.pose = reference_box.pose; // 保留原始朝向
-                
-                let mut target = Target {
-                    the_box: predicted_box,
-                    class_type: tracked_obj.class_type.clone(),
-                    id: tracked_id,
+                predicted_box.pose = ref_box.pose;
+
+                let class_str = match obj.classification {
+                    TargetClass::Static => "static",
+                    TargetClass::Dynamic => "dynamic",
+                    TargetClass::Movable => "movable",
+                    TargetClass::Unknown => "unknown",
                 };
 
-                // 使用视觉信息修正分类
-                Self::refine_classification_with_sight(&mut target, &sight_data);
+                let mut target = Target {
+                    the_box: predicted_box,
+                    class_type: obj.class_type.clone(),
+                    id: *tracked_id,
+                    velocity: vel,
+                    speed: spd,
+                    is_dynamic: obj.classification == TargetClass::Dynamic,
+                    classification: class_str.to_string(),
+                };
 
+                Self::refine_classification_with_sight(&mut target, &sight_data);
                 output_targets.push(target);
             }
         }
 
-        // 步骤 8: 写入输出流
+        // 步骤 9: 写入输出
         {
             let mut target_guard = self.target.blocking_lock();
             target_guard.write(output_targets)?;
@@ -475,17 +543,14 @@ impl Tracker {
         Ok(())
     }
 
-    /// 获取当前跟踪的目标数量
     pub fn get_tracking_count(&self) -> usize {
         self.tracked_objects.len()
     }
 
-    /// 获取所有跟踪的目标 ID
     pub fn get_tracked_ids(&self) -> Vec<usize> {
         self.tracked_objects.keys().copied().collect()
     }
 
-    /// 清除所有跟踪目标
     pub fn clear(&mut self) {
         self.tracked_objects.clear();
     }
@@ -495,4 +560,27 @@ impl Default for Tracker {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// 设置分类并维护历史
+fn set_classification(obj: &mut TrackedObject, class: TargetClass) {
+    obj.classification_history.push(class.clone());
+    if obj.classification_history.len() > 5 {
+        obj.classification_history.remove(0);
+    }
+    // 多数投票平滑
+    let static_count = obj.classification_history.iter().filter(|c| **c == TargetClass::Static).count();
+    let dynamic_count = obj.classification_history.iter().filter(|c| **c == TargetClass::Dynamic).count();
+    let movable_count = obj.classification_history.iter().filter(|c| **c == TargetClass::Movable).count();
+
+    let total = obj.classification_history.len();
+    // 需要 > 60% 一致才切换
+    if static_count as f64 > total as f64 * 0.6 {
+        obj.classification = TargetClass::Static;
+    } else if dynamic_count as f64 > total as f64 * 0.6 {
+        obj.classification = TargetClass::Dynamic;
+    } else if movable_count as f64 > total as f64 * 0.6 {
+        obj.classification = TargetClass::Movable;
+    }
+    // 否则保持之前分类
 }

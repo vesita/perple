@@ -1,105 +1,143 @@
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
 
+use perple::cloud::core::Lidar;
 use perple::optional::data_loader::DataLoader;
-use perple::perple::Perple;
+use perple::tracker::core::Tracker;
 use perple::swapl::global_swapl;
+use perple::tracker::output::Target;
 
-use redra_client::*;
-use tokio;
-use tokio::time::sleep;
+use expto::rdmp::auto::unit::generate_unit;
 
 use log::info;
+use redra_client::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::from_default_env()
-        .filter_level(log::LevelFilter::Info)  // 设置默认日志级别为Info
+        .filter_level(log::LevelFilter::Info)
         .init();
     info!("Perple可视化演示");
-    let mut data_loader = DataLoader::new("./data/test".to_string());
 
-    // 首先加载数据
+    let mut data_loader = DataLoader::new("./data/test".to_string());
     let _ = data_loader.load().await;
 
-    let mut perple = Perple::new();
+    let lidar = Arc::new(Mutex::new(Lidar::new()));
+    let tracker = Arc::new(Mutex::new(Tracker::new()));
 
-    // 启动Perple处理流程
-    let _ = perple.run().await;
+    // 逐帧同步处理（在 blocking 线程中执行同步的 act/run）
+    for i in 0..2 {
+        info!("处理第 {} 帧...", i + 1);
 
-    // 增加等待时间，让数据处理流程有足够时间运行
-    info!("等待数据处理完成...");
-    // 给数据处理模块足够的时间来处理数据
-    let _ = sleep(Duration::from_secs(5)).await;
+        let l = Arc::clone(&lidar);
+        tokio::task::spawn_blocking(move || {
+            let _ = l.lock().unwrap().act();
+        })
+        .await
+        .map_err(|e| format!("lidar任务失败: {}", e))?;
 
-    // 显示流状态并等待发送完成
-    show_stream_status().await?;
+        let t = Arc::clone(&tracker);
+        tokio::task::spawn_blocking(move || {
+            let _ = t.lock().unwrap().run();
+        })
+        .await
+        .map_err(|e| format!("tracker任务失败: {}", e))?;
 
-    // 再等待一段时间，确保所有数据都已处理
-    info!("再次等待数据处理完成...");
-    let _ = sleep(Duration::from_secs(5)).await;
-    
-    // 再次检查流状态
-    show_stream_status().await?;
+        send_visualization().await?;
+    }
 
     Ok(())
 }
 
-async fn send_points_async(points: Vec<[f32; 3]>) {
-    for point in points {
-        let _ = send_point(point[0], point[2], point[1]).await;
-    }
-}
-
-async fn send_boxes_async(boxes: Vec<perple::cloud::CldBud>) {
-    for bound in boxes {
-        let edges = bound.the_box.edges_z_up();
-        for edge in edges {
-            let _ = send_segment(edge[0], edge[1]).await;
-        }
-    }
-}
-
-async fn show_stream_status() -> Result<(), Box<dyn std::error::Error>> {
+async fn send_visualization() -> Result<(), Box<dyn std::error::Error>> {
     let swapl = global_swapl();
 
-    let cloud_in_world_stream = swapl.cloud_in_world.lock().await;
-
-    let cld_objs_stream = swapl.cld_objs.lock().await;
-
-    // 准备异步任务
-    let point_task = if let Some(frame) = cloud_in_world_stream.get_at(0) {
+    // ── 点云 ──
+    let cloud_stream = swapl.clouds_out.lock().await;
+    if let Some(frame) = cloud_stream.peek_latest() {
         println!("  点云数据对象数量: {}", frame.len());
-        let points = frame.clone();
-        drop(cloud_in_world_stream); // 释放锁
-        Some(tokio::spawn(async move {
-            send_points_async(points).await;
-        }))
-    } else {
-        drop(cloud_in_world_stream);
-        None
-    };
+        let _ = send_point_cloud(&frame).await;
+    }
+    drop(cloud_stream);
 
-    // 准备3D框发送任务
-    let box_task = if let Some(bounds) = cld_objs_stream.get_at(0) {
-        println!("  3D检测结果对象数量: {}", bounds.len());
-        let bounds_data = bounds.clone();
-        drop(cld_objs_stream); // 释放锁
-        Some(tokio::spawn(async move {
-            send_boxes_async(bounds_data).await;
-        }))
-    } else {
-        drop(cld_objs_stream);
-        None
-    };
+    // ── 跟踪目标 ──
+    let target_stream = swapl.targets.lock().await;
+    if let Some(targets) = target_stream.peek_latest() {
+        println!("  跟踪目标数量: {}", targets.len());
+        send_target_boxes(&targets).await?;
+        send_speed_arrows(&targets).await?;
+    }
+    drop(target_stream);
 
-    // 等待所有异步任务完成
-    if let Some(task) = point_task {
-        let _ = task.await;
+    Ok(())
+}
+
+/// 发送带分类颜色的目标包围盒
+async fn send_target_boxes(targets: &[Target]) -> Result<(), Box<dyn std::error::Error>> {
+    let mut unit = generate_unit();
+    const BASE_ID: u64 = 1_000_000;
+
+    for (i, target) in targets.iter().enumerate() {
+        let entity_id = BASE_ID + (i as u64) * 4;
+
+        let verts = target.the_box.vertices();
+        let points: Vec<Point> = verts.iter()
+            .map(|v| Point { x: v.x, y: v.y, z: v.z })
+            .collect();
+
+        // AABB 中心
+        let mut min = [f32::MAX, f32::MAX, f32::MAX];
+        let mut max = [f32::MIN, f32::MIN, f32::MIN];
+        for p in &points {
+            min[0] = min[0].min(p.x); min[1] = min[1].min(p.y); min[2] = min[2].min(p.z);
+            max[0] = max[0].max(p.x); max[1] = max[1].max(p.y); max[2] = max[2].max(p.z);
+        }
+        if min[0] == f32::MAX {
+            continue;
+        }
+        let cx = (min[0] + max[0]) / 2.0;
+        let cy = (min[1] + max[1]) / 2.0;
+        let cz = (min[2] + max[2]) / 2.0;
+
+        let material_id = match target.classification.as_str() {
+            "dynamic" => "red",
+            "static" => "green",
+            "movable" => "yellow",
+            _ => "metal",
+        };
+
+        unit.objects.extend(vec![
+            ExObject::from(entity_id),
+            ExObject::from(ExMesh::from(Cube { vertices: points })),
+            ExObject::from(ExTransform {
+                x: cx, y: cy, z: cz,
+                rx: 0.0, ry: 0.0, rz: 0.0,
+                sx: 1.0, sy: 1.0, sz: 1.0,
+            }),
+            ExObject { u_object: Some(ex_object::UObject::MaterialId(material_id.to_string())) },
+        ]);
     }
 
-    if let Some(task) = box_task {
-        let _ = task.await;
+    if !unit.objects.is_empty() {
+        unit.send().await?;
     }
+    Ok(())
+}
 
+/// 为高速目标绘制速度方向线
+async fn send_speed_arrows(targets: &[Target]) -> Result<(), Box<dyn std::error::Error>> {
+    for target in targets {
+        if target.speed > 0.5 {
+            let center = target.the_box.center();
+            let scale = (target.speed * 2.0).min(10.0);
+            let dx = target.velocity[0] / target.speed * scale;
+            let dy = target.velocity[1] / target.speed * scale;
+            let dz = target.velocity[2] / target.speed * scale;
+
+            send_line(
+                center.x, center.y, center.z,
+                center.x + dx, center.y + dy, center.z + dz,
+            ).await?;
+        }
+    }
     Ok(())
 }

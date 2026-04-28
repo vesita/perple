@@ -5,6 +5,7 @@ pub mod random;
 pub mod sight;
 pub mod sort;
 pub mod stream;
-pub mod world;
+
 
 pub use boxes::*;
+pub use random::limit_points;

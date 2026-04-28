@@ -40,6 +40,24 @@ impl Box2D {
     pub fn is_valid(&self) -> bool {
         self.width() > 0.0 && self.height() > 0.0
     }
+
+    /// 计算与另一个 2D 框的 IoU（交并比）
+    pub fn iou(&self, other: &Self) -> f32 {
+        let inter_x1 = self.x1.max(other.x1);
+        let inter_y1 = self.y1.max(other.y1);
+        let inter_x2 = self.x2.min(other.x2);
+        let inter_y2 = self.y2.min(other.y2);
+
+        let inter_w = (inter_x2 - inter_x1).max(0.0);
+        let inter_h = (inter_y2 - inter_y1).max(0.0);
+        let inter_area = inter_w * inter_h;
+
+        let self_area = self.area();
+        let other_area = other.area();
+        let union_area = self_area + other_area - inter_area;
+
+        if union_area <= 0.0 { 0.0 } else { inter_area / union_area }
+    }
 }
 
 /// 2D目标检测结果
@@ -266,9 +284,14 @@ impl Box3D {
         self.height = f32::MAX; // 在Z方向上无限延伸
     }
 
-    /// 获取包围盒的中心点
-    pub fn center(&self) -> Point3<f32> {
-        Point3::new(self.pose[(0, 3)], self.pose[(1, 3)], self.pose[(2, 3)])
+    /// 获取包围盒中心点（世界坐标系）
+    pub fn center(&self) -> Vector3<f32> {
+        Vector3::new(self.pose[(0, 3)], self.pose[(1, 3)], self.pose[(2, 3)])
+    }
+
+    /// 获取包围盒尺寸（长、宽、高）
+    pub fn shape(&self) -> Vector3<f32> {
+        Vector3::new(self.length, self.width, self.height)
     }
 
     pub fn center_single(&self) -> [f32; 3] {

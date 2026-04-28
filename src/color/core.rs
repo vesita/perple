@@ -1,6 +1,5 @@
 use image::DynamicImage;
 use log::info;
-use nalgebra::{Matrix4, Vector3};
 use std::fmt;
 use std::sync::{Arc, PoisonError};
 use std::time::Instant;
@@ -10,7 +9,7 @@ use crate::color::{YoloDetector, fill_input_image};
 use crate::config::fixif;
 use crate::swapl::global_swapl;
 use crate::utils::stream::{Cream, Eap, Stream, StreamError};
-use crate::utils::world::OnWorld;
+
 use ort::value::{Tensor, TensorValueType, Value};
 
 /// Color模块的错误类型
@@ -246,23 +245,5 @@ impl Camera {
       self.data.act()?;
       self.look.act();
         Ok(())
-    }
-}
-
-impl OnWorld for Camera {
-    fn on_world(&self) -> Matrix4<f32> {
-        self.look.extrinsic
-    }
-
-    fn set_by_angle(&mut self, tra: Vector3<f32>, rot: Vector3<f32>) {
-        self.look.set_by_angle(tra, rot);
-    }
-
-    fn set_by_radian(&mut self, tra: Vector3<f32>, rot: Vector3<f32>) {
-        self.look.set_by_radians(tra, rot);
-    }
-
-    fn set_by_matrix(&mut self, matrix: &Matrix4<f32>) {
-        self.look.extrinsic = *matrix;
     }
 }

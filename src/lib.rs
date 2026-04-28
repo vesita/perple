@@ -1,6 +1,7 @@
 pub mod utils;
 pub mod color;
 pub mod cloud;
+pub mod fuse;
 pub mod perple;
 pub mod tracker;
 pub mod config;

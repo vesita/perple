@@ -182,7 +182,7 @@ impl Sight {
 
         // 计算视线到中心点的距离
         let to_center = center - self.origin;
-        let projection_length = to_center.coords.dot(&self.direction);
+        let projection_length = to_center.dot(&self.direction);
 
         // 如果投影长度为负，说明中心点在视线的反方向上
         if projection_length < 0.0 {
@@ -193,7 +193,7 @@ impl Sight {
         let closest_point = self.origin + self.direction * projection_length;
 
         // 计算距离
-        let distance = (center - closest_point).coords.magnitude();
+        let distance = (center - closest_point).magnitude();
 
         distance < threshold
     }

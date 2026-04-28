@@ -26,18 +26,17 @@ pub struct Config {
     // 点云聚类参数移到claster配置中
     pub claster: ClasterConfig,
 
-    // 地面检测参数
-    pub default_ground_vector: [f32; 3],
-    pub ground_filter_threshold: f32,
-    pub ground_cross_product_patience: f32,
-    pub ground_sample_test_count: usize,
+    // 地面检测参数（直方图种子 + RANSAC 平面拟合生长）
+    pub ground_expand: f32,
+    pub ground_ransac_distance: f32,
+    pub ground_ransac_iterations: usize,
+    pub upside_down: bool,
+    pub has_ceiling: bool,
 
     // 模型路径配置
     pub model_path: String,
 
     pub camera: CameraConfig,
-
-    pub lidar: LidarConfig,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -57,10 +56,6 @@ pub struct CameraConfig {
     pub extrinsic: [[f32; 4]; 4],
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct LidarConfig {
-    pub extrinsic: [[f32; 4]; 4],
-}
 
 impl Config {
     pub fn new() -> Self {
@@ -131,10 +126,11 @@ impl Config {
         update_field!(dbscan_min_points);
         update_field!(model_path);
 
-        update_field!(default_ground_vector);
-        update_field!(ground_filter_threshold);
-        update_field!(ground_cross_product_patience);
-        update_field!(ground_sample_test_count);
+        update_field!(ground_expand);
+        update_field!(ground_ransac_distance);
+        update_field!(ground_ransac_iterations);
+        update_field!(upside_down);
+        update_field!(has_ceiling);
 
         // 使用新的宏来更新claster配置
         update_claster_field!(merge_patience);
@@ -144,7 +140,6 @@ impl Config {
 
         update_nested_field!(camera, intrinsic);
         update_nested_field!(camera, extrinsic);
-        update_nested_field!(lidar, extrinsic);
 
         Ok(())
     }
@@ -177,26 +172,20 @@ struct PartialConfig {
 
     pub claster: Option<PartialClasterConfig>,
 
-    pub default_ground_vector: Option<[f32; 3]>,
-    pub ground_filter_threshold: Option<f32>,
-    pub ground_cross_product_patience: Option<f32>,
-    pub ground_sample_test_count: Option<usize>,
+    pub ground_expand: Option<f32>,
+    pub ground_ransac_distance: Option<f32>,
+    pub ground_ransac_iterations: Option<usize>,
+    pub upside_down: Option<bool>,
+    pub has_ceiling: Option<bool>,
 
     pub model_path: Option<String>,
 
     pub camera: Option<PartialCameraConfig>,
-
-    pub lidar: Option<PartialLidarConfig>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 struct PartialCameraConfig {
     pub intrinsic: Option<[[f32; 3]; 3]>,
-    pub extrinsic: Option<[[f32; 4]; 4]>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct PartialLidarConfig {
     pub extrinsic: Option<[[f32; 4]; 4]>,
 }
 

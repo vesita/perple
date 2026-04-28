@@ -22,7 +22,7 @@ impl Classify {
         let swapl = global_swapl();
         Self {
             cream: Cream {
-                in_stream: swapl.cloud_in_world.clone(),
+                in_stream: swapl.clouds_out.clone(),
                 out_stream: swapl.cld_objs.clone(),
             },
             claster: Claster::new(),

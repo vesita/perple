@@ -1,5 +1,5 @@
 use image::DynamicImage;
-use log::{error, info, warn};
+use log::{error, info};
 use pcd_rs::DynReader;
 use std::collections::HashMap;
 use std::{fs, io, sync::Arc, thread, time::Duration};
@@ -7,7 +7,7 @@ use std::{fs, io, sync::Arc, thread, time::Duration};
 use crate::{
     color::load_image,
     swapl::global_swapl,
-    utils::stream::{Eap, Stream, StreamError},
+    utils::stream::{Eap, Stream},
 };
 
 pub fn load_cloud<R>(reader: &mut DynReader<R>) -> Vec<[f32; 3]>
@@ -41,6 +41,9 @@ pub struct DataLoader {
     pcd_path: Option<String>,
 
     files: Vec<Vec<String>>,
+
+    /// 最多加载多少帧（文件对数），None 表示不限
+    frame_limit: Option<usize>,
 }
 
 impl DataLoader {
@@ -60,6 +63,7 @@ impl DataLoader {
             image_path: None,
             pcd_path: None,
             files,
+            frame_limit: None,
         }
     }
 
@@ -79,7 +83,39 @@ impl DataLoader {
             image_path: Some(image_path),
             pcd_path: Some(pcd_path),
             files,
+            frame_limit: None,
         }
+    }
+
+    /// 设置最多加载多少帧（文件对数），超过则截断
+    pub fn set_frame_limit(&mut self, limit: usize) -> &mut Self {
+        self.frame_limit = Some(limit);
+        self
+    }
+
+    /// 按比例设置帧数（0.1 = 加载 10% 的文件）
+    pub fn set_frame_ratio(&mut self, ratio: f32) -> &mut Self {
+        if self.files.is_empty() {
+            // 尚未列出文件时先取整
+            self.frame_limit = Some(ratio as usize);
+            return self;
+        }
+        let n = (self.files.len() as f32 * ratio).round() as usize;
+        self.frame_limit = Some(n.max(1));
+        self
+    }
+
+    /// 均匀下采样点云到最多 `max_count` 个点
+    pub fn downsample(&self, points: &[[f32; 3]], max_count: usize) -> Vec<[f32; 3]> {
+        if points.len() <= max_count {
+            return points.to_vec();
+        }
+        let step = (points.len() / max_count).max(1);
+        points.iter()
+            .enumerate()
+            .filter(|(i, _)| i % step == 0)
+            .map(|(_, p)| *p)
+            .collect()
     }
 
     /// 列出目标路径中的所有文件
@@ -213,8 +249,10 @@ impl DataLoader {
         info!("开始加载数据...");
         if self.files.is_empty() {
             self.files = self.list_files()?;
+            self.apply_frame_limit();
         }
 
+        let mut loaded = 0usize;
         for file_pair in &self.files {
             // 构建完整的文件路径
             let (camera_file, lidar_file) = if self.image_path.is_some() && self.pcd_path.is_some() {
@@ -231,23 +269,25 @@ impl DataLoader {
                 )
             };
 
-            // 获取数据流锁
-            let mut clr_stream = self.clr_stream.lock().await;
-            let mut cld_stream = self.cld_stream.lock().await;
+            // 先检查流是否还能写入
+            {
+                let mut clr_stream = self.clr_stream.lock().await;
+                if clr_stream.get_write_mut().is_err() {
+                    info!("流缓冲区已满，已加载 {} 帧", loaded);
+                    break;
+                }
+            }
 
             // 加载图像文件并写入流
-            match load_image(&camera_file) {
-                Ok(image) => {
-                    if let Err(StreamError::BufferFull) = clr_stream.write(image) {
-                        warn!("颜色流缓冲区已满");
+            {
+                let mut clr_stream = self.clr_stream.lock().await;
+                match load_image(&camera_file) {
+                    Ok(image) => {
+                        let _ = clr_stream.write(image);
                     }
-                }
-                Err(e) => {
-                    error!("加载图像 {} 时出错：{}", camera_file, e);
-                    if let Err(StreamError::BufferFull) =
-                        clr_stream.write_direct(|slot| *slot = None)
-                    {
-                        warn!("写入 None 时颜色流缓冲区已满");
+                    Err(e) => {
+                        error!("加载图像 {} 时出错：{}", camera_file, e);
+                        let _ = clr_stream.write_direct(|slot| *slot = None);
                     }
                 }
             }
@@ -256,48 +296,54 @@ impl DataLoader {
             match DynReader::open(&lidar_file) {
                 Ok(mut reader) => {
                     let lifra = load_cloud(&mut reader);
-                    if let Err(StreamError::BufferFull) = cld_stream.write(lifra) {
-                        warn!("点云流缓冲区已满");
+                    let mut cld_stream = self.cld_stream.lock().await;
+                    if cld_stream.write(lifra).is_ok() {
+                        loaded += 1;
                     }
                 }
                 Err(e) => {
                     error!("打开 PCD 文件 {} 时出错：{}", lidar_file, e);
-                    if let Err(StreamError::BufferFull) =
-                        cld_stream.write_direct(|slot| *slot = None)
-                    {
-                        warn!("写入 None 时点云流缓冲区已满");
-                    }
+                    let mut cld_stream = self.cld_stream.lock().await;
+                    let _ = cld_stream.write_direct(|slot| *slot = None);
                 }
             }
         }
 
-        info!("数据加载完成");
+        info!("数据加载完成，共 {} 帧", loaded);
         Ok(())
     }
 
-    /// 循环加载数据文件到流中
-    /// 该方法会按照 20 帧的速度无限循环加载数据，除非遇到 I/O 错误
+    /// 循环加载数据文件到流中（20 帧/秒）
+    /// 缓冲区满时静默跳过当前帧，等待消费者读取
     pub async fn load_loop(&mut self) -> io::Result<()> {
         if self.files.is_empty() {
             self.files = self.list_files()?;
+            self.apply_frame_limit();
         }
 
         loop {
             for file_pair in &self.files {
                 // 构建完整的文件路径
                 let (camera_file, lidar_file) = if self.image_path.is_some() && self.pcd_path.is_some() {
-                    // 独立路径模式
                     (
                         format!("{}/{}", self.image_path.as_ref().unwrap(), &file_pair[0]),
                         format!("{}/{}", self.pcd_path.as_ref().unwrap(), &file_pair[1]),
                     )
                 } else {
-                    // 旧格式
                     (
                         format!("{}/camera/{}", self.target_path, &file_pair[0]),
                         format!("{}/lidar/{}", self.target_path, &file_pair[1]),
                     )
                 };
+
+                // 先检查流是否还能写入
+                {
+                    let mut clr_stream = self.clr_stream.lock().await;
+                    if clr_stream.get_write_mut().is_err() {
+                        thread::sleep(Duration::from_millis(5));
+                        continue;
+                    }
+                }
 
                 // 先执行耗时的 I/O 操作，不持有锁
                 let image_result = load_image(&camera_file);
@@ -308,43 +354,37 @@ impl DataLoader {
                 {
                     let mut clr_stream = self.clr_stream.lock().await;
                     match image_result {
-                        Ok(image) => {
-                            if let Err(StreamError::BufferFull) = clr_stream.write(image) {
-                                warn!("颜色流缓冲区已满");
-                            }
-                        }
+                        Ok(image) => { let _ = clr_stream.write(image); }
                         Err(e) => {
                             error!("加载图像 {} 时出错：{}", camera_file, e);
-                            if let Err(StreamError::BufferFull) =
-                                clr_stream.write_direct(|slot| *slot = None)
-                            {
-                                warn!("写入 None 时颜色流缓冲区已满");
-                            }
+                            let _ = clr_stream.write_direct(|slot| *slot = None);
                         }
                     }
-                } // 在这里自动释放 clr_stream 的锁
+                }
 
                 {
                     let mut cld_stream = self.cld_stream.lock().await;
                     match cloud_result {
-                        Ok(lifra) => {
-                            if let Err(StreamError::BufferFull) = cld_stream.write(lifra) {
-                                warn!("点云流缓冲区已满");
-                            }
-                        }
+                        Ok(lifra) => { let _ = cld_stream.write(lifra); }
                         Err(e) => {
                             error!("打开 PCD 文件 {} 时出错：{}", lidar_file, e);
-                            if let Err(StreamError::BufferFull) =
-                                cld_stream.write_direct(|slot| *slot = None)
-                            {
-                                warn!("写入 None 时点云流缓冲区已满");
-                            }
+                            let _ = cld_stream.write_direct(|slot| *slot = None);
                         }
                     }
-                } // 在这里自动释放 cld_stream 的锁
+                }
 
                 // 延迟以达到20帧/秒的速度 (50ms per frame)
                 thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
+
+    /// 根据 frame_limit 截断文件列表（在 load / load_loop 中自动调用）
+    fn apply_frame_limit(&mut self) {
+        if let Some(limit) = self.frame_limit {
+            if limit < self.files.len() {
+                info!("帧数限制: {} (共 {} 文件，取前 {})", limit, self.files.len(), limit);
+                self.files.truncate(limit);
             }
         }
     }

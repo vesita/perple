@@ -218,6 +218,13 @@ impl<T: Default + Send + Clone> Stream<T> {
         }
     }
 
+    /// 返回最新写入的数据（不移动指针），没有数据时返回 None
+    pub fn peek_latest(&self) -> Option<T> {
+        let w = self.write_index.load(Ordering::Acquire);
+        let latest = if w == 0 { self.capacity - 1 } else { w - 1 };
+        unsafe { self.pool[latest].assume_init_ref().clone() }
+    }
+
     /// 获取当前读取位置的索引，不移动读取指针
     pub fn read_index(&self) -> usize {
         self.read_index.load(Ordering::Acquire)

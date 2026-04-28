@@ -34,9 +34,12 @@
 ├── doc
 │   ├── color.md
 │   ├── config.md
+│   ├── ground_detection_conclusion.md
 │   ├── kalman_guide.md
 │   └── lidar.md
 ├── examples
+│   ├── check_axis.rs
+│   ├── ground_bench.rs
 │   ├── lidar_reader.rs
 │   ├── muloop_example.rs
 │   └── visualize.rs
@@ -82,6 +85,7 @@
 │   │   └── utils.rs
 │   ├── tracker/
 │   │   ├── core.rs
+│   │   ├── hungarian.rs
 │   │   ├── kalman.rs
 │   │   └── output.rs
 │   ├── optional/
@@ -105,11 +109,11 @@
 │   │   ├── random.rs
 │   │   ├── sight.rs
 │   │   ├── sort.rs
-│   │   ├── stream.rs
-│   │   └── world.rs
+│   │   └── stream.rs
 │   ├── cloud.rs
 │   ├── color.rs
 │   ├── config.rs
+│   ├── fuse.rs
 │   ├── lib.rs
 │   ├── main.rs
 │   ├── optional.rs
@@ -118,6 +122,7 @@
 │   ├── tracker.rs
 │   └── utils.rs
 ├── Cargo.toml
+├── PLAN.md
 ├── README.md
 ├── TODO.md
 └── pyproject.toml
@@ -141,11 +146,11 @@
 
 LiDAR 点云数据处理模块：
 
-- **core.rs**: 点云数据核心处理（PCD 格式读取、无效点过滤）
+- **core.rs**: 点云数据核心处理（PCD 格式读取、LiDAR 原生帧）
 - **classify/**: 点云分类子模块
   - **claster.rs**: DBSCAN 聚类算法实现（基于距离阈值和最小点数）
-  - **core.rs**: 分类核心逻辑（类别判定、置信度计算）
-  - **environment.rs**: 环境分析（地面检测、空间结构分析）
+  - **core.rs**: 分类核心逻辑（地面检测 → 聚类）
+  - **environment.rs**: 地面检测（histoseed 混合策略：直方图种子 + RANSAC 生长），支持倒装 LiDAR
   - **kdtree.rs**: KD-Tree 空间索引（快速近邻搜索）
   - **quadtree.rs**: 四叉树空间索引（平面区域分割）
   - **somecode.rs**: 辅助代码和工具函数
@@ -156,16 +161,17 @@ LiDAR 点云数据处理模块：
 多目标跟踪模块，基于卡尔曼滤波的数据关联和轨迹管理：
 
 - **core.rs**: 跟踪器核心逻辑
-  - 数据关联（匈牙利算法或最近邻匹配）
+  - 数据关联（匈牙利算法，马氏距离 + 卡方门控）
   - 轨迹管理（创建、更新、删除）
   - 失踪目标处理（最大失踪帧数控制）
-  - 置信度门控（过滤低置信度检测）
+  - 速度聚类动态/静态分类（DBSCAN 聚类 Kalman 速度向量）
 - **kalman.rs**: 卡尔曼滤波器实现
   - 常速运动模型 (Constant Velocity Model)
   - 6 维状态向量 `[x, y, z, vx, vy, vz]ᵀ`
-  - 位置观测模型
+  - 位置观测模型，动态 dt 帧间隔计算
   - 协方差管理和数值稳定性优化
-- **output.rs**: 跟踪结果输出容器 `Target`（包含轨迹 ID、估计状态、不确定性）
+- **hungarian.rs**: 匈牙利算法求解最优匹配
+- **output.rs**: 跟踪结果输出容器 `Target`（包含轨迹 ID、速度、动态/静态分类）
 
 ### 4. Utils 模块 (`src/utils/`)
 
@@ -184,7 +190,22 @@ LiDAR 点云数据处理模块：
 - **combine.rs**: 多模态融合工具
 - **world.rs**: 世界坐标系管理
 
-### 5. Config 模块 (`src/config.rs`)
+### 5. Fuse 模块 (`src/fuse.rs`)
+
+2D-3D 融合模块：
+
+- 计算 `cam_from_lidar` 标定矩阵（`inv(camera.extrinsic) * lidar.extrinsic`）
+- 将 LiDAR 点云投影到相机图像平面
+- 为检测框提供深度信息
+
+### 6. Optional 模块 (`src/optional/`)
+
+可选功能组件：
+
+- **data_loader.rs**: 数据加载器，支持帧数限制、下采样、独立路径模式
+- **visual.rs**: rerun 3D 可视化集成
+
+### 7. Config 模块 (`src/config.rs`)
 
 配置管理系统：
 
@@ -196,7 +217,7 @@ LiDAR 点云数据处理模块：
   - 基础配置（流容量、分辨率、类别标签）
   - 目标检测参数（置信度阈值、NMS 阈值、模型路径）
   - DBSCAN 聚类参数（最小点数、距离阈值）
-  - 地面检测参数（法向量、过滤阈值）
+  - 地面检测参数（histoseed: expand, ransac_distance, upside_down）
   - 相机内参和外参矩阵
   - 雷达外参矩阵
   - 点云聚类参数（合并耐心值、体素大小）

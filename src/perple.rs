@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use crate::cloud::core::Lidar;
 use crate::color::core::Camera;
+use crate::fuse::Fuse;
 
 use crate::tracker::core::Tracker;
 use crate::utils::muloop::{LoopMode, MultiLoop};
@@ -45,11 +46,13 @@ pub struct Perple {
     pub camera: Eap<Camera>,
     pub lidar: Eap<Lidar>,
     pub tracker: Eap<Tracker>,
+    pub fuse: Eap<Fuse>,
 
     /// 控制类模块（可能跨线程访问，使用Eap<T>>）
     color_loop: Eap<MultiLoop>,
     lidar_loop: Eap<MultiLoop>,
     tracker_loop: Eap<MultiLoop>,
+    fuse_loop: Eap<MultiLoop>,
 }
 
 impl Perple {
@@ -65,13 +68,17 @@ impl Perple {
 
         let tracker = new_eap(Tracker::new());
 
+        let fuse = new_eap(Fuse::new());
+
         Self {
             camera,
             lidar,
             tracker,
+            fuse,
             color_loop: new_eap(MultiLoop::new()),
             lidar_loop: new_eap(MultiLoop::new()),
             tracker_loop: new_eap(MultiLoop::new()),
+            fuse_loop: new_eap(MultiLoop::new()),
         }
     }
 
@@ -110,6 +117,19 @@ impl Perple {
                 Arc::clone(&self.tracker),
                 |tracker| {
                     let _ = tracker.run();
+                },
+                40,
+            )
+            .await
+            .map_err(|e| PerpleError::LoopError(e))?;
+        self.fuse_loop
+            .lock()
+            .await
+            .start_with_method(
+                LoopMode::Signal,
+                Arc::clone(&self.fuse),
+                |fuse| {
+                    let _ = fuse.act();
                 },
                 40,
             )
@@ -157,7 +177,7 @@ impl Perple {
     /// 停止color模块的循环运行模式
     pub async fn stop_color_loop(&mut self) -> Result<(), PerpleError> {
         let mut color_loop = self.color_loop.lock().await;
-        let _ = color_loop.stop();
+        color_loop.stop().await;
         Ok(())
     }
 
@@ -205,7 +225,7 @@ impl Perple {
     /// 停止lidar模块的循环运行模式
     pub async fn stop_lidar_loop(&mut self) -> Result<(), PerpleError> {
         let mut lidar_loop = self.lidar_loop.lock().await;
-        let _ = lidar_loop.stop();
+        lidar_loop.stop().await;
         Ok(())
     }
 
@@ -259,7 +279,7 @@ impl Perple {
     /// 停止tracker模块的循环运行模式
     pub async fn stop_tracker_loop(&mut self) -> Result<(), PerpleError> {
         let mut tracker_loop = self.tracker_loop.lock().await;
-        let _= tracker_loop.stop();
+        tracker_loop.stop().await;
         Ok(())
     }
 
@@ -267,6 +287,44 @@ impl Perple {
     pub async fn is_tracker_running(&self) -> Result<bool, PerpleError> {
         let tracker_loop = self.tracker_loop.lock().await;
         Ok(tracker_loop.is_running().await)
+    }
+
+    /// 启动fuse模块的循环运行模式
+    pub async fn start_fuse_loop_with_mode(
+        &mut self,
+        mode: LoopMode,
+    ) -> Result<(), PerpleError> {
+        let mut fuse_loop = self.fuse_loop.lock().await;
+        let fuse_ref = Arc::clone(&self.fuse);
+        fuse_loop
+            .start_with_method(
+                mode,
+                fuse_ref,
+                |fuse| {
+                    let _ = fuse.act();
+                },
+                40,
+            )
+            .await
+            .map_err(|e| PerpleError::LoopError(e))
+    }
+
+    /// 启动fuse模块的循环运行模式（默认信号控制循环）
+    pub async fn start_fuse_loop(&mut self) -> Result<(), PerpleError> {
+        self.start_fuse_loop_with_mode(LoopMode::Signal).await
+    }
+
+    /// 停止fuse模块的循环运行模式
+    pub async fn stop_fuse_loop(&mut self) -> Result<(), PerpleError> {
+        let mut fuse_loop = self.fuse_loop.lock().await;
+        fuse_loop.stop().await;
+        Ok(())
+    }
+
+    /// 检查fuse模块是否正在运行
+    pub async fn is_fuse_running(&self) -> Result<bool, PerpleError> {
+        let fuse_loop = self.fuse_loop.lock().await;
+        Ok(fuse_loop.is_running().await)
     }
 
     /// 等待颜色处理线程结束
