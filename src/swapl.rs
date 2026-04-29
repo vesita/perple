@@ -18,7 +18,7 @@ pub fn global_swapl() -> &'static Swapl {
 }
 
 /// 系统数据交换中枢
-/// 
+///
 /// Swapl作为整个系统的数据中枢，负责管理所有的数据流。
 /// 其他模块通过访问Swapl来进行数据交互，实现了松耦合的架构设计。
 /// 所有的数据流都是线程安全的(Eap<Stream<T>>>)，可以在多个线程间安全共享。
@@ -36,6 +36,8 @@ pub struct Swapl {
     pub sights: Eap<Stream<Vec<Sight>>>,
     /// 目标检测结果输出流
     pub targets: Eap<Stream<Vec<Target>>>,
+    /// 地面平面方程流 [a, b, c, d] (a*x + b*y + c*z + d = 0)
+    pub ground_plane: Eap<Stream<[f32; 4]>>,
 }
 
 impl Swapl { 
@@ -49,6 +51,7 @@ impl Swapl {
             clr_objs: new_eap(Stream::new()),
             sights: new_eap(Stream::new()),
             targets: new_eap(Stream::new()),
+            ground_plane: new_eap(Stream::new()),
         }
     }
 }

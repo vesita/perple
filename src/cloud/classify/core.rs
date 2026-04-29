@@ -4,7 +4,7 @@ use crate::{
         classify::{claster::Claster, environment::*},
     },
     swapl::global_swapl,
-    utils::stream::Cream,
+    utils::stream::{Cream, Eap, Stream},
 };
 
 #[derive(Debug)]
@@ -15,6 +15,7 @@ pub enum ClassifyError {
 pub struct Classify {
     cream: Cream<Vec<[f32; 3]>, Vec<CldBud>>,
     claster: Claster,
+    ground_plane_out: Eap<Stream<[f32; 4]>>,
 }
 
 impl Classify {
@@ -26,6 +27,7 @@ impl Classify {
                 out_stream: swapl.cld_objs.clone(),
             },
             claster: Claster::new(),
+            ground_plane_out: swapl.ground_plane.clone(),
         }
     }
 
@@ -38,8 +40,12 @@ impl Classify {
             }
         };
 
-   let(slice_index, grounds) = single_pick_ground(&mut target);
+   let(slice_index, grounds, plane_eq) = single_pick_ground(&mut target);
        println!("完成地面提取，已过滤{}个点", slice_index);
+       if let Some(eq) = plane_eq {
+           let mut gp = self.ground_plane_out.blocking_lock();
+           let _ = gp.write(eq);
+       }
         // let (slice_index, walls) = pick_wall(&mut target[slice_index..]);
         // println!("完成墙壁提取，已过滤{}个点", slice_index);
     // 优化：直接传递切片引用，避免不必要的 to_vec() 克隆

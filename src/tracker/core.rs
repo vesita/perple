@@ -73,6 +73,7 @@ struct TrackedObject {
     class_type: String,
     last_seen: SystemTime,
     disappeared_count: u32,
+    appearance_count: u32,
     confidence: f32,
     kalman_filter: KalmanFilterWrapper,
     velocity_history: Vec<[f32; 3]>,
@@ -100,6 +101,7 @@ impl TrackedObject {
             class_type,
             last_seen: SystemTime::now(),
             disappeared_count: 0,
+            appearance_count: 0,
             confidence,
             kalman_filter,
             velocity_history: Vec::with_capacity(10),
@@ -132,6 +134,7 @@ impl TrackedObject {
         }
         self.velocity_history.push([v.x as f32, v.y as f32, v.z as f32]);
 
+        self.appearance_count += 1;
         self.class_type = new_class_type;
         self.confidence = new_confidence;
         self.last_seen = SystemTime::now();
@@ -185,6 +188,7 @@ pub struct Tracker {
     tracked_objects: HashMap<usize, TrackedObject>,
     max_disappeared: u32,
     min_confidence: f32,
+    min_appearances: u32,
 }
 
 impl Tracker {
@@ -198,6 +202,7 @@ impl Tracker {
             tracked_objects: HashMap::new(),
             max_disappeared: 5,
             min_confidence: 0.3,
+            min_appearances: 3,
         }
     }
 
@@ -207,6 +212,10 @@ impl Tracker {
 
     pub fn set_min_confidence(&mut self, confidence: f32) {
         self.min_confidence = confidence;
+    }
+
+    pub fn set_min_appearances(&mut self, n: u32) {
+        self.min_appearances = n;
     }
 
     /// 马氏距离门控阈值
@@ -492,10 +501,13 @@ impl Tracker {
         // 步骤 7: 速度聚类分类
         Self::classify_by_velocity(&mut self.tracked_objects);
 
-        // 步骤 8: 生成输出
+        // 步骤 8: 生成输出（过滤短命目标）
         let mut output_targets = Vec::new();
         for tracked_id in &updated_ids {
             if let Some(obj) = self.tracked_objects.get(tracked_id) {
+                if obj.appearance_count < self.min_appearances {
+                    continue;
+                }
                 let pos = obj.kalman_filter.get_position();
                 let vel = obj.smoothed_velocity();
                 let spd = obj.speed();

@@ -7,6 +7,10 @@ pub mod tracker;
 pub mod config;
 pub mod swapl;
 pub mod optional;
+pub mod extrinsic_monitor;
+
+#[cfg(feature = "ros1")]
+pub mod ros_bridge;
 
 
 pub use perple::Perple;

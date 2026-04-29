@@ -392,11 +392,13 @@ pub fn pick_wall(cloud: &mut [[f32; 3]]) -> (usize, Vec<CldBud>) {
 /// 3. 将最佳平面生长到全点云
 /// 4. 原地交换：地面点移到 [0..n_ground)，其余在 [n_ground..)
 ///
+/// 返回 (地面点个数, 地面 CldBud 列表, 平面方程 [a, b, c, d])
+///
 /// 相比纯 Z-直方图方法，对倾斜地面更鲁棒；
 /// 相比全点云 RANSAC，速度快约 3 倍（只对种子区域迭代）。
-pub fn single_pick_ground(cloud: &mut [[f32; 3]]) -> (usize, Vec<CldBud>) {
+pub fn single_pick_ground(cloud: &mut [[f32; 3]]) -> (usize, Vec<CldBud>, Option<[f32; 4]>) {
     if cloud.len() < 10 {
-        return (0, Vec::new());
+        return (0, Vec::new(), None);
     }
 
     let ixi = fixif();
@@ -419,7 +421,7 @@ pub fn single_pick_ground(cloud: &mut [[f32; 3]]) -> (usize, Vec<CldBud>) {
         if ixi.upside_down {
             for p in cloud.iter_mut() { p[2] = -p[2]; }
         }
-        return (0, Vec::new());
+        return (0, Vec::new(), None);
     }
 
     let num_bins = 128usize;
@@ -468,8 +470,9 @@ pub fn single_pick_ground(cloud: &mut [[f32; 3]]) -> (usize, Vec<CldBud>) {
 
     let n_seed = seed_end - seed_start;
 
-    let (n_ground, grounds) = if n_seed >= 10 {
-        histoseed_plane(cloud, n, seed_start, n_seed, peak_z, z_low, z_high, ixi)
+    let (n_ground, grounds, mut plane_eq) = if n_seed >= 10 {
+        let (ng, g, pe) = histoseed_plane(cloud, n, seed_start, n_seed, peak_z, z_low, z_high, ixi);
+        (ng, g, pe)
     } else {
         // 种子区域太小，回退到简单 Z 范围提取
         for i in 0..n_seed {
@@ -477,8 +480,9 @@ pub fn single_pick_ground(cloud: &mut [[f32; 3]]) -> (usize, Vec<CldBud>) {
         }
         let mut ground_box = Box3D::empty_box();
         ground_box.cloud2box(&cloud[..n_seed].to_vec());
-        (n_seed, vec![CldBud::new(ground_box, 0, "ground".to_string(), 0.9)])
+        (n_seed, vec![CldBud::new(ground_box, 0, "ground".to_string(), 0.9)], None)
     };
+    // plane_eq is mut for upside-down fix below
 
     // 天花板检测（在剩余非地面点中）
     let mut all_grounds = grounds;
@@ -528,12 +532,17 @@ pub fn single_pick_ground(cloud: &mut [[f32; 3]]) -> (usize, Vec<CldBud>) {
         for bud in &mut all_grounds {
             bud.the_box.pose[(2, 3)] = -bud.the_box.pose[(2, 3)];
         }
+        // 修正平面方程的 Z 分量
+        if let Some(ref mut eq) = plane_eq {
+            eq[2] = -eq[2];
+        }
     }
 
-    (n_ground, all_grounds)
+    (n_ground, all_grounds, plane_eq)
 }
 
 /// 在种子区域上运行 RANSAC 找最佳平面，然后生长到全点云
+/// 返回 (地面点数, 地面 CldBud 列表, 平面方程 [a, b, c, d])
 fn histoseed_plane(
     cloud: &mut [[f32; 3]],
     n: usize,
@@ -543,7 +552,7 @@ fn histoseed_plane(
     z_low: f32,
     z_high: f32,
     ixi: &'static Config,
-) -> (usize, Vec<CldBud>) {
+) -> (usize, Vec<CldBud>, Option<[f32; 4]>) {
     let seed_cloud: Vec<[f32; 3]> = cloud[seed_start..seed_start + n_seed].to_vec();
     let distance = ixi.ground_ransac_distance;
     let iterations = ixi.ground_ransac_iterations;
@@ -587,7 +596,7 @@ fn histoseed_plane(
         }
         let mut ground_box = Box3D::empty_box();
         ground_box.cloud2box(&cloud[..n_seed].to_vec());
-        return (n_seed, vec![CldBud::new(ground_box, 0, "ground".to_string(), 0.9)]);
+        return (n_seed, vec![CldBud::new(ground_box, 0, "ground".to_string(), 0.9)], None);
     }
 
     // 生 到全点云
@@ -609,6 +618,8 @@ fn histoseed_plane(
 
     let n_ground = write;
 
+    let plane_eq = [norm[0], norm[1], norm[2], -(norm[0]*pp[0] + norm[1]*pp[1] + norm[2]*pp[2])];
+
     eprintln!(
         "  histoseed: peak_z={:.3} seed=[{:.3},{:.3}] n_seed={} distance={} n_ground={}/{} ({:.1}%)",
         peak_z, z_low, z_high, n_seed, distance, n_ground, n,
@@ -617,7 +628,7 @@ fn histoseed_plane(
 
     let mut ground_box = Box3D::empty_box();
     ground_box.cloud2box(&cloud[..n_ground].to_vec());
-    (n_ground, vec![CldBud::new(ground_box, 0, "ground".to_string(), 0.9)])
+    (n_ground, vec![CldBud::new(ground_box, 0, "ground".to_string(), 0.9)], Some(plane_eq))
 }
 
 /// 随机抽样函数

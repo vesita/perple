@@ -154,10 +154,10 @@ LiDAR 帧速度分布（小车以 v_car 前进）：
 ## 待办清单
 
 ### 短期
-- [ ] **Tracker 噪声过滤**：新增 `min_appearances` 参数，存活不足 N 帧的短命目标不输出
-- [ ] **自车速度估计**：利用 `single_pick_ground` 帧间地面平面方程追踪 ego-motion
-- [ ] **外参偏差监测工具**：子 Kalman 滤波器 + 投影残差统计 → CSV 文件输出
-- [ ] **Redra 可视化增强**：标签显示 id + 分类 + 速度；person 用 cyan 特殊着色
+- [x] **Tracker 噪声过滤**：新增 `min_appearances` 参数，存活不足 N 帧的短命目标不输出
+- [x] **自车速度估计**：利用 `single_pick_ground` 帧间地面平面方程追踪 ego-motion
+- [x] **外参偏差监测工具**：子 Kalman 滤波器 + 投影残差统计 → CSV 文件输出
+- [x] **Redra 可视化增强**：标签显示 id + 分类 + 速度；person 用 cyan 特殊着色
 
 ### 中长期
 - [ ] 外参偏差分析结论验证（确认是否存在系统偏差）

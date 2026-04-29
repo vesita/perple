@@ -18,7 +18,12 @@ redra_client = { path = "../redra/crates/redra_client" }
 expto = { path = "../redra/crates/expto" }
 log = "0.4"
 env_logger = "0.11"
-ndarray-linalg = { version = "0.18", features = ["openblas-system"] }
 # 卡尔曼滤波库 (本地路径)
 adskalman = { path = "crates/adskalman-rs" }
 approx = "0.5"
+# ROS1 桥接
+rosrust = { version = "0.9", optional = true }
+byteorder = "1.5"
+
+[features]
+ros1 = ["rosrust"]

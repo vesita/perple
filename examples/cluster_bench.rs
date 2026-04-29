@@ -36,7 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("点云总数: {}", cloud.len());
 
     // ── 提走地面，只对非地面点做聚类对比 ──
-    let (n_ground, _) = single_pick_ground(&mut cloud);
+    let (n_ground, _, _) = single_pick_ground(&mut cloud);
     let non_ground = &cloud[n_ground..];
     println!("地面点: {}, 非地面点: {}\n", n_ground, non_ground.len());
 

@@ -146,10 +146,13 @@ async fn send_targets(targets: &[Target]) -> Result<(), Box<dyn std::error::Erro
         let cy = (min[1] + max[1]) / 2.0;
         let cz = (min[2] + max[2]) / 2.0;
 
-        // 颜色：地面→蓝，动态→红，静态→绿，可移动→黄
+        // 颜色：地面→蓝，person(融合确认)→青，动态→红，静态→绿，可移动→黄
         let is_ground = target.class_type == "ground";
+        let is_person = target.class_type == "person";
         let material_id = if is_ground {
             "blue"
+        } else if is_person {
+            "cyan"
         } else {
             match target.classification.as_str() {
                 "dynamic" => "red",
@@ -169,11 +172,10 @@ async fn send_targets(targets: &[Target]) -> Result<(), Box<dyn std::error::Erro
                 sx: 1.0, sy: 1.0, sz: 1.0,
             }),
             ExObject { u_object: Some(ex_object::UObject::MaterialId(material_id.to_string())) },
-            // 标签：显示 class_type（ground/cluster_N）+ 速度
+            // 标签：id | classification | class_type | speed
             ExObject::from(Tag::new(format!(
-                "{} | {:.1}m/s",
-                target.class_type,
-                target.speed,
+                "{} | {} | {:.1}m/s",
+                target.id, target.classification, target.speed,
             )).with_offset(ExTransform {
                 x: cx, y: cy + 0.5, z: cz,
                 rx: 0.0, ry: 0.0, rz: 0.0,
