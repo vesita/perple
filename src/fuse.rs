@@ -18,9 +18,9 @@ pub struct Fuse {
 impl Fuse {
     pub fn new() -> Self {
         let config = fixif();
-        let cam_extrinsic = Matrix4::from(config.camera.extrinsic);
-        // lidar_extrinsic 已移除，LiDAR 点云已在相机坐标系中
-        let cam_from_lidar = cam_extrinsic.try_inverse().unwrap_or(Matrix4::identity());
+        // camera.extrinsic = lidar→camera 变换矩阵 [R|t]
+        // 与标准针孔模型定义一致：P_cam = extrinsic * P_lidar
+        let cam_from_lidar = Matrix4::from(config.camera.extrinsic);
         Self {
             intrinsic: Matrix3::from(config.camera.intrinsic),
             cam_from_lidar,

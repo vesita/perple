@@ -7,6 +7,8 @@ use perple::swapl::global_swapl;
 use perple::tracker::output::Target;
 
 use expto::rdmp::auto::unit::generate_unit;
+use expto::rdmp::proto::command::{CommandType, ExCommand};
+use expto::rdmp::*;
 
 use log::info;
 use redra_client::*;
@@ -16,65 +18,111 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::from_default_env()
         .filter_level(log::LevelFilter::Info)
         .init();
-    info!("Perple可视化演示");
+    info!("Perple 检测流程可视化（14 帧）");
 
     let mut data_loader = DataLoader::new("./data/test".to_string());
+    data_loader.set_frame_limit(14);
+    info!("开始加载数据...");
+    let load_start = std::time::Instant::now();
     let _ = data_loader.load().await;
+    info!("数据加载完成，耗时 {}ms", load_start.elapsed().as_millis());
 
     let lidar = Arc::new(Mutex::new(Lidar::new()));
     let tracker = Arc::new(Mutex::new(Tracker::new()));
 
-    // 逐帧同步处理（在 blocking 线程中执行同步的 act/run）
-    for i in 0..2 {
-        info!("处理第 {} 帧...", i + 1);
+    let n_frames = 14;
+    for i in 0..n_frames {
+        info!("─── 第 {}/{} 帧 ───", i + 1, n_frames);
 
-        let l = Arc::clone(&lidar);
-        tokio::task::spawn_blocking(move || {
-            let _ = l.lock().unwrap().act();
-        })
-        .await
-        .map_err(|e| format!("lidar任务失败: {}", e))?;
+        // ── LiDAR 处理（点云 → 地面检测 → 聚类） ──
+        {
+            let l = Arc::clone(&lidar);
+            tokio::task::spawn_blocking(move || {
+                let _ = l.lock().unwrap().act();
+            })
+            .await
+            .map_err(|e| format!("Lidar 任务失败: {}", e))?;
+        }
 
-        let t = Arc::clone(&tracker);
-        tokio::task::spawn_blocking(move || {
-            let _ = t.lock().unwrap().run();
-        })
-        .await
-        .map_err(|e| format!("tracker任务失败: {}", e))?;
+        // ── 跟踪（检测关联 → Kalman → 速度分类） ──
+        {
+            let t = Arc::clone(&tracker);
+            tokio::task::spawn_blocking(move || {
+                let _ = t.lock().unwrap().run();
+            })
+            .await
+            .map_err(|e| format!("Tracker 任务失败: {}", e))?;
+        }
 
-        send_visualization().await?;
+        // ── 可视化 ──
+        send_frame(i, n_frames).await?;
     }
 
+    info!("所有帧处理完成");
     Ok(())
 }
 
-async fn send_visualization() -> Result<(), Box<dyn std::error::Error>> {
+async fn send_frame(frame: usize, total: usize) -> Result<(), Box<dyn std::error::Error>> {
     let swapl = global_swapl();
 
-    // ── 点云 ──
+    // ── 点云（灰色，不区分地面/非地面） ──
     let cloud_stream = swapl.clouds_out.lock().await;
-    if let Some(frame) = cloud_stream.peek_latest() {
-        println!("  点云数据对象数量: {}", frame.len());
-        let _ = send_point_cloud(&frame).await;
+    if let Some(cloud) = cloud_stream.peek_latest() {
+        println!("  帧 {}/{} | 点云: {} points", frame + 1, total, cloud.len());
+        send_colored_cloud(&cloud, "white", 1_000_000).await?;
+    } else {
+        println!("  帧 {}/{} | 点云: 无数据", frame + 1, total);
     }
     drop(cloud_stream);
 
-    // ── 跟踪目标 ──
+    // ── 跟踪目标（框 + 标签 + 颜色） ──
     let target_stream = swapl.targets.lock().await;
     if let Some(targets) = target_stream.peek_latest() {
-        println!("  跟踪目标数量: {}", targets.len());
-        send_target_boxes(&targets).await?;
+        println!("  帧 {}/{} | 目标: {} 个", frame + 1, total, targets.len());
+        for t in targets.iter() {
+            let dyn_str = if t.is_dynamic { "动态" } else { "静态" };
+            println!("    id={} type={} class={} {} speed={:.2}",
+                t.id, t.class_type, t.classification, dyn_str, t.speed);
+        }
+        send_targets(&targets).await?;
         send_speed_arrows(&targets).await?;
+    } else {
+        println!("  帧 {}/{} | 目标: 无", frame + 1, total);
     }
     drop(target_stream);
+
+    // ── FRAMEEND：告知 redra 当前帧结束 ──
+    let mut unit = generate_unit();
+    unit.command = Some(ExCommand { u_command: CommandType::Frameend as i32 });
+    unit.send().await?;
 
     Ok(())
 }
 
-/// 发送带分类颜色的目标包围盒
-async fn send_target_boxes(targets: &[Target]) -> Result<(), Box<dyn std::error::Error>> {
+/// 发送带颜色的点云
+async fn send_colored_cloud(points: &[[f32; 3]], color: &str, base_id: u64) -> Result<(), Box<dyn std::error::Error>> {
+    if points.is_empty() { return Ok(()); }
     let mut unit = generate_unit();
-    const BASE_ID: u64 = 1_000_000;
+    for (i, p) in points.iter().enumerate() {
+        let eid = base_id + (i as u64) * 4;
+        unit.objects.extend(vec![
+            ExObject::from(eid),
+            ExObject::from(ExMesh::from(Point { x: 0.0, y: 0.0, z: 0.0 })),
+            ExObject::from(ExTransform {
+                x: p[0], y: p[1], z: p[2],
+                rx: 0.0, ry: 0.0, rz: 0.0,
+                sx: 1.0, sy: 1.0, sz: 1.0,
+            }),
+            ExObject { u_object: Some(ex_object::UObject::MaterialId(color.to_string())) },
+        ]);
+    }
+    unit.send().await?;
+    Ok(())
+}
+
+/// 发送目标（包围盒 + 标签 + 颜色）
+async fn send_targets(targets: &[Target]) -> Result<(), Box<dyn std::error::Error>> {
+    const BASE_ID: u64 = 2_000_000;
 
     for (i, target) in targets.iter().enumerate() {
         let entity_id = BASE_ID + (i as u64) * 4;
@@ -98,13 +146,20 @@ async fn send_target_boxes(targets: &[Target]) -> Result<(), Box<dyn std::error:
         let cy = (min[1] + max[1]) / 2.0;
         let cz = (min[2] + max[2]) / 2.0;
 
-        let material_id = match target.classification.as_str() {
-            "dynamic" => "red",
-            "static" => "green",
-            "movable" => "yellow",
-            _ => "metal",
+        // 颜色：地面→蓝，动态→红，静态→绿，可移动→黄
+        let is_ground = target.class_type == "ground";
+        let material_id = if is_ground {
+            "blue"
+        } else {
+            match target.classification.as_str() {
+                "dynamic" => "red",
+                "static" => "green",
+                "movable" => "yellow",
+                _ => "white",
+            }
         };
 
+        let mut unit = generate_unit();
         unit.objects.extend(vec![
             ExObject::from(entity_id),
             ExObject::from(ExMesh::from(Cube { vertices: points })),
@@ -114,12 +169,20 @@ async fn send_target_boxes(targets: &[Target]) -> Result<(), Box<dyn std::error:
                 sx: 1.0, sy: 1.0, sz: 1.0,
             }),
             ExObject { u_object: Some(ex_object::UObject::MaterialId(material_id.to_string())) },
+            // 标签：显示 class_type（ground/cluster_N）+ 速度
+            ExObject::from(Tag::new(format!(
+                "{} | {:.1}m/s",
+                target.class_type,
+                target.speed,
+            )).with_offset(ExTransform {
+                x: cx, y: cy + 0.5, z: cz,
+                rx: 0.0, ry: 0.0, rz: 0.0,
+                sx: 1.0, sy: 1.0, sz: 1.0,
+            })),
         ]);
-    }
-
-    if !unit.objects.is_empty() {
         unit.send().await?;
     }
+
     Ok(())
 }
 

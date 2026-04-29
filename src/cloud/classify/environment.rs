@@ -524,6 +524,10 @@ pub fn single_pick_ground(cloud: &mut [[f32; 3]]) -> (usize, Vec<CldBud>) {
         for p in cloud.iter_mut() {
             p[2] = -p[2];
         }
+        // 修正地面/天花板 Box3D 的 Z 坐标（计算时仍为取反后的值）
+        for bud in &mut all_grounds {
+            bud.the_box.pose[(2, 3)] = -bud.the_box.pose[(2, 3)];
+        }
     }
 
     (n_ground, all_grounds)

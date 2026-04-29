@@ -18,7 +18,7 @@
 | LiDAR 检测 | LiDAR 帧 | 保持传感器原始坐标 |
 | 点云分类 | LiDAR 帧 | 聚类、地面检测都在此帧 |
 | 目标跟踪 | LiDAR 帧 | Kalman 状态在此帧 |
-| 2D→3D 融合 | LiDAR → Camera | `cam_from_lidar = inv(cam_ext) * lidar_ext`，固定标定参数 |
+| 2D→3D 融合 | LiDAR → Camera | `cam_from_lidar = camera.extrinsic`，P_cam = cam_from_lidar * P_lidar，固定标定参数 |
 | 可视化 | LiDAR 帧 → redra | redra 服务端做 LiDAR→Bevy Y-up 转换 |
 
 世界帧概念已被移除。LiDAR 帧就是 perple 的权威帧。
