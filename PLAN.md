@@ -66,6 +66,44 @@ LiDAR 帧速度分布（小车以 v_car 前进）：
 
 不需要 ICP、不需要 IMU、不需要里程计。墙面占室内场景多数，聚类天然鲁棒。
 
+### 自车速度估计：帧间地面追踪
+
+利用 `single_pick_ground` 每帧提取的地面平面方程，帧间追踪地面位置偏移 → 自车速度。
+
+```
+帧 N:  地面平面 (a, b, c, d)[N]
+帧 N+1: 地面平面 (a, b, c, d)[N+1]
+
+地面同一点在帧 N 位置 p，投影到帧 N+1 的同一地面位置 p'
+  → 位移 = p' - p
+  → v_ego = 位移 / dt
+```
+
+不需要里程计，不需要 ICP。地面在室内场景大面积存在，追踪稳定。
+
+### 外参偏差监测
+
+融合 `fuse.rs` 的 2D→3D 匹配结果，统计每个匹配对的投影残差（3D 框顶点投影到图像 vs 2D 检测框）。
+
+```
+状态: [δrx, δry, δrz, δtx, δty, δtz]  6 维，外参微小偏移
+观测量: 投影后像素坐标 vs 2D 检测框中心
+
+输出: 偏差估计值 + 投影残差统计 → 记录到文件
+```
+
+不作为闭环修正（至少当前阶段），仅做离线分析，避免污染主管道。
+
+### Redra 可视化
+
+| 信息 | 颜色 | 标签 |
+|------|------|------|
+| 地面 | blue | ground |
+| 静态目标 | green | id \| static \| obstacle/speed |
+| 动态目标 | red | id \| dynamic \| person/obstacle \| speed |
+| 可移动 | yellow | id \| movable \| obstacle \| speed |
+| person（2D 融合确认） | cyan | id \| dynamic \| person \| speed |
+
 ---
 
 ## 已完成
@@ -81,7 +119,7 @@ LiDAR 帧速度分布（小车以 v_car 前进）：
 - 天花板检测（直方图峰值，配置开关）
 - `histoseed_plane` 辅助函数：种子 RANSAC + 全点云生长 + 原地交换
 
-### ✅ 跟踪器优化（tracker/）
+### ✅ 跟踪器基础（tracker/）
 - **kalman.rs**: 复用 `KalmanFilterNoControl`，动态 dt，降低初始协方差
 - **core.rs**: 匈牙利算法 + 马氏距离关联，卡方门控，速度聚类分类
 - **hungarian.rs**: 新增匈牙利算法实现
@@ -96,24 +134,32 @@ LiDAR 帧速度分布（小车以 v_car 前进）：
 ### ✅ 基准测试
 - `ground_bench.rs`：5 种策略 × 29 参数组合对比
 - `doc/ground_detection_conclusion.md`：结论报告
-- 最优策略 histoseed（expand=0.20, distance=0.3）
+- `cluster_bench.rs`：固定 eps vs 自适应 eps DBSCAN 参数对比
+- 自适应 eps 方案：`eps(r) = eps_0 + slope * r`，匹配 LiDAR 近密远疏分布
+
+### ✅ 配置与修复
+- 默认参数更新为 histoseed 最优参数
+- 倒装 LiDAR 地面框 Z 轴翻转 bug 修复
+- fuse.rs 外参约定修正（lidar→camera，不做逆变换）
+- visualize.rs 颜色格式修复（hex → 命名材质 red/green/blue/yellow）
 
 ---
 
 ## 当前状态
 
-核心管线已整合，可视化通过 rerun 展示检测结果，redra 服务端做轴转换。
+核心检测 + 跟踪管线已跑通，redra 可视化可展示 14 帧检测流程。下一步提升跟踪鲁棒性和融合精度。
 
 ---
 
-## 待办
+## 待办清单
 
 ### 短期
-- [ ] 匈牙利算法参数调优（马氏距离门限）
-- [ ] 速度聚类防抖动（多帧投票）
-- [ ] 可视化着色（dynamic→红, static→绿, movable→黄）
+- [ ] **Tracker 噪声过滤**：新增 `min_appearances` 参数，存活不足 N 帧的短命目标不输出
+- [ ] **自车速度估计**：利用 `single_pick_ground` 帧间地面平面方程追踪 ego-motion
+- [ ] **外参偏差监测工具**：子 Kalman 滤波器 + 投影残差统计 → CSV 文件输出
+- [ ] **Redra 可视化增强**：标签显示 id + 分类 + 速度；person 用 cyan 特殊着色
 
 ### 中长期
-- [ ] 外参验证工具（FAST-Calib 投影验证）
+- [ ] 外参偏差分析结论验证（确认是否存在系统偏差）
+- [ ] 如有必要，外参偏差闭环修正（当前仅监测，不修正）
 - [ ] ROS1 桥接（rosrust / C++ 桥节点）
-- [ ] 多传感器时间同步
