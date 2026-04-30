@@ -41,6 +41,7 @@ pub struct Config {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ClasterConfig {
+    pub strategy: String,
     pub merge_patience: f32,
     pub merge_threshold: f32,
     pub voxel_size: f32,
@@ -48,6 +49,12 @@ pub struct ClasterConfig {
     pub max_points_per_node: Option<usize>,
     pub max_tree_depth: Option<usize>,
     pub use_parallel: bool,
+    pub eps_slope: f32,
+    pub azimuth_resolution: f32,
+    pub elevation_resolution: f32,
+    pub cluster_threshold: f32,
+    pub downsample_method: String,
+    pub gaussian_downsample_rate: f32,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -107,8 +114,8 @@ impl Config {
         macro_rules! update_claster_field {
             ($field:ident) => {
                 if let Some(ref claster) = partial_config.claster {
-                    if let Some(value) = claster.$field {
-                        self.claster.$field = value;
+                    if let Some(ref value) = claster.$field {
+                        self.claster.$field = value.clone();
                     }
                 }
             };
@@ -137,6 +144,13 @@ impl Config {
         update_claster_field!(merge_threshold);
         update_claster_field!(voxel_size);
         update_claster_field!(use_parallel);
+        update_claster_field!(eps_slope);
+        update_claster_field!(strategy);
+        update_claster_field!(azimuth_resolution);
+        update_claster_field!(elevation_resolution);
+        update_claster_field!(cluster_threshold);
+        update_claster_field!(downsample_method);
+        update_claster_field!(gaussian_downsample_rate);
 
         update_nested_field!(camera, intrinsic);
         update_nested_field!(camera, extrinsic);
@@ -191,6 +205,7 @@ struct PartialCameraConfig {
 
 #[derive(Serialize, Deserialize, Debug)]
 struct PartialClasterConfig {
+    pub strategy: Option<String>,
     pub merge_patience: Option<f32>,
     pub merge_threshold: Option<f32>,
     pub voxel_size: Option<f32>,
@@ -198,4 +213,10 @@ struct PartialClasterConfig {
     pub max_points_per_node: Option<usize>,
     pub max_tree_depth: Option<usize>,
     pub use_parallel: Option<bool>,
+    pub eps_slope: Option<f32>,
+    pub azimuth_resolution: Option<f32>,
+    pub elevation_resolution: Option<f32>,
+    pub cluster_threshold: Option<f32>,
+    pub downsample_method: Option<String>,
+    pub gaussian_downsample_rate: Option<f32>,
 }

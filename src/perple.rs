@@ -109,19 +109,6 @@ impl Perple {
             )
             .await
             .map_err(|e| PerpleError::LoopError(e))?;
-        self.tracker_loop
-            .lock()
-            .await
-            .start_with_method(
-                LoopMode::Signal,
-                Arc::clone(&self.tracker),
-                |tracker| {
-                    let _ = tracker.run();
-                },
-                40,
-            )
-            .await
-            .map_err(|e| PerpleError::LoopError(e))?;
         self.fuse_loop
             .lock()
             .await
@@ -130,6 +117,19 @@ impl Perple {
                 Arc::clone(&self.fuse),
                 |fuse| {
                     let _ = fuse.act();
+                },
+                40,
+            )
+            .await
+            .map_err(|e| PerpleError::LoopError(e))?;
+        self.tracker_loop
+            .lock()
+            .await
+            .start_with_method(
+                LoopMode::Signal,
+                Arc::clone(&self.tracker),
+                |tracker| {
+                    let _ = tracker.run();
                 },
                 40,
             )

@@ -4,6 +4,7 @@ use perple::optional::data_loader::DataLoader;
 use perple::swapl::global_swapl;
 use perple::utils::boxes::Box3D;
 use perple::cloud::classify::environment::single_pick_ground;
+use perple::cloud::classify::strategy::{DbscanStrategy, RangeImageStrategy};
 
 use expto::rdmp::auto::unit::generate_unit;
 use expto::rdmp::proto::command::{CommandType, ExCommand};
@@ -51,7 +52,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let points = non_ground.to_vec();
         let start = Instant::now();
-        let (clusters, noise) = dbscan_2d(&points, 0.20, 10, 0.10);
+        let mut strat = DbscanStrategy::with_params(0.20, 0.0, 10, 50, 10, 0.10);
+        let (processed, objects) = strat.run(&points);
+        let (clusters, noise) = to_bench_results(&processed, &objects);
         let elapsed = start.elapsed();
         let n_humans = count_human_like(&clusters);
         println!(
@@ -68,13 +71,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // ── 策略 2: 遍历参数组合 ──
+    // ── 策略 2: 遍历参数组合（固定 eps DBSCAN） ──
     for &voxel in &voxel_values {
         for &eps in &patience_values {
             for &min_pts in &min_pts_values {
                 let points = non_ground.to_vec();
                 let start = Instant::now();
-                let (clusters, noise) = dbscan_2d(&points, eps, min_pts, voxel);
+                let mut strat = DbscanStrategy::with_params(eps, 0.0, min_pts, 50, 10, voxel);
+                let (processed, objects) = strat.run(&points);
+                let (clusters, noise) = to_bench_results(&processed, &objects);
                 let elapsed = start.elapsed();
                 let n_humans = count_human_like(&clusters);
 
@@ -106,7 +111,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for &min_pts in &min_pts_values {
                     let points = non_ground.to_vec();
                     let start = Instant::now();
-                    let (clusters, noise) = dbscan_2d_adaptive(&points, eps_0, slope, min_pts, voxel);
+                    let mut strat = DbscanStrategy::with_params(eps_0, slope, min_pts, 50, 10, voxel);
+                    let (processed, objects) = strat.run(&points);
+                    let (clusters, noise) = to_bench_results(&processed, &objects);
                     let elapsed = start.elapsed();
                     let n_humans = count_human_like(&clusters);
 
@@ -127,6 +134,100 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
+        }
+    }
+
+    // ── 策略 4: 无下采样对比（选最优参数组合，去掉 voxel） ──
+    {
+        let n_display = non_ground.len();
+        println!("\n  ── 无下采样对比 (n={}) ──", n_display);
+
+        // 固定 eps：使用新默认参数 0.35/5
+        let points = non_ground.to_vec();
+        let start = Instant::now();
+        let mut strat = DbscanStrategy::with_params(0.35, 0.0, 5, 50, 10, 0.0);
+        let (processed, objects) = strat.run(&points);
+        let (clusters, noise) = to_bench_results(&processed, &objects);
+        let elapsed = start.elapsed();
+        let n_humans = count_human_like(&clusters);
+        println!(
+            "  [无体素][固定] eps=0.35 min=5 → {}簇 {}噪声 {}大目标  {:.1}ms",
+            clusters.len(), noise, n_humans, elapsed.as_secs_f64() * 1000.0
+        );
+        results.push(BenchResult {
+            label: "无体素_eps0.35_m5".to_string(),
+            n_clusters: clusters.len(), n_noise: noise, n_humans,
+            clusters, elapsed_ms: elapsed.as_secs_f64() * 1000.0,
+        });
+
+        // 自适应 eps：最优组合 eps0=0.05 slope=0.05 min=5
+        let points = non_ground.to_vec();
+        let start = Instant::now();
+        let mut strat = DbscanStrategy::with_params(0.05, 0.05, 5, 50, 10, 0.0);
+        let (processed, objects) = strat.run(&points);
+        let (clusters, noise) = to_bench_results(&processed, &objects);
+        let elapsed = start.elapsed();
+        let n_humans = count_human_like(&clusters);
+        println!(
+            "  [无体素][自适应] eps0=0.05 s=0.05 m=5 → {}簇 {}噪声 {}大目标  {:.1}ms",
+            clusters.len(), noise, n_humans, elapsed.as_secs_f64() * 1000.0
+        );
+        results.push(BenchResult {
+            label: "无体素_adapt_e0.05_s0.05_m5".to_string(),
+            n_clusters: clusters.len(), n_noise: noise, n_humans,
+            clusters, elapsed_ms: elapsed.as_secs_f64() * 1000.0,
+        });
+
+        // 自适应 eps 变体：eps0=0.10 slope=0.05 min=3
+        let points = non_ground.to_vec();
+        let start = Instant::now();
+        let mut strat = DbscanStrategy::with_params(0.10, 0.05, 3, 50, 10, 0.0);
+        let (processed, objects) = strat.run(&points);
+        let (clusters, noise) = to_bench_results(&processed, &objects);
+        let elapsed = start.elapsed();
+        let n_humans = count_human_like(&clusters);
+        println!(
+            "  [无体素][自适应] eps0=0.10 s=0.05 m=3 → {}簇 {}噪声 {}大目标  {:.1}ms",
+            clusters.len(), noise, n_humans, elapsed.as_secs_f64() * 1000.0
+        );
+        results.push(BenchResult {
+            label: "无体素_adapt_e0.10_s0.05_m3".to_string(),
+            n_clusters: clusters.len(), n_noise: noise, n_humans,
+            clusters, elapsed_ms: elapsed.as_secs_f64() * 1000.0,
+        });
+    }
+
+    // ── 策略 5: Range Image 聚类（FLIC 风格） ──
+    {
+        let n_display = non_ground.len();
+        println!("\n  ── Range Image 聚类对比 (n={}) ──", n_display);
+
+        let ri_configs = [
+            // (az_deg, el_deg, threshold, min_pts, label)
+            (0.5, 0.5, 0.5, 3, "ri_0.5deg_t0.5_m3"),
+            (1.0, 1.0, 0.5, 3, "ri_1.0deg_t0.5_m3"),
+            (1.0, 1.0, 1.0, 3, "ri_1.0deg_t1.0_m3"),
+            (2.0, 2.0, 1.0, 3, "ri_2.0deg_t1.0_m3"),
+            (0.5, 0.5, 0.3, 5, "ri_0.5deg_t0.3_m5"),
+        ];
+
+        for &(az_deg, el_deg, thresh, min_pts, label) in &ri_configs {
+            let points = non_ground.to_vec();
+            let start = Instant::now();
+            let mut strat = RangeImageStrategy::with_params(az_deg, el_deg, thresh, min_pts);
+            let (processed, objects) = strat.run(&points);
+            let (clusters, noise) = to_bench_results(&processed, &objects);
+            let elapsed = start.elapsed();
+            let n_humans = count_human_like(&clusters);
+            println!(
+                "  [RI] {} → {}簇 {}噪声 {}大目标  {:.1}ms",
+                label, clusters.len(), noise, n_humans, elapsed.as_secs_f64() * 1000.0
+            );
+            results.push(BenchResult {
+                label: label.to_string(),
+                n_clusters: clusters.len(), n_noise: noise, n_humans,
+                clusters, elapsed_ms: elapsed.as_secs_f64() * 1000.0,
+            });
         }
     }
 
@@ -175,177 +276,17 @@ struct BenchResult {
     elapsed_ms: f64,
 }
 
-// ── 2D DBSCAN（XY 平面 + Z 范围过滤） ──
-fn dbscan_2d(
-    points: &[[f32; 3]],
-    eps: f32,
-    min_pts: usize,
-    voxel_size: f32,
-) -> (Vec<Vec<[f32; 3]>>, usize) {
-    if points.is_empty() {
-        return (Vec::new(), 0);
-    }
-
-    // 1. 体素下采样
-    let sampled = voxel_sample(points, voxel_size);
-    let n = sampled.len();
-    if n == 0 { return (Vec::new(), 0); }
-
-    // 2. 固定 eps 邻域统计
-    let neighbor_counts = count_neighbors_fixed(&sampled, eps);
-    // 3. DBSCAN 扩张
-    expand_clusters(&sampled, eps, min_pts, &neighbor_counts)
-}
-
-/// 自适应 eps DBSCAN：近密小 eps，远疏大 eps
-fn dbscan_2d_adaptive(
-    points: &[[f32; 3]],
-    eps_0: f32,
-    slope: f32,
-    min_pts: usize,
-    voxel_size: f32,
-) -> (Vec<Vec<[f32; 3]>>, usize) {
-    if points.is_empty() {
-        return (Vec::new(), 0);
-    }
-
-    let sampled = voxel_sample(points, voxel_size);
-    let n = sampled.len();
-    if n == 0 { return (Vec::new(), 0); }
-
-    // 预计算每个点到 LiDAR（原点）的 XY 距离
-    let ranges: Vec<f32> = sampled.iter()
-        .map(|p| (p[0] * p[0] + p[1] * p[1]).sqrt())
+/// 将策略 run() 返回值转换为 benchmark 的 (簇点集列表, 噪声点数)
+fn to_bench_results(points: &[[f32; 3]], objects: &[Vec<usize>]) -> (Vec<Vec<[f32; 3]>>, usize) {
+    let total: usize = objects.iter().map(|c| c.len()).sum();
+    let noise = points.len() - total;
+    let clusters: Vec<Vec<[f32; 3]>> = objects.iter()
+        .map(|c| c.iter().map(|&i| points[i]).collect())
         .collect();
-
-    // 自适应邻域：eps = eps_0 + slope * max(r_i, r_j)
-    let mut neighbor_counts = vec![0usize; n];
-    for i in 0..n {
-        for j in (i + 1)..n {
-            let dx = sampled[i][0] - sampled[j][0];
-            let dy = sampled[i][1] - sampled[j][1];
-            let dz = (sampled[i][2] - sampled[j][2]).abs();
-            let d2 = dx * dx + dy * dy;
-            let eps_ij = eps_0 + slope * ranges[i].max(ranges[j]);
-            if d2 < eps_ij * eps_ij && dz < eps_ij {
-                neighbor_counts[i] += 1;
-                neighbor_counts[j] += 1;
-            }
-        }
-    }
-
-    // DBSCAN 扩张也用自适应 eps
-    let mut labels = vec![-1i32; n];
-    let mut cluster_id = 0i32;
-    let mut clusters: Vec<Vec<[f32; 3]>> = Vec::new();
-
-    for i in 0..n {
-        if labels[i] >= 0 { continue; }
-        if neighbor_counts[i] < min_pts { continue; }
-
-        let mut stack = vec![i];
-        labels[i] = cluster_id;
-        let mut members = vec![i];
-
-        while let Some(seed) = stack.pop() {
-            let eps_seed = eps_0 + slope * ranges[seed];
-            for j in 0..n {
-                if labels[j] >= 0 { continue; }
-                let dx = sampled[seed][0] - sampled[j][0];
-                let dy = sampled[seed][1] - sampled[j][1];
-                let dz = (sampled[seed][2] - sampled[j][2]).abs();
-                if dx * dx + dy * dy < eps_seed * eps_seed && dz < eps_seed {
-                    labels[j] = cluster_id;
-                    members.push(j);
-                    if neighbor_counts[j] >= min_pts {
-                        stack.push(j);
-                    }
-                }
-            }
-        }
-        clusters.push(members.iter().map(|&idx| sampled[idx]).collect());
-        cluster_id += 1;
-    }
-
-    let noise_count = labels.iter().filter(|&&l| l == -1).count();
-    (clusters, noise_count)
+    (clusters, noise)
 }
 
-/// 体素下采样
-fn voxel_sample(points: &[[f32; 3]], voxel_size: f32) -> Vec<[f32; 3]> {
-    let mut seen = std::collections::HashSet::new();
-    points.iter().filter(|p| {
-        let key = [
-            (p[0] / voxel_size).floor() as i32,
-            (p[1] / voxel_size).floor() as i32,
-            (p[2] / voxel_size).floor() as i32,
-        ];
-        seen.insert(key)
-    }).copied().collect()
-}
-
-/// 固定 eps 邻域计数
-fn count_neighbors_fixed(sampled: &[[f32; 3]], eps: f32) -> Vec<usize> {
-    let n = sampled.len();
-    let mut counts = vec![0usize; n];
-    for i in 0..n {
-        for j in (i + 1)..n {
-            let dx = sampled[i][0] - sampled[j][0];
-            let dy = sampled[i][1] - sampled[j][1];
-            let dz = (sampled[i][2] - sampled[j][2]).abs();
-            if dx * dx + dy * dy < eps * eps && dz < eps {
-                counts[i] += 1;
-                counts[j] += 1;
-            }
-        }
-    }
-    counts
-}
-
-/// DBSCAN 簇扩张（固定 eps）
-fn expand_clusters(
-    sampled: &[[f32; 3]],
-    eps: f32,
-    min_pts: usize,
-    neighbor_counts: &[usize],
-) -> (Vec<Vec<[f32; 3]>>, usize) {
-    let n = sampled.len();
-    let mut labels = vec![-1i32; n];
-    let mut cluster_id = 0i32;
-    let mut clusters: Vec<Vec<[f32; 3]>> = Vec::new();
-
-    for i in 0..n {
-        if labels[i] >= 0 { continue; }
-        if neighbor_counts[i] < min_pts { continue; }
-
-        let mut stack = vec![i];
-        labels[i] = cluster_id;
-        let mut members = vec![i];
-
-        while let Some(seed) = stack.pop() {
-            for j in 0..n {
-                if labels[j] >= 0 { continue; }
-                let dx = sampled[seed][0] - sampled[j][0];
-                let dy = sampled[seed][1] - sampled[j][1];
-                let dz = (sampled[seed][2] - sampled[j][2]).abs();
-                if dx * dx + dy * dy < eps * eps && dz < eps {
-                    labels[j] = cluster_id;
-                    members.push(j);
-                    if neighbor_counts[j] >= min_pts {
-                        stack.push(j);
-                    }
-                }
-            }
-        }
-        clusters.push(members.iter().map(|&idx| sampled[idx]).collect());
-        cluster_id += 1;
-    }
-
-    let noise_count = labels.iter().filter(|&&l| l == -1).count();
-    (clusters, noise_count)
-}
-
-/// 按目标尺寸过滤（剔除过小/过大的簇，适合跟踪器的初始筛选）
+/// 按目标尺寸过滤：剔除细柱/矮小噪声，保留可跟踪目标
 fn count_human_like(clusters: &[Vec<[f32; 3]>]) -> usize {
     let mut count = 0;
     for cluster in clusters {
@@ -354,10 +295,14 @@ fn count_human_like(clusters: &[Vec<[f32; 3]>]) -> usize {
         box3d.cloud2box(&cluster);
         let w = box3d.length.max(box3d.width);
         let h = box3d.height;
-        let xy_ratio = if h > 0.0 { w / h } else { 999.0 };
+
+        // 基础过滤：太细（<0.25m 的柱子）或太矮（<0.5m 的地面残渣）跳过
+        if w < 0.25 || h < 0.5 {
+            continue;
+        }
 
         // 典型站立目标：高>宽，高1.0~2.5m，宽<1.2m
-        if h > w * 0.5 && w < 1.2 && h > 1.0 && h < 2.5 && xy_ratio < 1.5 {
+        if h > w * 0.5 && w < 1.2 && h > 1.0 && h < 2.5 {
             count += 1;
         }
     }

@@ -3,15 +3,17 @@
 //! 基于常速模型（CV Model）的卡尔曼滤波器，6 维状态：
 //!   [x, y, z, vx, vy, vz]
 //!
-//! 测量值：3 维位置 [x, y, z]
+//! 测量值（LV-DOT 风格）：6 维 [x, y, z, vx, vy, vz]
+//! - 位置直接观测量测值
+//! - 速度通过 k 帧位置差计算：(pos_t - pos_{t-k}) / (k * dt)
 //!
 //! 关键设计：
 //! - predict() 和 correct() 分离，避免重复预测
 //! - 动态 dt：基于帧间隔时间戳实时计算
-//! - 马氏距离可用于数据关联门控
+//! - Q/R 对位置和速度分别设值（LV-DOT 启发）
 
 use nalgebra as na;
-use na::{Matrix3, Matrix6, OMatrix, OVector, Vector3, U3, U6};
+use na::{Matrix3, Matrix6, OMatrix, OVector, Vector3, Vector6, U6};
 use adskalman::{
     ObservationModel,
     TransitionModelLinearNoControl,
@@ -20,24 +22,28 @@ use adskalman::{
 
 /// 状态维度 (6：x, y, z, vx, vy, vz)
 pub const STATE_DIM: usize = 6;
-/// 观测维度 (3：x, y, z)
-pub const OBS_DIM: usize = 3;
+/// 观测维度 (6：x, y, z, vx, vy, vz)
+pub const OBS_DIM: usize = 6;
 
 #[derive(Debug, Clone)]
 pub struct KalmanConfig {
     pub dt: f64,
-    pub process_noise_scale: f64,
-    pub measurement_noise_scale: f64,
+    pub process_noise_pos: f64,
+    pub process_noise_vel: f64,
+    pub measurement_noise_pos: f64,
+    pub measurement_noise_vel: f64,
     pub initial_covariance_scale: f64,
 }
 
 impl Default for KalmanConfig {
     fn default() -> Self {
         Self {
-            dt: 0.04,                              // 默认 40ms（匹配 MultiLoop 间隔）
-            process_noise_scale: 0.1,              // 移动场景，适当放宽
-            measurement_noise_scale: 0.1,
-            initial_covariance_scale: 1.0,         // 收敛更快
+            dt: 0.04,
+            process_noise_pos: 0.1,
+            process_noise_vel: 0.05,
+            measurement_noise_pos: 0.1,
+            measurement_noise_vel: 0.2,
+            initial_covariance_scale: 0.5,
         }
     }
 }
@@ -61,8 +67,12 @@ impl ConstantVelocityModel {
             0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
             0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
         );
-        let q = config.process_noise_scale;
-        let process_noise = Matrix6::<f64>::identity() * q;
+        // LV-DOT 风格：位置和速度的 process noise 分开
+        let q_pos = config.process_noise_pos;
+        let q_vel = config.process_noise_vel;
+        let process_noise = Matrix6::<f64>::from_diagonal(&Vector6::new(
+            q_pos, q_pos, q_pos, q_vel, q_vel, q_vel,
+        ));
         Self {
             transition_matrix,
             transition_matrix_transpose: transition_matrix.transpose(),
@@ -91,21 +101,21 @@ impl TransitionModelLinearNoControl<f64, U6> for ConstantVelocityModel {
     fn Q(&self) -> &OMatrix<f64, U6, U6> { &self.process_noise }
 }
 
-/// 位置观测模型（只观测位置，不观测速度）
-struct PositionObservationModel {
-    observation_matrix: OMatrix<f64, U3, U6>,
-    observation_matrix_transpose: OMatrix<f64, U6, U3>,
-    measurement_noise: Matrix3<f64>,
+/// 全状态观测模型（LV-DOT 风格）：同时观测位置和速度
+///
+/// H = I_6（直接观测全部 6 个状态）
+struct FullStateObservationModel {
+    observation_matrix: Matrix6<f64>,
+    observation_matrix_transpose: Matrix6<f64>,
+    measurement_noise: Matrix6<f64>,
 }
 
-impl PositionObservationModel {
-    fn new(noise_scale: f64) -> Self {
-        let observation_matrix = OMatrix::<f64, U3, U6>::new(
-            1.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-            0.0, 1.0, 0.0, 0.0, 0.0, 0.0,
-            0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
-        );
-        let measurement_noise = Matrix3::<f64>::identity() * noise_scale;
+impl FullStateObservationModel {
+    fn new(noise_pos: f64, noise_vel: f64) -> Self {
+        let observation_matrix = Matrix6::<f64>::identity();
+        let measurement_noise = Matrix6::<f64>::from_diagonal(&Vector6::new(
+            noise_pos, noise_pos, noise_pos, noise_vel, noise_vel, noise_vel,
+        ));
         Self {
             observation_matrix,
             observation_matrix_transpose: observation_matrix.transpose(),
@@ -114,16 +124,16 @@ impl PositionObservationModel {
     }
 }
 
-impl ObservationModel<f64, U6, U3> for PositionObservationModel {
-    fn H(&self) -> &OMatrix<f64, U3, U6> { &self.observation_matrix }
-    fn HT(&self) -> &OMatrix<f64, U6, U3> { &self.observation_matrix_transpose }
-    fn R(&self) -> &OMatrix<f64, U3, U3> { &self.measurement_noise }
+impl ObservationModel<f64, U6, U6> for FullStateObservationModel {
+    fn H(&self) -> &OMatrix<f64, U6, U6> { &self.observation_matrix }
+    fn HT(&self) -> &OMatrix<f64, U6, U6> { &self.observation_matrix_transpose }
+    fn R(&self) -> &OMatrix<f64, U6, U6> { &self.measurement_noise }
 }
 
 /// 封装的卡尔曼滤波器，提供 predict/correct 分离 API
 pub struct KalmanFilterWrapper {
     motion_model: ConstantVelocityModel,
-    observation_model: PositionObservationModel,
+    observation_model: FullStateObservationModel,
     current_estimate: StateAndCovariance<f64, U6>,
     config: KalmanConfig,
 }
@@ -131,7 +141,10 @@ pub struct KalmanFilterWrapper {
 impl KalmanFilterWrapper {
     pub fn new(config: KalmanConfig) -> Result<Self, adskalman::Error> {
         let motion_model = ConstantVelocityModel::new(config.clone());
-        let observation_model = PositionObservationModel::new(config.measurement_noise_scale);
+        let observation_model = FullStateObservationModel::new(
+            config.measurement_noise_pos,
+            config.measurement_noise_vel,
+        );
         let initial_state = OVector::<f64, U6>::zeros();
         let initial_covariance = OMatrix::<f64, U6, U6>::identity() * config.initial_covariance_scale;
         let current_estimate = StateAndCovariance::new(initial_state, initial_covariance);
@@ -139,16 +152,14 @@ impl KalmanFilterWrapper {
     }
 
     /// 用初始位置（和可选速度）初始化滤波器
-    pub fn init_with_state(&mut self, position: Vector3<f64>, velocity: Option<Vector3<f64>>) {
+    pub fn init_with_state(&mut self, position: Vector6<f64>) {
         let mut state = OVector::<f64, U6>::zeros();
-        state[0] = position.x;
-        state[1] = position.y;
-        state[2] = position.z;
-        if let Some(vel) = velocity {
-            state[3] = vel.x;
-            state[4] = vel.y;
-            state[5] = vel.z;
-        }
+        state[0] = position[0];
+        state[1] = position[1];
+        state[2] = position[2];
+        state[3] = position[3];
+        state[4] = position[4];
+        state[5] = position[5];
         let covariance = OMatrix::<f64, U6, U6>::identity() * self.config.initial_covariance_scale;
         self.current_estimate = StateAndCovariance::new(state, covariance);
     }
@@ -160,10 +171,10 @@ impl KalmanFilterWrapper {
         Ok(())
     }
 
-    /// 修正：用观测值校正状态（不含预测步骤）
+    /// 修正（LV-DOT 风格）：用 6 维观测 [x,y,z,vx,vy,vz] 校正
     ///
-    /// 直接计算卡尔曼增益并更新，不使用 step()，避免重复预测。
-    pub fn correct(&mut self, measurement: Vector3<f64>) -> Result<(), adskalman::Error> {
+    /// 速度观测通过 k 帧位置差计算，由上层调用者提供。
+    pub fn correct(&mut self, measurement: Vector6<f64>) -> Result<(), adskalman::Error> {
         let x = self.current_estimate.state();
         let p = self.current_estimate.covariance();
         let h = self.observation_model.H();
@@ -198,6 +209,12 @@ impl KalmanFilterWrapper {
         Vector3::new(s[3], s[4], s[5])
     }
 
+    /// 返回全状态 [x,y,z,vx,vy,vz]
+    pub fn get_full_state(&self) -> Vector6<f64> {
+        let s = self.current_estimate.state();
+        Vector6::new(s[0], s[1], s[2], s[3], s[4], s[5])
+    }
+
     pub fn get_state(&self) -> &OVector<f64, U6> {
         self.current_estimate.state()
     }
@@ -206,39 +223,88 @@ impl KalmanFilterWrapper {
         self.current_estimate.covariance()
     }
 
-    pub fn get_position_uncertainty(&self) -> Vector3<f64> {
+    pub fn get_position_uncertainty(&self) -> Vector6<f64> {
         let cov = self.current_estimate.covariance();
-        Vector3::new(cov[(0, 0)].sqrt(), cov[(1, 1)].sqrt(), cov[(2, 2)].sqrt())
+        Vector6::new(
+            cov[(0, 0)].sqrt(), cov[(1, 1)].sqrt(), cov[(2, 2)].sqrt(),
+            cov[(3, 3)].sqrt(), cov[(4, 4)].sqrt(), cov[(5, 5)].sqrt(),
+        )
     }
 
-    pub fn get_velocity_uncertainty(&self) -> Vector3<f64> {
-        let cov = self.current_estimate.covariance();
-        Vector3::new(cov[(3, 3)].sqrt(), cov[(4, 4)].sqrt(), cov[(5, 5)].sqrt())
-    }
-
-    /// 马氏距离（用于数据关联门控）
+    /// 马氏距离（位置分量，用于数据关联门控）
     ///
-    /// d = sqrt(innovation^T * S^-1 * innovation)
+    /// 仅使用 [x,y,z] 位置分量计算，因为检测值不含速度信息。
+    /// d = sqrt(innovation_pos^T * S_pos^-1 * innovation_pos)
     /// 服从 χ²(3) 分布，α=0.05 时阈值为 sqrt(7.815) ≈ 2.795
     pub fn mahalanobis_distance(&self, measurement: Vector3<f64>) -> f64 {
-        let innovation = self.get_innovation(measurement);
-        let s = self.get_innovation_covariance();
+        let s = self.current_estimate.state();
+        let innovation = Vector3::new(
+            measurement.x - s[0],
+            measurement.y - s[1],
+            measurement.z - s[2],
+        );
+        // 取 S 的 3x3 位置子矩阵
+        let cov = self.current_estimate.covariance();
+        let h = self.observation_model.H();
+        let r = self.observation_model.R();
+        let s_full = h * cov * h.transpose() + r;
+        let s_pos = s_full.fixed_view::<3, 3>(0, 0);
+        s_pos.try_inverse()
+            .map(|s_inv| (&innovation).dot(&(&s_inv * &innovation)).sqrt())
+            .unwrap_or(f64::MAX)
+    }
+
+    /// 全状态马氏距离（6D）
+    pub fn mahalanobis_distance_full(&self, measurement: Vector6<f64>) -> f64 {
+        let innovation = measurement - self.current_estimate.state();
+        let cov = self.current_estimate.covariance();
+        let h = self.observation_model.H();
+        let r = self.observation_model.R();
+        let s = h * cov * h.transpose() + r;
         s.try_inverse()
             .map(|s_inv| (&innovation).dot(&(&s_inv * &innovation)).sqrt())
             .unwrap_or(f64::MAX)
     }
 
-    pub fn get_innovation(&self, measurement: Vector3<f64>) -> Vector3<f64> {
-        let s = self.current_estimate.state();
-        measurement - Vector3::new(s[0], s[1], s[2])
-    }
-
-    pub fn get_innovation_covariance(&self) -> Matrix3<f64> {
+    pub fn get_innovation_covariance(&self) -> Matrix6<f64> {
         let p = self.current_estimate.covariance();
         let h = self.observation_model.H();
         let ht = self.observation_model.HT();
         let r = self.observation_model.R();
         h * p * ht + r
+    }
+
+    /// 位置-only 修正（用于早期帧，速度测量尚不可靠时）
+    ///
+    /// 使用 H_pos = [I_3 | 0_3x3]（3x6），仅修正位置子空间。
+    /// 速度通过预测步骤保持（P_vp 交叉协方差会产生少量间接更新）。
+    /// 待 position_history 积累足够帧数后切换到全状态 6D 修正。
+    pub fn correct_position(&mut self, measurement: Vector3<f64>) -> Result<(), adskalman::Error> {
+        let x = self.current_estimate.state().clone();
+        let p = self.current_estimate.covariance().clone();
+        let r_val = self.config.measurement_noise_pos;
+
+        // innovation = z - H_pos * x
+        let innovation = Vector3::new(measurement.x - x[0], measurement.y - x[1], measurement.z - x[2]);
+
+        // S_pos = P[0:3, 0:3] + R_pos
+        let s = p.fixed_view::<3, 3>(0, 0) + Matrix3::identity() * r_val;
+        let s_inv = s.try_inverse()
+            .ok_or(adskalman::Error::CovarianceNotPositiveSemiDefinite)?;
+
+        // K = P * H_pos^T * S^(-1) = P[:, 0:3] * S^(-1)  (6x3)
+        let k = p.columns(0, 3) * s_inv;
+
+        // x_new = x + K * innovation
+        let new_x = x + &k * innovation;
+
+        // P_new = P - K * H_pos * P = P - K * P[0:3, :]
+        let p_slices = p.clone();
+        let hp = p_slices.fixed_view::<3, 6>(0, 0);
+        let new_p = p - k * hp;
+
+        self.current_estimate = StateAndCovariance::new(new_x, new_p);
+        Ok(())
     }
 
     pub fn reset(&mut self) {
@@ -247,17 +313,20 @@ impl KalmanFilterWrapper {
         self.current_estimate = StateAndCovariance::new(initial_state, initial_covariance);
     }
 
-    pub fn set_measurement_noise(&mut self, noise_scale: f64) {
-        self.observation_model = PositionObservationModel::new(noise_scale);
-        self.config.measurement_noise_scale = noise_scale;
+    pub fn set_measurement_noise(&mut self, noise_pos: f64, noise_vel: f64) {
+        self.observation_model = FullStateObservationModel::new(noise_pos, noise_vel);
+        self.config.measurement_noise_pos = noise_pos;
+        self.config.measurement_noise_vel = noise_vel;
     }
 
-    pub fn set_process_noise(&mut self, noise_scale: f64) {
+    pub fn set_process_noise(&mut self, noise_pos: f64, noise_vel: f64) {
         self.motion_model = ConstantVelocityModel::new(KalmanConfig {
-            process_noise_scale: noise_scale,
+            process_noise_pos: noise_pos,
+            process_noise_vel: noise_vel,
             ..self.config.clone()
         });
-        self.config.process_noise_scale = noise_scale;
+        self.config.process_noise_pos = noise_pos;
+        self.config.process_noise_vel = noise_vel;
     }
 }
 

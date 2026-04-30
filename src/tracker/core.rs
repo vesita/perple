@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::SystemTime;
 
-use nalgebra::Vector3;
+use nalgebra::{Vector3, Vector6};
 
 use crate::{
     cloud::CldBud,
@@ -81,6 +81,16 @@ struct TrackedObject {
     classification_history: Vec<TargetClass>,
     /// 关联时缓存最近的检测框，避免输出阶段二次搜索
     last_box: Option<Box3D>,
+    /// 冻结的箱体尺寸（fix_size 稳定用）
+    fixed_box: Option<Box3D>,
+    /// 点云历史（环形缓冲区，用于点云投票）
+    point_cloud_history: Vec<Vec<[f32; 3]>>,
+    /// 连续被判定为 dynamic candidate 的帧数
+    dynamic_candidate_count: u32,
+    /// k 帧位置历史（用于 LV-DOT 风格的 k 帧速度观测）
+    position_history: Vec<[f64; 3]>,
+    /// k 帧速度观测平均帧数
+    kf_avg_frames: usize,
 }
 
 impl TrackedObject {
@@ -89,13 +99,15 @@ impl TrackedObject {
         initial_box: &Box3D,
         class_type: String,
         confidence: f32,
+        centroid: [f32; 3],
+        kf_avg_frames: usize,
     ) -> Result<Self, adskalman::Error> {
         let mut kalman_filter = KalmanFilterWrapper::new(KalmanConfig::default())?;
-        let center = initial_box.center();
-        kalman_filter.init_with_state(
-            Vector3::new(center.x as f64, center.y as f64, center.z as f64),
-            None,
-        );
+        // 初始状态：[x, y, z, 0, 0, 0]
+        kalman_filter.init_with_state(Vector6::new(
+            centroid[0] as f64, centroid[1] as f64, centroid[2] as f64,
+            0.0, 0.0, 0.0,
+        ));
         Ok(Self {
             id,
             class_type,
@@ -108,6 +120,11 @@ impl TrackedObject {
             classification: TargetClass::Unknown,
             classification_history: Vec::with_capacity(10),
             last_box: Some(initial_box.clone()),
+            fixed_box: None,
+            point_cloud_history: Vec::with_capacity(16),
+            dynamic_candidate_count: 0,
+            position_history: Vec::with_capacity(kf_avg_frames + 2),
+            kf_avg_frames,
         })
     }
 
@@ -116,16 +133,60 @@ impl TrackedObject {
         self.kalman_filter.predict(dt)
     }
 
-    /// 修正：用观测值校正状态（不含预测）
+    /// 修正（LV-DOT 风格）：用 [x,y,z,vx,vy,vz] 校正
+    ///
+    /// - 位置来自当前帧点云质心 centroid
+    /// - 速度通过 k 帧位置差计算：(pos_t - pos_{t-k}) / (k * dt)
+    ///   k = kf_avg_frames，dt 从上次修正到现在的实际时间
+    /// 修正（LV-DOT 风格）：用 [x,y,z,vx,vy,vz] 校正
+    ///
+    /// - 位置来自当前帧点云质心 centroid
+    /// - 速度通过 k 帧位置差计算：(pos_t - pos_{t-k}) / (k * dt)
     fn correct(
         &mut self,
         new_box: &Box3D,
         new_class_type: String,
         new_confidence: f32,
+        centroid: [f32; 3],
     ) -> Result<(), adskalman::Error> {
-        let center = new_box.center();
-        let measurement = Vector3::new(center.x as f64, center.y as f64, center.z as f64);
-        self.kalman_filter.correct(measurement)?;
+        let now = SystemTime::now();
+        let dt_since_last = now.duration_since(self.last_seen)
+            .unwrap_or_default().as_secs_f64().clamp(0.001, 1.0);
+
+        // 记录位置历史（环形缓冲）
+        self.position_history.push([
+            centroid[0] as f64,
+            centroid[1] as f64,
+            centroid[2] as f64,
+        ]);
+        if self.position_history.len() > self.kf_avg_frames + 2 {
+            self.position_history.remove(0);
+        }
+
+        // LV-DOT：v = (pos_t - pos_{t-k}) / (k * dt)
+        let hist_len = self.position_history.len();
+        let k = self.kf_avg_frames.min(hist_len.saturating_sub(1));
+        const MIN_K_FOR_VELOCITY: usize = 3;
+        if k >= MIN_K_FOR_VELOCITY {
+            let old = self.position_history[hist_len - 1 - k];
+            let curr = *self.position_history.last().unwrap();
+            let dt_k = (k as f64 * dt_since_last).max(0.001);
+            let meas_vx = (curr[0] - old[0]) / dt_k;
+            let meas_vy = (curr[1] - old[1]) / dt_k;
+            let meas_vz = (curr[2] - old[2]) / dt_k;
+            let measurement = Vector6::new(
+                centroid[0] as f64, centroid[1] as f64, centroid[2] as f64,
+                meas_vx, meas_vy, meas_vz,
+            );
+            self.kalman_filter.correct(measurement)?;
+        } else {
+            // 历史不足，位置-only 修正（避免 0 速度观测污染状态）
+            self.kalman_filter.correct_position(Vector3::new(
+                centroid[0] as f64,
+                centroid[1] as f64,
+                centroid[2] as f64,
+            ))?;
+        }
 
         // 记录速度用于聚类
         let v = self.kalman_filter.get_velocity();
@@ -177,6 +238,45 @@ impl TrackedObject {
         let v = self.smoothed_velocity();
         (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
     }
+
+    /// 箱体尺寸锁定：跟踪稳定后如果尺寸变化小则冻结
+    fn apply_fix_size(&mut self, min_frames: usize, dim_thresh: f32) {
+        if self.appearance_count <= min_frames as u32 {
+            return;
+        }
+        let current = match self.last_box {
+            Some(ref b) => b.clone(),
+            None => return,
+        };
+        let fixed = match self.fixed_box {
+            Some(ref f) => f.clone(),
+            None => {
+                self.fixed_box = Some(current);
+                return;
+            }
+        };
+        // 计算三维尺寸变化率的最大值
+        let ratio = [
+            (current.length - fixed.length).abs() / fixed.length.max(1e-6),
+            (current.width - fixed.width).abs() / fixed.width.max(1e-6),
+            (current.height - fixed.height).abs() / fixed.height.max(1e-6),
+        ]
+        .iter()
+        .cloned()
+        .fold(0.0f32, f32::max);
+
+        if ratio < dim_thresh {
+            // 变化小 → 冻结尺寸
+            let mut locked = current;
+            locked.length = fixed.length;
+            locked.width = fixed.width;
+            locked.height = fixed.height;
+            self.last_box = Some(locked);
+        } else {
+            // 变化大 → 更新参考
+            self.fixed_box = Some(current);
+        }
+    }
 }
 
 /// 主跟踪器
@@ -184,11 +284,24 @@ pub struct Tracker {
     sight: Eap<Stream<Vec<Sight>>>,
     tar3d: Eap<Stream<Vec<CldBud>>>,
     target: Eap<Stream<Vec<Target>>>,
+    clouds_filtered: Eap<Stream<Vec<[f32; 3]>>>,
     next_id: usize,
     tracked_objects: HashMap<usize, TrackedObject>,
     max_disappeared: u32,
     min_confidence: f32,
     min_appearances: u32,
+    /// 点云投票配置
+    use_point_cloud_voting: bool,
+    point_cloud_vote_threshold: f32,
+    point_cloud_skip_frames: usize,
+    point_cloud_consistency_frames: usize,
+    point_cloud_history_len: usize,
+    /// fix_size 配置
+    use_fix_size: bool,
+    fix_size_frames: usize,
+    fix_size_dim_thresh: f32,
+    /// k 帧速度观测平均帧数
+    kf_avg_frames: usize,
 }
 
 impl Tracker {
@@ -198,11 +311,21 @@ impl Tracker {
             sight: swapl.sights.clone(),
             tar3d: swapl.cld_objs.clone(),
             target: swapl.targets.clone(),
+            clouds_filtered: swapl.clouds_filtered.clone(),
             next_id: 1,
             tracked_objects: HashMap::new(),
-            max_disappeared: 5,
+            max_disappeared: 8,
             min_confidence: 0.3,
             min_appearances: 3,
+            use_point_cloud_voting: true,
+            point_cloud_vote_threshold: 0.8,
+            point_cloud_skip_frames: 5,
+            point_cloud_consistency_frames: 15,
+            point_cloud_history_len: 10,
+            use_fix_size: true,
+            fix_size_frames: 10,
+            fix_size_dim_thresh: 0.4,
+            kf_avg_frames: 10,
         }
     }
 
@@ -271,6 +394,133 @@ impl Tracker {
             .collect();
 
         (matches, unmatched)
+    }
+
+    /// 提取包围盒内的点（AABB 快速过滤）
+    fn extract_points_in_box(points: &[[f32; 3]], box3d: &Box3D) -> Vec<[f32; 3]> {
+        // 先用 AABB 粗略过滤
+        let verts = box3d.vertices();
+        let (mut x_min, mut x_max) = (verts[0].x, verts[0].x);
+        let (mut y_min, mut y_max) = (verts[0].y, verts[0].y);
+        let (mut z_min, mut z_max) = (verts[0].z, verts[0].z);
+        for v in &verts {
+            x_min = x_min.min(v.x);
+            x_max = x_max.max(v.x);
+            y_min = y_min.min(v.y);
+            y_max = y_max.max(v.y);
+            z_min = z_min.min(v.z);
+            z_max = z_max.max(v.z);
+        }
+
+        points.iter()
+            .filter(|p| {
+                p[0] >= x_min && p[0] <= x_max
+                    && p[1] >= y_min && p[1] <= y_max
+                    && p[2] >= z_min && p[2] <= z_max
+                    && box3d.contains(p)
+            })
+            .copied()
+            .collect()
+    }
+
+    /// 更新所有活跃轨迹的点云历史
+    fn update_object_point_clouds(
+        objects: &mut HashMap<usize, TrackedObject>,
+        filter_points: &[[f32; 3]],
+        max_history: usize,
+    ) {
+        for obj in objects.values_mut() {
+            if let Some(ref last_box) = obj.last_box {
+                let pts = Self::extract_points_in_box(filter_points, last_box);
+                if pts.is_empty() {
+                    continue; // 不推入空帧，避免稀释历史
+                }
+                if obj.point_cloud_history.len() >= max_history {
+                    obj.point_cloud_history.remove(0);
+                }
+                obj.point_cloud_history.push(pts);
+            }
+        }
+    }
+
+    /// 点云投票动态分类（LV-DOT 启发）
+    ///
+    /// 对每个轨迹：当前帧点云 vs skip_frames 帧前点云
+    /// 每个点找最近邻 → 点对方向与 KF 速度做点乘 → 方向一致=有效投票
+    /// votes/total >= threshold 且 speed >= 0.2m/s → dynamic 候选
+    /// 连续 consistency_frames 帧为候选 → 标记 Dynamic
+    fn classify_by_point_cloud_voting(
+        objects: &mut HashMap<usize, TrackedObject>,
+        vote_threshold: f32,
+        skip_frames: usize,
+        consistency_frames: usize,
+    ) {
+        let ids: Vec<usize> = objects.keys().copied().collect();
+        for id in &ids {
+            let obj = match objects.get_mut(id) {
+                Some(obj) => obj,
+                None => continue,
+            };
+
+            let hist_len = obj.point_cloud_history.len();
+            if hist_len <= skip_frames {
+                continue; // 历史不够，跳过
+            }
+
+            let old_pts = &obj.point_cloud_history[hist_len - 1 - skip_frames];
+            let new_pts = &obj.point_cloud_history[hist_len - 1];
+
+            if old_pts.is_empty() || new_pts.is_empty() {
+                continue;
+            }
+
+            let vel = obj.kalman_filter.get_velocity();
+            let speed = (vel.x * vel.x + vel.y * vel.y + vel.z * vel.z).sqrt();
+            if speed < 0.2 {
+                // 速度太小，重置候选计数
+                obj.dynamic_candidate_count = 0;
+                continue;
+            }
+
+            // 对每个新点找 NN 旧点，投票
+            let mut votes = 0usize;
+            let total = new_pts.len().min(old_pts.len()); // 对称比较
+            if total == 0 {
+                continue;
+            }
+
+            for i in 0..total {
+                let np = new_pts[i];
+                // 在 old_pts 中找一个距离最近的旧点
+                let best_old = old_pts.iter()
+                    .min_by(|a, b| {
+                        let da = (np[0] - a[0]).powi(2) + (np[1] - a[1]).powi(2) + (np[2] - a[2]).powi(2);
+                        let db = (np[0] - b[0]).powi(2) + (np[1] - b[1]).powi(2) + (np[2] - b[2]).powi(2);
+                        da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+                    });
+
+                if let Some(op) = best_old {
+                    let dx = np[0] - op[0];
+                    let dy = np[1] - op[1];
+                    let dz = np[2] - op[2];
+                    // 方向与 KF 速度点乘 > 0 → 方向一致
+                    let dot = dx * vel.x as f32 + dy * vel.y as f32 + dz * vel.z as f32;
+                    if dot > 0.0 {
+                        votes += 1;
+                    }
+                }
+            }
+
+            let ratio = votes as f32 / total as f32;
+            if ratio >= vote_threshold {
+                obj.dynamic_candidate_count += 1;
+                if obj.dynamic_candidate_count >= consistency_frames as u32 {
+                    set_classification(obj, TargetClass::Dynamic);
+                }
+            } else {
+                obj.dynamic_candidate_count = 0;
+            }
+        }
     }
 
     /// 速度空间聚类分类
@@ -450,6 +700,7 @@ impl Tracker {
                     &detection.the_box,
                     detection.class_name.clone(),
                     detection.confidence,
+                    detection.centroid,
                 )?;
                 updated_ids.push(obj_id);
             }
@@ -465,6 +716,8 @@ impl Tracker {
                 &detection.the_box,
                 detection.class_name.clone(),
                 detection.confidence,
+                detection.centroid,
+                self.kf_avg_frames,
             ) {
                 Ok(obj) => {
                     self.tracked_objects.insert(new_id, obj);
@@ -501,7 +754,38 @@ impl Tracker {
         // 步骤 7: 速度聚类分类
         Self::classify_by_velocity(&mut self.tracked_objects);
 
-        // 步骤 8: 生成输出（过滤短命目标）
+        // 步骤 8: 点云投票动态分类（LV-DOT 启发）
+        if self.use_point_cloud_voting {
+            let filter_points = {
+                let mut cf = self.clouds_filtered.blocking_lock();
+                match cf.read() {
+                    Some(data) => data,
+                    None => Vec::new(),
+                }
+            };
+            if !filter_points.is_empty() {
+                Self::update_object_point_clouds(
+                    &mut self.tracked_objects,
+                    &filter_points,
+                    self.point_cloud_history_len,
+                );
+                Self::classify_by_point_cloud_voting(
+                    &mut self.tracked_objects,
+                    self.point_cloud_vote_threshold,
+                    self.point_cloud_skip_frames,
+                    self.point_cloud_consistency_frames,
+                );
+            }
+        }
+
+        // 步骤 9: 箱体尺寸锁定 fix_size
+        if self.use_fix_size {
+            for obj in self.tracked_objects.values_mut() {
+                obj.apply_fix_size(self.fix_size_frames, self.fix_size_dim_thresh);
+            }
+        }
+
+        // 步骤 10: 生成输出（过滤短命目标）
         let mut output_targets = Vec::new();
         for tracked_id in &updated_ids {
             if let Some(obj) = self.tracked_objects.get(tracked_id) {
@@ -531,6 +815,16 @@ impl Tracker {
                     TargetClass::Unknown => "unknown",
                 };
 
+                if *tracked_id <= 5 && obj.appearance_count <= 1 {
+                    eprintln!("DEBUG new obj {}: kf_vel=({:.4},{:.4},{:.4}) speed={:.4} hist_len={}",
+                        tracked_id,
+                        obj.kalman_filter.get_velocity().x,
+                        obj.kalman_filter.get_velocity().y,
+                        obj.kalman_filter.get_velocity().z,
+                        spd,
+                        obj.velocity_history.len(),
+                    );
+                }
                 let mut target = Target {
                     the_box: predicted_box,
                     class_type: obj.class_type.clone(),
@@ -546,7 +840,7 @@ impl Tracker {
             }
         }
 
-        // 步骤 9: 写入输出
+        // 步骤 10: 写入输出
         {
             let mut target_guard = self.target.blocking_lock();
             target_guard.write(output_targets)?;

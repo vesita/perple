@@ -26,6 +26,8 @@ pub struct Swapl {
     /// 点云数据输入流
     pub clouds: Eap<Stream<Vec<[f32; 3]>>>,
     pub clouds_out: Eap<Stream<Vec<[f32; 3]>>>,
+    /// 地面滤除后的点云（用于跟踪器点云投票）
+    pub clouds_filtered: Eap<Stream<Vec<[f32; 3]>>>,
     /// 点云检测结果输出流
     pub cld_objs: Eap<Stream<Vec<CldBud>>>,
     /// 图像数据输入流
@@ -46,6 +48,7 @@ impl Swapl {
         Swapl {
             clouds: new_eap(Stream::new()),
             clouds_out: new_eap(Stream::new()),
+            clouds_filtered: new_eap(Stream::new()),
             cld_objs: new_eap(Stream::new()),
             colors: new_eap(Stream::new()),
             clr_objs: new_eap(Stream::new()),

@@ -1,4 +1,4 @@
-stream_capacity = 16
+stream_capacity = 1024
 detections_capacity = 16
 person_class_label = "person"
 points_capacity = 16384
@@ -26,13 +26,25 @@ has_ceiling = false
 
 # 点云聚类参数
 [claster]
+# 聚类策略: "dbscan", "dbscan_adaptive", "range_image"
+strategy = "dbscan_adaptive"
 merge_patience = 0.20
 merge_threshold = 0.6
 voxel_size = 0.1
-min_points_per_cluster = 10
+min_points_per_cluster = 8
+eps_slope = 0.03
 max_points_per_node = 50
 max_tree_depth = 10
 use_parallel = true
+# 下采样方法: "voxel" 或 "gaussian"
+downsample_method = "voxel"
+# Gaussian 概率下采样参数（仅 downsample_method="gaussian" 时有效）
+gaussian_downsample_rate = 6.0
+
+# Range image 参数
+azimuth_resolution = 2.0
+elevation_resolution = 2.0
+cluster_threshold = 1.0
 
 [camera]
 intrinsic = [

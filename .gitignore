@@ -28,3 +28,4 @@ flamegraph.svg
 perf.data*
 .vscode/
 .claude
+log/
