@@ -40,9 +40,9 @@ impl Default for KalmanConfig {
         Self {
             dt: 0.04,
             process_noise_pos: 0.1,
-            process_noise_vel: 0.05,
-            measurement_noise_pos: 0.1,
-            measurement_noise_vel: 0.2,
+            process_noise_vel: 0.02,
+            measurement_noise_pos: 0.2,
+            measurement_noise_vel: 0.8,
             initial_covariance_scale: 0.5,
         }
     }
@@ -313,6 +313,19 @@ impl KalmanFilterWrapper {
         self.current_estimate = StateAndCovariance::new(initial_state, initial_covariance);
     }
 
+    /// 根据目标距离动态调整测量噪声（Phase 9D）
+    ///
+    /// 远距离目标点云更稀疏 → 质心更不可靠 → 增加测量噪声。
+    /// 噪声缩放：基准值 × (1.0 + distance / distance_scale)
+    /// - distance < 10m: 接近基准值（质心可靠）
+    /// - distance > 30m: 大幅增加噪声（质心不可靠）
+    pub fn adjust_noise_for_distance(&mut self, distance: f64) {
+        let scale = 1.0 + distance / 20.0; // 10m→1.5x, 30m→2.5x
+        let noise_pos = self.config.measurement_noise_pos * scale;
+        let noise_vel = self.config.measurement_noise_vel * scale.min(2.0); // 速度噪声最多 2x
+        self.observation_model = FullStateObservationModel::new(noise_pos, noise_vel);
+    }
+
     pub fn set_measurement_noise(&mut self, noise_pos: f64, noise_vel: f64) {
         self.observation_model = FullStateObservationModel::new(noise_pos, noise_vel);
         self.config.measurement_noise_pos = noise_pos;
@@ -350,7 +363,9 @@ mod tests {
     #[test]
     fn test_init_with_state() {
         let mut kf = KalmanFilterWrapper::new(KalmanConfig::default()).unwrap();
-        kf.init_with_state(Vector3::new(1.0, 2.0, 3.0), Some(Vector3::new(0.1, 0.2, 0.3)));
+        // 使用 Vector6 初始化：[x, y, z, vx, vy, vz]
+        let initial_state = Vector6::new(1.0, 2.0, 3.0, 0.1, 0.2, 0.3);
+        kf.init_with_state(initial_state);
         assert_relative_eq!(kf.get_position().x, 1.0, epsilon = 1e-10);
         assert_relative_eq!(kf.get_velocity().x, 0.1, epsilon = 1e-10);
     }
@@ -358,15 +373,18 @@ mod tests {
     #[test]
     fn test_predict_then_correct() {
         let mut kf = KalmanFilterWrapper::new(KalmanConfig::default()).unwrap();
-        kf.init_with_state(Vector3::new(0.0, 0.0, 0.0), Some(Vector3::new(1.0, 0.0, 0.0)));
+        // 初始状态：位置(0,0,0)，速度(1,0,0)
+        let initial_state = Vector6::new(0.0, 0.0, 0.0, 1.0, 0.0, 0.0);
+        kf.init_with_state(initial_state);
 
         // 预测一步 (dt=0.1)
         kf.predict(0.1).unwrap();
         let pos = kf.get_position();
         assert_relative_eq!(pos.x, 0.1, epsilon = 1e-10);
 
-        // 用观测值修正
-        kf.correct(Vector3::new(1.0, 0.0, 0.0)).unwrap();
+        // 用 6 维观测值修正 [x, y, z, vx, vy, vz]
+        let measurement = Vector6::new(1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
+        kf.correct(measurement).unwrap();
         let pos = kf.get_position();
         assert!(pos.x > 0.1); // 观测值拉向 1.0
     }
@@ -374,12 +392,16 @@ mod tests {
     #[test]
     fn test_predict_correct_cycle() {
         let mut kf = KalmanFilterWrapper::new(KalmanConfig::default()).unwrap();
-        kf.init_with_state(Vector3::new(0.0, 0.0, 0.0), Some(Vector3::new(1.0, 0.0, 0.0)));
+        // 初始状态：位置(0,0,0)，速度(1,0,0)
+        let initial_state = Vector6::new(0.0, 0.0, 0.0, 1.0, 0.0, 0.0);
+        kf.init_with_state(initial_state);
 
         for i in 1..=10 {
             let true_pos = i as f64 * 0.1;
             kf.predict(0.1).unwrap();
-            kf.correct(Vector3::new(true_pos, 0.0, 0.0)).unwrap();
+            // 6 维观测：位置 + 速度
+            let measurement = Vector6::new(true_pos, 0.0, 0.0, 1.0, 0.0, 0.0);
+            kf.correct(measurement).unwrap();
         }
 
         let pos = kf.get_position();
@@ -389,7 +411,9 @@ mod tests {
     #[test]
     fn test_mahalanobis_distance() {
         let mut kf = KalmanFilterWrapper::new(KalmanConfig::default()).unwrap();
-        kf.init_with_state(Vector3::new(0.0, 0.0, 0.0), None);
+        // 仅初始化位置，速度为 0
+        let initial_state = Vector6::new(0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        kf.init_with_state(initial_state);
         let d = kf.mahalanobis_distance(Vector3::new(1.0, 0.0, 0.0));
         assert!(d > 0.0);
     }
@@ -397,7 +421,9 @@ mod tests {
     #[test]
     fn test_reset() {
         let mut kf = KalmanFilterWrapper::new(KalmanConfig::default()).unwrap();
-        kf.init_with_state(Vector3::new(10.0, 20.0, 30.0), Some(Vector3::new(1.0, 2.0, 3.0)));
+        // 使用 Vector6 初始化
+        let initial_state = Vector6::new(10.0, 20.0, 30.0, 1.0, 2.0, 3.0);
+        kf.init_with_state(initial_state);
         kf.reset();
         assert_relative_eq!(kf.get_position().x, 0.0, epsilon = 1e-10);
         assert_relative_eq!(kf.get_velocity().x, 0.0, epsilon = 1e-10);

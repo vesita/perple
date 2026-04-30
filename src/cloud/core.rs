@@ -77,11 +77,11 @@ impl Lidar {
         }
     }
 
-    pub fn act(&mut self) -> Result<(), LidarError> {
-        self.read_input()?;
+    pub async fn act(&mut self) -> Result<(), LidarError> {
+        self.read_input().await?;
 
         let start = Instant::now();
-        let classify_result = self.classify.act();
+        let classify_result = self.classify.act().await;
         if let Err(e) = classify_result {
             eprintln!("点云分类错误：{:?}", e);
         }
@@ -91,9 +91,9 @@ impl Lidar {
         Ok(())
     }
 
-    pub fn read_input(&mut self) -> Result<(), LidarError> {
+    pub async fn read_input(&mut self) -> Result<(), LidarError> {
         let data = {
-            let mut stream = self.cream.in_stream.blocking_lock();
+            let mut stream = self.cream.in_stream.lock().await;
             match stream.read() {
                 Some(data) => data,
                 None => return Err(LidarError::Other("没有数据".to_string())),
@@ -101,7 +101,7 @@ impl Lidar {
         };
 
         {
-            let mut stream = self.cream.out_stream.blocking_lock();
+            let mut stream = self.cream.out_stream.lock().await;
             stream.write(data)?;
         }
         Ok(())

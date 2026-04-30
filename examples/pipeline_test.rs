@@ -8,18 +8,15 @@
 //!   cargo run --example pipeline_test -- --redra   （启用 redra 可视化）
 //!   cargo run --example pipeline_test -- --frames 20
 
-use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use perple::cloud::core::Lidar;
+use perple::color::core::Camera;
 use perple::fuse::Fuse;
 use perple::optional::data_loader::DataLoader;
 use perple::swapl::global_swapl;
 use perple::tracker::core::Tracker;
 use perple::tracker::output::Target;
-
-use perple::color::ClrBud;
-use perple::utils::boxes::Box2D;
 
 use log::info;
 
@@ -109,46 +106,6 @@ mod viz {
         unit.send().await?;
         Ok(())
     }
-}
-
-// ─── 合成 ClrBud ──────────────────────────────────────────────────────────
-/// 从 CldBud 投影生成合成 ClrBud，用于无 YOLO 模型时测试 Fuse 流程
-fn synthetic_clrbuds(cld_buds: &[perple::cloud::CldBud], intrinsic: &nalgebra::Matrix3<f32>,
-                     cam_from_lidar: &nalgebra::Matrix4<f32>) -> Vec<ClrBud> {
-    use nalgebra::Vector4;
-    let fx = intrinsic[(0, 0)];
-    let fy = intrinsic[(1, 1)];
-    let cx = intrinsic[(0, 2)];
-    let cy = intrinsic[(1, 2)];
-
-    let mut results = Vec::new();
-    for cld in cld_buds {
-        let verts = cld.the_box.vertices();
-        let (mut l, mut t, mut r, mut b) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
-        for v in &verts {
-            let cam = cam_from_lidar * Vector4::new(v.x, v.y, v.z, 1.0);
-            if cam.z <= 0.0 { continue; }
-            let u = fx * cam.x / cam.z + cx;
-            let v_ = fy * cam.y / cam.z + cy;
-            l = l.min(u); t = t.min(v_);
-            r = r.max(u); b = b.max(v_);
-        }
-        if l == f32::MAX { continue; }
-        let w = r - l;
-        let h = b - t;
-        if w <= 0.0 || h <= 0.0 { continue; }
-
-        // 稍微扩大合成框以提高 IoU 匹配率
-        let margin_x = w * 0.2;
-        let margin_y = h * 0.2;
-        results.push(ClrBud {
-            the_box: Box2D::new(l - margin_x, t - margin_y, r + margin_x, b + margin_y),
-            class_id: 0,
-            class_name: "person".to_string(),
-            confidence: 0.85,
-        });
-    }
-    results
 }
 
 // ─── 统计信息 ──────────────────────────────────────────────────────────────
@@ -252,13 +209,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Perple 全流程测试 | {} 帧 | redra={}", n_frames, use_redra);
 
-    // ─── 检查 YOLO 模型（仅用作通知，无模型时使用合成 ClrBud） ───
+    // ─── 检查 YOLO 模型 ─────────────────────────────────────────────────────
     let config = perple::config::fixif();
     let model_path = &config.model_path;
     if std::path::Path::new(model_path).exists() {
         info!("YOLO 模型存在（{}）", model_path);
     } else {
-        info!("YOLO 模型不存在（{}），使用合成 ClrBud", model_path);
+        eprintln!("YOLO 模型不存在（{}），无法启动 Camera 模块", model_path);
+        std::process::exit(1);
     }
 
     // ─── 初始化数据加载器 ─────────────────────────────────────────────────
@@ -269,10 +227,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = data_loader.load().await;
     info!("数据加载完成，耗时 {}ms", load_start.elapsed().as_millis());
 
-    // ─── 初始化模块 ───────────────────────────────────────────────────────
-    let lidar = Arc::new(Mutex::new(Lidar::new()));
-    let fuse = Arc::new(Mutex::new(Fuse::new()));
-    let tracker = Arc::new(Mutex::new(Tracker::new()));
+    // ─── 初始化模块（直接值，无 Arc/Mutex 开销） ───────────────────────────
+    let mut lidar = Lidar::new();
+    let mut camera = Camera::new();
+    let mut fuse = Fuse::new();
+    let mut tracker = Tracker::new();
 
     // ─── 逐帧处理 ─────────────────────────────────────────────────────────
     let total_start = Instant::now();
@@ -280,17 +239,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for i in 0..n_frames {
         let frame_start = Instant::now();
 
-        // Step 1: LiDAR 处理（地面检测 → 聚类）
-        {
-            let l = Arc::clone(&lidar);
-            tokio::task::spawn_blocking(move || {
-                let _ = l.lock().unwrap().act();
-            })
-            .await
-            .map_err(|e| format!("Lidar 失败: {}", e))?;
-        }
+        // Step 1: 并行 2D 检测 + 3D 聚类
+        let _ = tokio::join!(lidar.act(), camera.act());
 
-        // 读取聚类结果用于统计和合成 ClrBud
+        // 读取处理结果统计
         let swapl = global_swapl();
         let (n_ground_pts, n_filtered_pts, n_cld_buds) = {
             let cloud = swapl.clouds_out.lock().await;
@@ -299,44 +251,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let filtered = swapl.clouds_filtered.lock().await;
             let n_filt = filtered.peek_latest().as_ref().map(|c| c.len()).unwrap_or(0);
 
-            let objs = swapl.cld_objs.lock().await;
-            let n_obj = objs.peek_latest().as_ref().map(|c| c.len()).unwrap_or(0);
+            let buds = swapl.cld_buds_raw.lock().await;
+            let n_buds = buds.peek_latest().as_ref().map(|c| c.len()).unwrap_or(0);
 
-            (n_raw.saturating_sub(n_filt), n_filt, n_obj)
+            (n_raw.saturating_sub(n_filt), n_filt, n_buds)
         };
 
-        // Step 2: 合成 ClrBud → Fuse（2D-3D 融合）
-        let cld_buds = {
-            let objs = swapl.cld_objs.lock().await;
-            objs.peek_latest().unwrap_or_default()
-        };
-        let clr_buds = synthetic_clrbuds(&cld_buds,
-            &nalgebra::Matrix3::from(config.camera.intrinsic),
-            &nalgebra::Matrix4::from(config.camera.extrinsic));
-        {
-            let mut clr_stream = swapl.clr_objs.lock().await;
-            let _ = clr_stream.write(clr_buds);
-        }
+        // Step 2: 融合（需要 2D + 3D 都完成）
+        fuse.act().await;
 
-        // 执行 Fuse
-        {
-            let f = Arc::clone(&fuse);
-            tokio::task::spawn_blocking(move || {
-                f.lock().unwrap().act();
-            })
-            .await
-            .map_err(|e| format!("Fuse 失败: {}", e))?;
-        }
-
-        // Step 3: 跟踪器
-        {
-            let t = Arc::clone(&tracker);
-            tokio::task::spawn_blocking(move || {
-                let _ = t.lock().unwrap().run();
-            })
-            .await
-            .map_err(|e| format!("Tracker 失败: {}", e))?;
-        }
+        // Step 3: 跟踪（融合完成后）
+        let _ = tracker.run().await;
 
         let elapsed = frame_start.elapsed().as_secs_f64() * 1000.0;
 

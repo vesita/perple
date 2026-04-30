@@ -263,3 +263,101 @@ Phase 8 (分类状态机)           ← 依赖 6A-6C 的效果评估
 2. `cargo run --example pipeline_test -- --frames 50 --csv log/phaseX.csv` — 确认分类正确性 + 速度
 3. 检查 CSV 中 ground 目标的 is_dynamic 是否始终为 false
 4. 确认 dynamic 目标速度 > 0.5 m/s 且持续运动
+
+---
+
+## Phase 9: 碰撞箱中心位置优化
+
+**根因**：LiDAR 扫描存在固有缺陷——只有物体的近端被采样，远端完全空白。加上径向扫描模式导致近密远疏，质心/中心被系统性拉向传感器方向，引入持续误差。
+
+### 参考工作
+
+- **CornerPoint3D (2025)**：提出预测最近角代替中心，因为 LiDAR 只能看到物体近端，中心预测跨域不稳定。参见 [arXiv:2504.02464](http://arxiv.org/abs/2504.02464v1)
+- **Corner-Aware 3D Detection (2025)**：系统对比 5 种角编码方案，中心对齐回归在 BEV 稀疏区域有根本性不稳定。F-Corner 编码在 KITTI 上 +3.5% AP。参见 [arXiv:2511.17619](https://arxiv.org/abs/2511.17619)
+- **Chinese Patent (2024)**：凸包 + B 样条插值 → 最小外接矩形 + 高度，修正预标注框。参见 [CN202410948876](http://www.xjishu.com/zhuanli/55/202410948876.html)
+- **Dynamic Clustering (2024)**：椭圆邻域自适应 DBSCAN 处理 LiDAR 非均匀分布，减少 70.6% 过聚类。参见 [汽车安全与节能学报](https://www.journalase.com/CN/10.3969/j.issn.1674-8484.2024.02.015)
+
+### Phase 9A: 密度感知质心加权（低 effort，高 impact）
+
+**问题**：当前 `cluster_box_and_centroid()` 中质心是点的算术平均。LiDAR 近密远疏导致近端点占主导，质心被拉向传感器。同样，AABB 中心也受近端密集点影响。
+
+**方案**：对簇内每个点的坐标贡献按 1/r 或 1/r² 加权，补偿径向扫描密度差异：
+
+```
+加权质心 = Σ(w_i * p_i) / Σ(w_i)
+w_i = 1.0 / (r_i^α)     // α=1 或 2，r_i 为点距传感器距离
+```
+
+**改动文件**：
+- `src/cloud/classify/claster.rs` — `cluster_box_and_centroid()` 中质心计算增加加权选项
+- 或在 `to_cldbuds()` 中增加 `centroid_mode: CentroidMode { Arithmetic, DensityWeighted { alpha: f32 } }`
+
+### Phase 9B: AABB → OBB（定向包围盒）
+
+**问题**：当前 `Box3D` 用 AABB（Axis-Aligned Bounding Box），框体方向与 LiDAR 帧轴对齐而非目标朝向。斜向物体的 AABB 远大于实际物体，中心误差大。
+
+**方案**：用 PCA 计算主方向，拟合 OBB（Oriented Bounding Box）：
+
+```
+1. 对簇内点去中心化
+2. 计算协方差矩阵 3×3
+3. 特征值分解 → 主方向向量
+4. 点云旋转到主方向坐标系 → AABB → 反旋转 → OBB
+5. OBB 中心 = 反旋转后的 AABB 中心
+```
+
+**改动文件**：
+- `src/utils/boxes.rs` — `Box3D` 增加 `from_points_pca(points: &[[f32; 3]]) -> Self` 构造方法
+- `src/cloud/classify/claster.rs` — `cluster_box_and_centroid()` 或 `to_cldbuds()` 调用 PCA 版本
+
+### Phase 9C: BEV 凸包 + 最小面积外接矩形
+
+**问题**：PCA-OBB 对 L 形或不规则点云仍不稳定（主方向受 outlier 影响）。
+
+**方案**：投影到 BEV（去掉 Z），计算凸包，旋转卡壳求最小面积外接矩形：
+
+```
+1. 取簇内点 (x, y)，忽略 z
+2. 计算 2D 凸包（Graham scan / Andrew monotone chain）
+3. 旋转卡壳（Rotating Calipers）求最小面积外接矩形
+4. 矩形中心 + Z 方向 AABB → 3D 框中心
+```
+
+`Box3D` 已有 `vertices()` 和 `pose` 矩阵，可直接复用。凸包 + 旋转卡壳在点云数 < 1000 时极快。
+
+**改动文件**：
+- `src/cloud/classify/claster.rs` — 新增 `convex_hull_2d()` 和 `min_area_rect()` 辅助函数
+- `src/utils/boxes.rs` — 新增 `from_points_convex_hull(points: &[[f32; 3]]) -> Self`
+
+### Phase 9D: KF 位置优先覆盖（已部分实现）
+
+**问题**：当前 Tracker 输出用 `kalman_filter.get_position()` 作为框中心，但 `TrackedObject::correct()` 的测量仍用原始 centroid。KF 虽然平滑了输出，但还没消除测量输入的系统偏差。
+
+**方案**：
+- KF 的 `measurement_noise_pos` 设为各向异性：远距离目标给更高的位置噪声（因为远距点更稀疏，框中心更不可靠）
+- 或增加 `min_appearances` 帧后完全用 KF 预测位置替代测量（类似 fix_size 逻辑对位置生效）
+
+**改动文件**：
+- `src/tracker/kalman.rs` — `measurement_noise_pos` 改为距离自适应的函数
+- `src/tracker/core.rs` — `correct()` 中增加 KF 位置信任度随 appearance_count 增长
+
+### 验证方法
+
+| Sub-phase | 验证方式 |
+|-----------|---------|
+| 9A | pipeline_test 对比加权前后同一目标的 centroid 偏移量 |
+| 9B | 可视化对比 AABB vs OBB 框体方向（redra 可显示） |
+| 9C | 与 9B 对比框面积/中心稳定性 |
+| 9D | 长时间跟踪同一静止目标，计算 KF 位置 vs 原始 centroid 的摆动幅度 |
+
+### 依赖关系
+
+```
+Phase 9A (密度加权质心)    ← 独立，最优先
+    ↓
+Phase 9B (PCA-OBB)        ← 依赖 9A 的效果评估
+    ↓
+Phase 9C (凸包+最小矩形)   ← 9B 不够好时的备选方案
+    ↓
+Phase 9D (KF 位置优先)     ← 独立，可与 9A 并行
+```

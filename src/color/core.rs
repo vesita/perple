@@ -1,7 +1,7 @@
 use image::DynamicImage;
 use log::info;
 use std::fmt;
-use std::sync::{Arc, PoisonError};
+use std::sync::Arc;
 use std::time::Instant;
 
 use crate::color::{ClrBud, image::ScaleMessage, look::Look};
@@ -44,12 +44,6 @@ impl std::error::Error for ColorError {}
 impl From<StreamError> for ColorError {
     fn from(error: StreamError) -> Self {
         ColorError::StreamError(error)
-    }
-}
-
-impl<T> From<PoisonError<T>> for ColorError {
-    fn from(error: PoisonError<T>) -> Self {
-        ColorError::PoisonError(format!("线程锁中毒: {:?}", error))
     }
 }
 
@@ -127,12 +121,12 @@ impl Color {
     /// 2. 准备模型输入张量
     /// 3. 执行模型推理
     /// 4. 将结果写入输出流
-  pub fn act(&mut self) -> Result<(), ColorError> {
-        // 从输入流中读取图像（使用 try_lock 或 blocking_lock）
-     let input = {
-         let mut stream = self.cream.in_stream.blocking_lock();
+    pub async fn act(&mut self) -> Result<(), ColorError> {
+        // 从输入流中读取图像
+        let input = {
+            let mut stream = self.cream.in_stream.lock().await;
             match stream.read() {
-               Some(img) => img,
+                Some(img) => img,
                 None => return Ok(()), // 没有数据可处理，这不是错误
             }
         };
@@ -150,22 +144,22 @@ impl Color {
         );
 
         // 执行推理并计时
-      let start_time = Instant::now();
+        let start_time = Instant::now();
 
-        // 获取输出流的引用并填充数据（使用 blocking_lock）
+        // 获取输出流的引用并填充数据
         {
-          let mut output_stream = self.cream.out_stream.blocking_lock();
+            let mut output_stream = self.cream.out_stream.lock().await;
 
             // 获取写入位置的可变引用
-          let write_mut_result = output_stream.get_write_mut();
+            let write_mut_result = output_stream.get_write_mut();
             match write_mut_result {
                 Ok(slot) => {
                     // 初始化或获取 Vec<ClrBud> 对象
-                  let bounds = slot.get_or_insert_with(|| Vec::new());
+                    let bounds = slot.get_or_insert_with(|| Vec::new());
                     bounds.clear(); // 清空之前的数据
 
                     // 执行推理
-                  let infer_result = self.model.infer(&self.tensor_value, bounds, &self.message);
+                    let infer_result = self.model.infer(&self.tensor_value, bounds, &self.message);
                     match infer_result {
                         Ok(_) => {
                             // 提交写入操作
@@ -174,9 +168,9 @@ impl Color {
                                 .map_err(|e| ColorError::CommitError(format!("{:?}", e)))?;
                         }
                         Err(e) => {
-                           eprintln!("推理过程中发生错误：{:?}", e);
+                            eprintln!("推理过程中发生错误：{:?}", e);
                             // 即使推理出错，也尝试提交写入以保持流的一致性
-                          let _ = output_stream.commit_write();
+                            let _ = output_stream.commit_write();
                             return Err(ColorError::InferenceError(format!("{:?}", e)));
                         }
                     }
@@ -187,7 +181,7 @@ impl Color {
             }
         } // 在这里释放 output_stream 锁
 
-      let duration = start_time.elapsed();
+        let duration = start_time.elapsed();
         println!("模型推理耗时：{:?}", duration);
         Ok(())
     }
@@ -241,9 +235,9 @@ impl Camera {
         }
     }
 
-    pub fn act(&mut self) -> Result<(), ColorError> {
-      self.data.act()?;
-      self.look.act();
+    pub async fn act(&mut self) -> Result<(), ColorError> {
+        self.data.act().await?;
+        self.look.act().await;
         Ok(())
     }
 }

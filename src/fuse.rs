@@ -30,27 +30,33 @@ impl Fuse {
         }
     }
 
-    /// 执行一次融合（blocking，用于 MultiLoop）
+    /// 执行一次融合（async）
     ///
     /// 步骤：
-    /// 1. 投影：每个 3D 簇 → 2D 图像框
-    /// 2. 匹配：计算 2D IoU 与 YOLO 检测框
-    /// 3. 合并：匹配同 YOLO 框的多 3D 簇 → 保守并集
-    /// 4. 标记：更新类别标签
-    pub fn act(&mut self) {
+    /// 1. 从 cld_buds_raw 读取原始聚类结果
+    /// 2. 从 clr_objs 读取 YOLO 检测
+    /// 3. 无 YOLO 时透传原始结果到 cld_objs
+    /// 4. 有 YOLO 时执行投影匹配 + 合并 + 标签更新
+    pub async fn act(&mut self) {
         let swapl = global_swapl();
 
-        let clr_buds: Vec<ClrBud> = match swapl.clr_objs.blocking_lock().get_at(0) {
+        let cld_buds: Vec<CldBud> = match swapl.cld_buds_raw.lock().await.get_at(0) {
             Some(buds) => buds,
             None => return,
         };
 
-        let cld_buds: Vec<CldBud> = match swapl.cld_objs.blocking_lock().get_at(0) {
+        let clr_buds: Vec<ClrBud> = match swapl.clr_objs.lock().await.get_at(0) {
             Some(buds) => buds,
-            None => return,
+            None => {
+                // 无 YOLO 数据：将原始聚类结果透传到 cld_objs
+                let _ = swapl.cld_objs.lock().await.write(cld_buds);
+                return;
+            }
         };
 
         if clr_buds.is_empty() || cld_buds.is_empty() {
+            // 无 YOLO 数据：透传原始聚类
+            let _ = swapl.cld_objs.lock().await.write(cld_buds);
             return;
         }
 
@@ -61,9 +67,7 @@ impl Fuse {
 
         // Step 1: 投影每个 3D 簇 → 2D box, 同时记录最佳匹配
         struct ProjMatch {
-            proj_box: Box2D,
             clr_idx: usize,
-            iou: f32,
         }
 
         let mut proj: Vec<Option<ProjMatch>> = Vec::with_capacity(cld_buds.len());
@@ -106,7 +110,7 @@ impl Fuse {
             }
 
             if best_idx != usize::MAX {
-                proj.push(Some(ProjMatch { proj_box, clr_idx: best_idx, iou: best_iou }));
+                proj.push(Some(ProjMatch { clr_idx: best_idx }));
             } else {
                 proj.push(None);
             }
@@ -205,6 +209,6 @@ impl Fuse {
             result.push(cld);
         }
 
-        let _ = swapl.cld_objs.blocking_lock().write(result);
+        let _ = swapl.cld_objs.lock().await.write(result);
     }
 }

@@ -86,11 +86,12 @@ impl Perple {
         self.color_loop
             .lock()
             .await
-            .start_with_method(
+            .start_with_async_method(
                 LoopMode::Signal,
                 Arc::clone(&self.camera),
-                |camera| {
-                    let _ = camera.act();
+                |camera| async move {
+                    let mut cam = camera.lock().await;
+                    let _ = cam.act().await;
                 },
                 40,
             )
@@ -145,11 +146,12 @@ impl Perple {
         let mut color_loop = self.color_loop.lock().await;
         let camera_ref = Arc::clone(&self.camera);
         color_loop
-            .start_with_method(
+            .start_with_async_method(
                 mode,
                 camera_ref,
-                |camera| {
-                    let _ = camera.act();
+                |camera| async move {
+                    let mut cam = camera.lock().await;
+                    let _ = cam.act().await;
                 },
                 100,
             ) // 100ms间隔

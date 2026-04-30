@@ -653,9 +653,9 @@ impl Tracker {
         }
     }
 
-    pub fn run(&mut self) -> Result<(), TrackerError> {
+    pub async fn run(&mut self) -> Result<(), TrackerError> {
         let current_detections = {
-            let mut tar3d_guard = self.tar3d.blocking_lock();
+            let mut tar3d_guard = self.tar3d.lock().await;
             match tar3d_guard.read() {
                 Some(data) => data.into_iter()
                     .filter(|d| d.confidence >= self.min_confidence)
@@ -665,7 +665,7 @@ impl Tracker {
         };
 
         let sight_data = {
-            let mut sight_guard = self.sight.blocking_lock();
+            let mut sight_guard = self.sight.lock().await;
             match sight_guard.read() {
                 Some(data) => data,
                 None => Vec::new(),
@@ -757,7 +757,7 @@ impl Tracker {
         // 步骤 8: 点云投票动态分类（LV-DOT 启发）
         if self.use_point_cloud_voting {
             let filter_points = {
-                let mut cf = self.clouds_filtered.blocking_lock();
+                let mut cf = self.clouds_filtered.lock().await;
                 match cf.read() {
                     Some(data) => data,
                     None => Vec::new(),
@@ -842,7 +842,7 @@ impl Tracker {
 
         // 步骤 10: 写入输出
         {
-            let mut target_guard = self.target.blocking_lock();
+            let mut target_guard = self.target.lock().await;
             target_guard.write(output_targets)?;
         }
 

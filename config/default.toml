@@ -20,7 +20,7 @@ dbscan_min_points = 3
 # 地面检测参数（直方图种子 + RANSAC 平面拟合生长）
 ground_expand = 0.20
 ground_ransac_distance = 0.3
-ground_ransac_iterations = 100
+ground_ransac_iterations = 50
 upside_down = true
 has_ceiling = false
 
@@ -28,18 +28,24 @@ has_ceiling = false
 [claster]
 # 聚类策略: "dbscan", "dbscan_adaptive", "range_image"
 strategy = "dbscan_adaptive"
-merge_patience = 0.20
+merge_patience = 0.15
 merge_threshold = 0.6
 voxel_size = 0.1
-min_points_per_cluster = 8
+min_points_per_cluster = 4
 eps_slope = 0.03
 max_points_per_node = 50
 max_tree_depth = 10
 use_parallel = true
 # 下采样方法: "voxel" 或 "gaussian"
-downsample_method = "voxel"
+downsample_method = "gaussian"
 # Gaussian 概率下采样参数（仅 downsample_method="gaussian" 时有效）
 gaussian_downsample_rate = 6.0
+# 聚类输入最大距离（超过此距离的非地面点被剔除，0=不限制）
+max_range = 15.0
+# 密度感知质心加权（0=禁用，1=1/r补偿，2=1/r²补偿）
+density_weight_alpha = 1.0
+# PCA 定向包围盒（true=开启，false=使用 AABB）
+use_pca_obb = true
 
 # Range image 参数
 azimuth_resolution = 2.0

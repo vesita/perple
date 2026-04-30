@@ -123,27 +123,27 @@ impl Look {
     ///
     /// 从输入流读取检测结果，为每个检测目标生成视线向量，
     /// 然后将结果写入输出流
-  pub fn act(&mut self) {
-        // 从输入流读取检测结果（使用 blocking_lock）
-     let detections = {
-         let mut stream = self.cream.in_stream.blocking_lock();
+    pub async fn act(&mut self) {
+        // 从输入流读取检测结果
+        let detections = {
+            let mut stream = self.cream.in_stream.lock().await;
             match stream.read() {
-               Some(dets) => dets,
+                Some(dets) => dets,
                 None => return, // 没有数据可处理
             }
         };
 
         // 为每个检测目标生成视线向量
-     let sights: Vec<Sight> = detections
+        let sights: Vec<Sight> = detections
             .iter()
             .map(|detection| self.look_target(detection))
             .collect();
 
-        // 将结果写入输出流（使用 blocking_lock）
+        // 将结果写入输出流
         {
-         let mut stream = self.cream.out_stream.blocking_lock();
-          if stream.write(sights).is_err() {
-              eprintln!("写入视线向量到输出流失败");
+            let mut stream = self.cream.out_stream.lock().await;
+            if stream.write(sights).is_err() {
+                eprintln!("写入视线向量到输出流失败");
             }
         }
     }
