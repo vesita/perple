@@ -29,13 +29,29 @@ impl EgoMotion {
 
     /// 每帧调用：读取当前地面平面，更新自车速度估计
     /// 返回平滑后的自车速度 [vx, vy, vz]（LiDAR 帧，单位 m/s）
+    ///
+    /// 注意：此方法在 tokio 运行时内部调用时会 panic（使用了 blocking_lock）。
+    /// 在 async 上下文中请使用 [`update_async`] 或直接提供平面数据调用 [`advance`]。
     pub fn update(&mut self) -> [f32; 3] {
-        let now = Instant::now();
-
         let current = {
             let stream = self.ground_plane_stream.blocking_lock();
             stream.peek_latest()
         };
+        self.advance(current)
+    }
+
+    /// async 版本：适用于 tokio 运行时内部调用
+    pub async fn update_async(&mut self) -> [f32; 3] {
+        let current = {
+            let stream = self.ground_plane_stream.lock().await;
+            stream.peek_latest()
+        };
+        self.advance(current)
+    }
+
+    /// 核心计算逻辑：直接接收当前地面平面，返回平滑后的自车速度
+    pub fn advance(&mut self, current: Option<[f32; 4]>) -> [f32; 3] {
+        let now = Instant::now();
 
         if let Some(plane) = current {
             if let Some(prev) = self.prev_plane {

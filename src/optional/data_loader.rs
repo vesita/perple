@@ -44,6 +44,14 @@ pub struct DataLoader {
 
     /// 最多加载多少帧（文件对数），None 表示不限
     frame_limit: Option<usize>,
+
+    /// 当前加载到的帧索引（用于按需加载）
+    current_index: usize,
+
+    /// 内存缓冲：预加载全部图像，load_next 从此读取（无磁盘 I/O）
+    images: Vec<DynamicImage>,
+    /// 内存缓冲：预加载全部点云
+    clouds: Vec<Vec<[f32; 3]>>,
 }
 
 impl DataLoader {
@@ -64,6 +72,9 @@ impl DataLoader {
             pcd_path: None,
             files,
             frame_limit: None,
+            current_index: 0,
+            images: Vec::new(),
+            clouds: Vec::new(),
         }
     }
 
@@ -84,6 +95,9 @@ impl DataLoader {
             pcd_path: Some(pcd_path),
             files,
             frame_limit: None,
+            current_index: 0,
+            images: Vec::new(),
+            clouds: Vec::new(),
         }
     }
 
@@ -244,72 +258,97 @@ impl DataLoader {
         Ok(matched_pairs)
     }
 
-    /// 加载单个数据文件到流中
+    /// 按需加载下一帧数据（从内存缓冲写入流，无磁盘 I/O）
+    ///
+    /// 返回 true 表示还有数据，false 表示已读完。
+    /// 首次调用会自动触发预加载（从磁盘读取全部文件到内存）。
+    pub async fn load_next(&mut self) -> io::Result<bool> {
+        // 首次调用：列文件并预加载到内存
+        if self.images.is_empty() {
+            if self.files.is_empty() {
+                self.files = self.list_files()?;
+                self.apply_frame_limit();
+            }
+            let n = self.files.len();
+            self.images.reserve(n);
+            self.clouds.reserve(n);
+            info!("预加载 {} 帧数据到内存...", n);
+            for file_pair in &self.files {
+                let (camera_file, lidar_file) = self.build_paths(file_pair);
+                let img = load_image(&camera_file).unwrap_or_else(|_| {
+                    // 加载失败时创建一个空白图像
+                    use image::RgbaImage;
+                    DynamicImage::ImageRgba8(RgbaImage::new(640, 480))
+                });
+                let lifra = DynReader::open(&lidar_file)
+                    .map(|mut r| load_cloud(&mut r))
+                    .unwrap_or_default();
+                self.images.push(img);
+                self.clouds.push(lifra);
+            }
+            info!("预加载完成，共 {} 帧", n);
+        }
+
+        if self.current_index >= self.images.len() {
+            return Ok(false);
+        }
+
+        let idx = self.current_index;
+        self.current_index += 1;
+
+        // 从内存写入流（无 I/O 等待）
+        let mut clr_stream = self.clr_stream.lock().await;
+        let _ = clr_stream.write(self.images[idx].clone());
+        drop(clr_stream);
+
+        let mut cld_stream = self.cld_stream.lock().await;
+        let _ = cld_stream.write(self.clouds[idx].clone());
+
+        Ok(true)
+    }
+
+    /// 构建文件路径（内部辅助）
+    fn build_paths(&self, file_pair: &[String]) -> (String, String) {
+        if self.image_path.is_some() && self.pcd_path.is_some() {
+            (
+                format!("{}/{}", self.image_path.as_ref().unwrap(), &file_pair[0]),
+                format!("{}/{}", self.pcd_path.as_ref().unwrap(), &file_pair[1]),
+            )
+        } else {
+            (
+                format!("{}/camera/{}", self.target_path, &file_pair[0]),
+                format!("{}/lidar/{}", self.target_path, &file_pair[1]),
+            )
+        }
+    }
+
+    /// 预加载全部数据到内存缓冲，不写入流。
+    /// 预加载后可用 `load_next()` 从内存逐帧写入流。
     pub async fn load(&mut self) -> io::Result<()> {
-        info!("开始加载数据...");
+        if !self.images.is_empty() {
+            return Ok(()); // 已预加载
+        }
         if self.files.is_empty() {
             self.files = self.list_files()?;
             self.apply_frame_limit();
         }
-
-        let mut loaded = 0usize;
+        let n = self.files.len();
+        self.images.reserve(n);
+        self.clouds.reserve(n);
+        info!("预加载 {} 帧数据到内存...", n);
         for file_pair in &self.files {
-            // 构建完整的文件路径
-            let (camera_file, lidar_file) = if self.image_path.is_some() && self.pcd_path.is_some() {
-                // 独立路径模式
-                (
-                    format!("{}/{}", self.image_path.as_ref().unwrap(), &file_pair[0]),
-                    format!("{}/{}", self.pcd_path.as_ref().unwrap(), &file_pair[1]),
-                )
-            } else {
-                // 旧格式
-                (
-                    format!("{}/camera/{}", self.target_path, &file_pair[0]),
-                    format!("{}/lidar/{}", self.target_path, &file_pair[1]),
-                )
-            };
-
-            // 先检查流是否还能写入
-            {
-                let mut clr_stream = self.clr_stream.lock().await;
-                if clr_stream.get_write_mut().is_err() {
-                    info!("流缓冲区已满，已加载 {} 帧", loaded);
-                    break;
-                }
-            }
-
-            // 加载图像文件并写入流
-            {
-                let mut clr_stream = self.clr_stream.lock().await;
-                match load_image(&camera_file) {
-                    Ok(image) => {
-                        let _ = clr_stream.write(image);
-                    }
-                    Err(e) => {
-                        error!("加载图像 {} 时出错：{}", camera_file, e);
-                        let _ = clr_stream.write_direct(|slot| *slot = None);
-                    }
-                }
-            }
-
-            // 解析 PCD 文件并写入流
-            match DynReader::open(&lidar_file) {
-                Ok(mut reader) => {
-                    let lifra = load_cloud(&mut reader);
-                    let mut cld_stream = self.cld_stream.lock().await;
-                    if cld_stream.write(lifra).is_ok() {
-                        loaded += 1;
-                    }
-                }
-                Err(e) => {
-                    error!("打开 PCD 文件 {} 时出错：{}", lidar_file, e);
-                    let mut cld_stream = self.cld_stream.lock().await;
-                    let _ = cld_stream.write_direct(|slot| *slot = None);
-                }
-            }
+            let (camera_file, lidar_file) = self.build_paths(file_pair);
+            let img = load_image(&camera_file).unwrap_or_else(|_| {
+                use image::RgbaImage;
+                DynamicImage::ImageRgba8(RgbaImage::new(640, 480))
+            });
+            let lifra = DynReader::open(&lidar_file)
+                .map(|mut r| load_cloud(&mut r))
+                .unwrap_or_default();
+            self.images.push(img);
+            self.clouds.push(lifra);
         }
-
-        info!("数据加载完成，共 {} 帧", loaded);
+        info!("预加载完成，共 {} 帧", n);
         Ok(())
     }
 

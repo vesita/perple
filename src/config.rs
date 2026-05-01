@@ -37,6 +37,9 @@ pub struct Config {
     pub model_path: String,
 
     pub camera: CameraConfig,
+
+    // 跟踪器参数
+    pub tracker: TrackerConfig,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -58,12 +61,32 @@ pub struct ClasterConfig {
     pub density_weight_alpha: f32,
     pub use_pca_obb: bool,
     pub max_range: f32,
+    pub ceiling_filter: bool,
+    pub ceiling_height: f32,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CameraConfig {
     pub intrinsic: [[f32; 3]; 3],
     pub extrinsic: [[f32; 4]; 4],
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct TrackerConfig {
+    pub max_disappeared: u32,
+    pub min_confidence: f32,
+    pub min_appearances: u32,
+    pub use_point_cloud_voting: bool,
+    pub point_cloud_vote_threshold: f32,
+    pub point_cloud_skip_frames: usize,
+    pub point_cloud_history_len: usize,
+    pub use_fix_size: bool,
+    pub fix_size_frames: usize,
+    pub fix_size_dim_thresh: f32,
+    pub kf_avg_frames: usize,
+    pub floating_to_static_frames: usize,
+    pub moving_speed_threshold: f32,
+    pub voting_consistency_frames: usize,
 }
 
 
@@ -157,9 +180,36 @@ impl Config {
         update_claster_field!(density_weight_alpha);
         update_claster_field!(use_pca_obb);
         update_claster_field!(max_range);
+        update_claster_field!(ceiling_filter);
+        update_claster_field!(ceiling_height);
 
         update_nested_field!(camera, intrinsic);
         update_nested_field!(camera, extrinsic);
+
+        // tracker 配置更新
+        if let Some(ref tracker) = partial_config.tracker {
+            macro_rules! update_tracker {
+                ($field:ident) => {
+                    if let Some(value) = tracker.$field {
+                        self.tracker.$field = value;
+                    }
+                };
+            }
+            update_tracker!(max_disappeared);
+            update_tracker!(min_confidence);
+            update_tracker!(min_appearances);
+            update_tracker!(use_point_cloud_voting);
+            update_tracker!(point_cloud_vote_threshold);
+            update_tracker!(point_cloud_skip_frames);
+            update_tracker!(point_cloud_history_len);
+            update_tracker!(use_fix_size);
+            update_tracker!(fix_size_frames);
+            update_tracker!(fix_size_dim_thresh);
+            update_tracker!(kf_avg_frames);
+            update_tracker!(floating_to_static_frames);
+            update_tracker!(moving_speed_threshold);
+            update_tracker!(voting_consistency_frames);
+        }
 
         Ok(())
     }
@@ -201,12 +251,32 @@ struct PartialConfig {
     pub model_path: Option<String>,
 
     pub camera: Option<PartialCameraConfig>,
+
+    pub tracker: Option<PartialTrackerConfig>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 struct PartialCameraConfig {
     pub intrinsic: Option<[[f32; 3]; 3]>,
     pub extrinsic: Option<[[f32; 4]; 4]>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct PartialTrackerConfig {
+    pub max_disappeared: Option<u32>,
+    pub min_confidence: Option<f32>,
+    pub min_appearances: Option<u32>,
+    pub use_point_cloud_voting: Option<bool>,
+    pub point_cloud_vote_threshold: Option<f32>,
+    pub point_cloud_skip_frames: Option<usize>,
+    pub point_cloud_history_len: Option<usize>,
+    pub use_fix_size: Option<bool>,
+    pub fix_size_frames: Option<usize>,
+    pub fix_size_dim_thresh: Option<f32>,
+    pub kf_avg_frames: Option<usize>,
+    pub floating_to_static_frames: Option<usize>,
+    pub moving_speed_threshold: Option<f32>,
+    pub voting_consistency_frames: Option<usize>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -228,4 +298,6 @@ struct PartialClasterConfig {
     pub density_weight_alpha: Option<f32>,
     pub use_pca_obb: Option<bool>,
     pub max_range: Option<f32>,
+    pub ceiling_filter: Option<bool>,
+    pub ceiling_height: Option<f32>,
 }

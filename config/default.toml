@@ -31,7 +31,7 @@ strategy = "dbscan_adaptive"
 merge_patience = 0.15
 merge_threshold = 0.6
 voxel_size = 0.1
-min_points_per_cluster = 4
+min_points_per_cluster = 8
 eps_slope = 0.03
 max_points_per_node = 50
 max_tree_depth = 10
@@ -41,7 +41,10 @@ downsample_method = "gaussian"
 # Gaussian 概率下采样参数（仅 downsample_method="gaussian" 时有效）
 gaussian_downsample_rate = 6.0
 # 聚类输入最大距离（超过此距离的非地面点被剔除，0=不限制）
-max_range = 15.0
+max_range = 12.0
+# 室内天花板过滤（剔除天花板上方杂点，减少无效簇）
+ceiling_filter = true
+ceiling_height = 2.5
 # 密度感知质心加权（0=禁用，1=1/r补偿，2=1/r²补偿）
 density_weight_alpha = 1.0
 # PCA 定向包围盒（true=开启，false=使用 AABB）
@@ -51,6 +54,22 @@ use_pca_obb = true
 azimuth_resolution = 2.0
 elevation_resolution = 2.0
 cluster_threshold = 1.0
+
+[tracker]
+max_disappeared = 8
+min_confidence = 0.3
+min_appearances = 3
+use_point_cloud_voting = true
+point_cloud_vote_threshold = 0.8
+point_cloud_skip_frames = 5
+point_cloud_history_len = 10
+use_fix_size = true
+fix_size_frames = 10
+fix_size_dim_thresh = 0.4
+kf_avg_frames = 10
+floating_to_static_frames = 30
+moving_speed_threshold = 0.35
+voting_consistency_frames = 5
 
 [camera]
 intrinsic = [

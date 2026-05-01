@@ -42,7 +42,7 @@ impl Default for KalmanConfig {
             process_noise_pos: 0.1,
             process_noise_vel: 0.02,
             measurement_noise_pos: 0.2,
-            measurement_noise_vel: 0.8,
+            measurement_noise_vel: 0.1,
             initial_covariance_scale: 0.5,
         }
     }
@@ -340,6 +340,18 @@ impl KalmanFilterWrapper {
         });
         self.config.process_noise_pos = noise_pos;
         self.config.process_noise_vel = noise_vel;
+    }
+
+    /// 事后限幅：限制速度分量在 [-max_speed, max_speed] 内
+    ///
+    /// 用于防止关联错误导致的单帧速度尖峰。
+    /// 在每帧 correct() 之后调用。
+    pub fn clamp_velocity(&mut self, max_speed: f64) {
+        let mut state = self.current_estimate.state().clone();
+        state[3] = state[3].clamp(-max_speed, max_speed);
+        state[4] = state[4].clamp(-max_speed, max_speed);
+        state[5] = state[5].clamp(-max_speed, max_speed);
+        self.current_estimate = StateAndCovariance::new(state, self.current_estimate.covariance().clone());
     }
 }
 

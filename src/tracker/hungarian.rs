@@ -2,7 +2,8 @@
 ///
 /// 输入 `cost[i][j]` 为 `n_rows × n_cols` 代价矩阵，返回每个 row 指派的 column 索引。
 /// 若 `assigned_col >= n_cols` 则表示该 row 未匹配（指派给了 dummy column）。
-pub fn hungarian(cost: &[Vec<f64>]) -> Vec<usize> {
+/// `sq_buf` 复用方阵缓冲区，避免每帧堆分配。
+pub fn hungarian(cost: &[Vec<f64>], sq_buf: &mut Vec<Vec<f64>>) -> Vec<usize> {
     let n_rows = cost.len();
     if n_rows == 0 {
         return vec![];
@@ -22,13 +23,20 @@ pub fn hungarian(cost: &[Vec<f64>]) -> Vec<usize> {
         .fold(f64::NEG_INFINITY, |a, &b| a.max(b));
     let pad_cost = if max_finite.is_finite() { max_finite + 1.0 } else { 1e9 };
 
-    // 填充为方阵
-    let mut sq = vec![vec![pad_cost; n]; n];
+    // 填充为方阵（复用缓冲区）
+    sq_buf.clear();
+    sq_buf.resize(n, Vec::with_capacity(n));
+    for row in sq_buf.iter_mut() {
+        row.clear();
+        row.resize(n, pad_cost);
+    }
     for i in 0..n_rows {
         for j in 0..n_cols {
-            sq[i][j] = cost[i][j];
+            sq_buf[i][j] = cost[i][j];
         }
     }
+
+    let sq = sq_buf.as_slice();
 
     // 执行匈牙利算法
     let mut u = vec![0.0; n + 1];
@@ -103,49 +111,45 @@ pub fn hungarian(cost: &[Vec<f64>]) -> Vec<usize> {
 mod tests {
     use super::*;
 
+    fn hungarian_test_wrapper(cost: &[Vec<f64>]) -> Vec<usize> {
+        let mut buf = Vec::new();
+        hungarian(cost, &mut buf)
+    }
+
     #[test]
     fn test_empty() {
-        assert_eq!(hungarian(&[]), Vec::<usize>::new());
+        assert_eq!(hungarian_test_wrapper(&[]), Vec::<usize>::new());
     }
 
     #[test]
     fn test_single_pair() {
         let cost = vec![vec![5.0]];
-        let r = hungarian(&cost);
+        let r = hungarian_test_wrapper(&cost);
         assert_eq!(r, vec![0]);
     }
 
     #[test]
     fn test_2x2() {
-        //     c1 c2
-        // r1: 1  2
-        // r2: 3  4
-        // optimal: r1→c1(1), r2→c2(4) = 5
         let cost = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
-        let r = hungarian(&cost);
+        let r = hungarian_test_wrapper(&cost);
         assert_eq!(r.len(), 2);
-        // r1 should be assigned to c1 (0) or c2 (1)
         assert!(r[0] < 2);
         assert!(r[1] < 2);
-        assert_ne!(r[0], r[1]); // one-to-one
+        assert_ne!(r[0], r[1]);
     }
 
     #[test]
     fn test_rectangular_more_rows() {
-        // 3 rows, 2 cols
         let cost = vec![vec![1.0, 2.0], vec![3.0, 4.0], vec![5.0, 6.0]];
-        let r = hungarian(&cost);
-        // one row should be unmatched (assigned >= 2)
+        let r = hungarian_test_wrapper(&cost);
         let matched: Vec<&usize> = r.iter().filter(|&&c| c < 2).collect();
         assert_eq!(matched.len(), 2);
     }
 
     #[test]
     fn test_rectangular_more_cols() {
-        // 2 rows, 3 cols
         let cost = vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]];
-        let r = hungarian(&cost);
-        // both rows should be matched
+        let r = hungarian_test_wrapper(&cost);
         assert_eq!(r.len(), 2);
         assert!(r[0] < 3);
         assert!(r[1] < 3);
@@ -154,20 +158,16 @@ mod tests {
 
     #[test]
     fn test_inf_costs() {
-        // 全部无效，所有 row 应 unmatched
         let cost = vec![vec![f64::MAX, f64::MAX], vec![f64::MAX, f64::MAX]];
-        let r = hungarian(&cost);
+        let r = hungarian_test_wrapper(&cost);
         assert_eq!(r.len(), 2);
-        // 都可能被指派到 dummy（≥2）
     }
 
     #[test]
     fn test_prefer_valid() {
-        // 一个有效一个无效
         let cost = vec![vec![1.0, f64::MAX], vec![f64::MAX, 2.0]];
-        let r = hungarian(&cost);
+        let r = hungarian_test_wrapper(&cost);
         assert_eq!(r.len(), 2);
-        // r0 → c0, r1 → c1
         assert_eq!(r[0], 0);
         assert_eq!(r[1], 1);
     }

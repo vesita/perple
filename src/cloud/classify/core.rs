@@ -58,6 +58,15 @@ impl Classify {
             let _ = cf.write(target[slice_index..].to_vec());
         }
 
+        // 室内天花板过滤：剔除天花板附近的点，减少无效簇
+        let config = crate::config::fixif();
+        if config.claster.ceiling_filter && config.claster.ceiling_height > 0.0 {
+            let h = config.claster.ceiling_height;
+            let before = target.len();
+            target.retain(|p| p[2] <= h);
+            println!("天花板过滤：{} → {} 点（≤ {:.1}m）", before, target.len(), h);
+        }
+
         // 按距离过滤非地面点：剔除远处不可靠点
         let max_range = crate::config::fixif().claster.max_range;
         if max_range > 0.0 {

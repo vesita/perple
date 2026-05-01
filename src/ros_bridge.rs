@@ -415,9 +415,10 @@ fn target_to_marker(target: &Target, id: i32, header: &RosHeader) -> RosMarker {
         (0.0, 1.0, 1.0) // cyan
     } else {
         match target.classification.as_str() {
-            "dynamic" => (1.0, 0.0, 0.0), // red
+            "moving" => (1.0, 0.0, 0.0), // red
             "static" => (0.0, 1.0, 0.0), // green
             "movable" => (1.0, 1.0, 0.0), // yellow
+            "floating" => (0.5, 0.5, 1.0), // light blue
             _ => (1.0, 1.0, 1.0), // white
         }
     };

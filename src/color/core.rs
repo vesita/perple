@@ -62,6 +62,8 @@ pub struct Color {
     message: ScaleMessage,
     /// Tensor Value缓存，用于避免拷贝
     tensor_value: Value<TensorValueType<f32>>,
+    /// 本地推理缓冲区（避免推理时持有输出锁）
+    local_bounds: Vec<ClrBud>,
 }
 
 pub struct Camera {
@@ -111,6 +113,7 @@ impl Color {
                 s_height: input_height as u32,
             },
             tensor_value,
+            local_bounds: Vec::new(),
         }
     }
 
@@ -143,41 +146,33 @@ impl Color {
             &mut self.tensor_value,
         );
 
-        // 执行推理并计时
+        // 执行推理并计时（不持有输出锁，避免阻塞 lidar 的 YOLO 细化）
         let start_time = Instant::now();
 
-        // 获取输出流的引用并填充数据
+        self.local_bounds.clear();
+        let infer_ok = self.model.infer(&self.tensor_value, &mut self.local_bounds, &self.message).is_ok();
+
+        // 推理完成后，获取输出锁并写入结果
         {
             let mut output_stream = self.cream.out_stream.lock().await;
-
-            // 获取写入位置的可变引用
-            let write_mut_result = output_stream.get_write_mut();
-            match write_mut_result {
-                Ok(slot) => {
-                    // 初始化或获取 Vec<ClrBud> 对象
-                    let bounds = slot.get_or_insert_with(|| Vec::new());
-                    bounds.clear(); // 清空之前的数据
-
-                    // 执行推理
-                    let infer_result = self.model.infer(&self.tensor_value, bounds, &self.message);
-                    match infer_result {
-                        Ok(_) => {
-                            // 提交写入操作
-                            output_stream
-                                .commit_write()
-                                .map_err(|e| ColorError::CommitError(format!("{:?}", e)))?;
-                        }
-                        Err(e) => {
-                            eprintln!("推理过程中发生错误：{:?}", e);
-                            // 即使推理出错，也尝试提交写入以保持流的一致性
-                            let _ = output_stream.commit_write();
-                            return Err(ColorError::InferenceError(format!("{:?}", e)));
-                        }
+            if infer_ok {
+                let write_result = output_stream.get_write_mut();
+                match write_result {
+                    Ok(slot) => {
+                        let bounds = slot.get_or_insert_with(|| Vec::new());
+                        std::mem::swap(bounds, &mut self.local_bounds);
+                        output_stream
+                            .commit_write()
+                            .map_err(|e| ColorError::CommitError(format!("{:?}", e)))?;
+                    }
+                    Err(e) => {
+                        return Err(ColorError::from(e));
                     }
                 }
-                Err(e) => {
-                    return Err(ColorError::from(e));
-                }
+            } else {
+                eprintln!("推理过程中发生错误");
+                let _ = output_stream.commit_write();
+                return Err(ColorError::InferenceError("模型推理失败".to_string()));
             }
         } // 在这里释放 output_stream 锁
 

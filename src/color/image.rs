@@ -61,7 +61,7 @@ pub fn load_image(path: &str) -> Result<DynamicImage, Box<dyn std::error::Error>
 /// # 返回值
 /// 返回调整大小后的图像
 pub fn resize_image(img: &DynamicImage, width: u32, height: u32) -> DynamicImage {
-    img.resize_exact(width, height, FilterType::CatmullRom)
+    img.resize_exact(width, height, FilterType::Nearest)
 }
 
 pub fn scale_image(
@@ -75,7 +75,7 @@ pub fn scale_image(
     let scale_width = target_width;
     let scale_height = target_height;
 
-    let resized_img = img.resize_exact(target_width, target_height, FilterType::CatmullRom);
+    let resized_img = img.resize_exact(target_width, target_height, FilterType::Nearest);
 
     let scale_message = ScaleMessage {
         o_width: original_width,
@@ -175,35 +175,45 @@ pub fn fill_input_image(
     input_width: usize,
     tensor_value: &mut Value<TensorValueType<f32>>,
 ) {
-    // 调整图像大小以适应模型输入
-    let resized_img = resize_image(img, input_width as u32, input_height as u32);
+    let (dst_w, dst_h) = (input_width, input_height);
+    let src_w = img.width() as usize;
+    let src_h = img.height() as usize;
 
-    // 在堆上分配准确大小的向量并初始化为0，避免栈溢出
-    let mut nchw_data = vec![0.0f32; input_height * input_width * 3];
+    // 如果尺寸匹配，直接 RGB→NCHW（跳过 resize）
+    // 如果尺寸不匹配，使用 Nearest 采样直接映射到输出（一步到位，无中间 buffer）
+    let src_bytes = img.as_bytes();
+    let src_bpp = if src_bytes.len() >= src_w * src_h * 4 { 4 } else { 3 };
 
-    // 获取RGB图像数据
-    let rgb_img = resized_img.to_rgb8();
+    let mut nchw_data = vec![0.0f32; dst_h * dst_w * 3];
 
-    // 一次性遍历所有像素，并直接按NCHW格式写入
-    for (y, row) in rgb_img.rows().enumerate() {
-        for (x, pixel) in row.enumerate() {
-            let [r, g, b] = pixel.0;
-
-            // 直接按照NCHW格式写入数据
-            // R 通道 (channel 0)
-            let r_index = y * input_width + x;
-            nchw_data[r_index] = r as f32 / 255.0;
-
-            // G 通道 (channel 1)
-            let g_index = input_height * input_width + y * input_width + x;
-            nchw_data[g_index] = g as f32 / 255.0;
-
-            // B 通道 (channel 2)
-            let b_index = 2 * input_height * input_width + y * input_width + x;
-            nchw_data[b_index] = b as f32 / 255.0;
+    if src_w == dst_w && src_h == dst_h {
+        // 尺寸相同：直通 NCHW
+        for y in 0..dst_h {
+            for x in 0..dst_w {
+                let px = (y * src_w + x) * src_bpp;
+                let idx = y * dst_w + x;
+                nchw_data[idx] = src_bytes[px] as f32 / 255.0;
+                nchw_data[dst_h * dst_w + idx] = src_bytes[px + 1] as f32 / 255.0;
+                nchw_data[2 * dst_h * dst_w + idx] = src_bytes[px + 2] as f32 / 255.0;
+            }
+        }
+    } else {
+        // Nearest 采样映射（一行代码替代整个 resize + NCHW）
+        let x_ratio = src_w as f32 / dst_w as f32;
+        let y_ratio = src_h as f32 / dst_h as f32;
+        for dy in 0..dst_h {
+            let sy = (dy as f32 * y_ratio) as usize;
+            for dx in 0..dst_w {
+                let sx = (dx as f32 * x_ratio) as usize;
+                let px = (sy * src_w + sx) * src_bpp;
+                let idx = dy * dst_w + dx;
+                nchw_data[idx] = src_bytes[px] as f32 / 255.0;
+                nchw_data[dst_h * dst_w + idx] = src_bytes[px + 1] as f32 / 255.0;
+                nchw_data[2 * dst_h * dst_w + idx] = src_bytes[px + 2] as f32 / 255.0;
+            }
         }
     }
 
     // 更新 ONNX Tensor 的值
-    *tensor_value = Tensor::from_array(([1, 3, input_height, input_width], nchw_data)).unwrap();
+    *tensor_value = Tensor::from_array(([1, 3, dst_h, dst_w], nchw_data)).unwrap();
 }

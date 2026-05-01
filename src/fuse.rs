@@ -40,12 +40,12 @@ impl Fuse {
     pub async fn act(&mut self) {
         let swapl = global_swapl();
 
-        let cld_buds: Vec<CldBud> = match swapl.cld_buds_raw.lock().await.get_at(0) {
+        let cld_buds: Vec<CldBud> = match swapl.cld_buds_raw.lock().await.read() {
             Some(buds) => buds,
             None => return,
         };
 
-        let clr_buds: Vec<ClrBud> = match swapl.clr_objs.lock().await.get_at(0) {
+        let clr_buds: Vec<ClrBud> = match swapl.clr_objs.lock().await.peek_latest() {
             Some(buds) => buds,
             None => {
                 // 无 YOLO 数据：将原始聚类结果透传到 cld_objs

@@ -70,9 +70,10 @@ mod viz {
             let cz = (min[2] + max[2]) / 2.0;
 
             let color = match target.classification.as_str() {
-                "dynamic" => "red",
+                "moving" => "red",
                 "static" => "green",
                 "movable" => "yellow",
+                "floating" => "blue",
                 _ => "white",
             };
 
@@ -120,27 +121,29 @@ fn print_stats(frame: usize, total: usize, elapsed_ms: f64,
     println!("  地面: {:5}点 | 非地面: {:5}点 | 聚类: {:3}个", n_ground, n_cloud, n_clusters);
     println!("  跟踪目标: {} 个", n_targets);
 
-    let mut n_dynamic = 0usize;
+    let mut n_moving = 0usize;
     let mut n_static = 0usize;
     let mut n_movable = 0usize;
+    let mut n_floating = 0usize;
     let mut total_speed = 0.0f32;
     let mut speed_strs = Vec::new();
 
     for t in targets {
         match t.classification.as_str() {
-            "dynamic" => n_dynamic += 1,
+            "moving" => n_moving += 1,
             "static" => n_static += 1,
             "movable" => n_movable += 1,
+            "floating" => n_floating += 1,
             _ => {}
         }
         total_speed += t.speed;
-        speed_strs.push(format!("    id={:3} | {:8} | {:>6} | {:>6} | speed={:.2}m/s",
-            t.id, t.classification, t.class_type, if t.is_dynamic { "DYNAMIC" } else { "STATIC" }, t.speed));
+        speed_strs.push(format!("    id={:3} | {:8} | {:>8} | {:.2}m/s",
+            t.id, t.classification, t.class_type, t.speed));
     }
 
     let avg_speed = if targets.is_empty() { 0.0 } else { total_speed / targets.len() as f32 };
-    println!("  分类: {} 动态 / {} 静态 / {} 可移动 | 平均速度 {:.2}m/s",
-        n_dynamic, n_static, n_movable, avg_speed);
+    println!("  分类: {} 运动中 / {} 静态 / {} 可运动 / {} 待定 | 平均速度 {:.2}m/s",
+        n_moving, n_static, n_movable, n_floating, avg_speed);
 
     for s in &speed_strs {
         println!("{}", s);
@@ -149,7 +152,7 @@ fn print_stats(frame: usize, total: usize, elapsed_ms: f64,
     // ─── CSV 日志 ──────────────────────────────────────────────────────
     if let Some(f) = csv_writer {
         writeln!(f, "{},{},{},{},{},{:.4},{},{},{}",
-            frame + 1, n_targets, n_dynamic, n_static, n_movable, avg_speed,
+            frame + 1, n_targets, n_moving, n_static, n_movable, avg_speed,
             n_ground, n_cloud, n_clusters).ok();
     }
     if let Some(f) = csv_detail {
@@ -195,7 +198,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|p| std::fs::File::create(p).expect("无法创建 CSV 文件"));
     if let Some(f) = csv_writer.as_mut() {
         use std::io::Write;
-        writeln!(f, "frame,targets,dynamic,static,movable,avg_speed,ground_pts,cloud_pts,clusters").ok();
+        writeln!(f, "frame,targets,moving,static,movable,avg_speed,ground_pts,cloud_pts,clusters").ok();
     }
     let mut csv_detail: Option<std::fs::File> = csv_path
         .map(|p| {
@@ -221,11 +224,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ─── 初始化数据加载器 ─────────────────────────────────────────────────
     let mut data_loader = DataLoader::new("./data/test".to_string());
-    data_loader.set_frame_limit(n_frames);
-    info!("加载数据...");
-    let load_start = Instant::now();
-    let _ = data_loader.load().await;
-    info!("数据加载完成，耗时 {}ms", load_start.elapsed().as_millis());
+    // 预加载：一次性将所有数据读入内存（53s 一次成本，之后无 I/O）
+    data_loader.load().await?;
+    info!("数据目录：{} 帧可用（已预加载）", n_frames);
 
     // ─── 初始化模块（直接值，无 Arc/Mutex 开销） ───────────────────────────
     let mut lidar = Lidar::new();
@@ -233,16 +234,73 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut fuse = Fuse::new();
     let mut tracker = Tracker::new();
 
-    // ─── 逐帧处理 ─────────────────────────────────────────────────────────
+    // ─── 两级流水：帧 i+1 的 lidar|cam 与帧 i 的 fuse+tracker 并行 ────────
+    //
+    // 时序:
+    //   pre-load(0), pre-load(1) → spawn lidar|cam(0)
+    //   Frame 0: join lidar|cam(0) → pre-load(2) → spawn lidar|cam(1) → fuse→tracker
+    //   Frame 1: join lidar|cam(1) → pre-load(3) → spawn lidar|cam(2) → fuse→tracker
+    //   ...
+    // 稳态: 帧耗时 = max(lidar|cam, fuse+tracker) ≈ ~40ms (25 FPS)
+    // ──────────────────────────────────────────────────────────────────────
     let total_start = Instant::now();
 
+    // 预加载帧 0 和 1
+    if !data_loader.load_next().await? {
+        info!("数据为空");
+        return Ok(());
+    }
+    if n_frames > 1 {
+        data_loader.load_next().await?;
+    }
+
+    // 启动 lidar|cam(0)
+    let mut l_handle = Some(tokio::spawn(async move {
+        let _ = lidar.act().await;
+        lidar
+    }));
+    let mut c_handle = Some(tokio::spawn(async move {
+        let _ = camera.act().await;
+        camera
+    }));
+
     for i in 0..n_frames {
+        // Step 1: 收回 lidar|cam(i)（管道化下等待时间 ~0）
+        let (l_res, c_res) = tokio::join!(
+            l_handle.take().unwrap(),
+            c_handle.take().unwrap(),
+        );
+        lidar = l_res.unwrap();
+        camera = c_res.unwrap();
+
         let frame_start = Instant::now();
 
-        // Step 1: 并行 2D 检测 + 3D 聚类
-        let _ = tokio::join!(lidar.act(), camera.act());
+        // Step 2: 融合（先于 spawn，确保 peek_latest 读到当前帧数据）
+        fuse.act().await;
+        let t2 = frame_start.elapsed().as_secs_f64() * 1000.0;
 
-        // 读取处理结果统计
+        // 预加载帧 i+2（提前写入输入流）
+        if i + 2 < n_frames {
+            data_loader.load_next().await?;
+        }
+
+        // 启动 lidar|cam(i+1)（与 tracker 并行）
+        if i + 1 < n_frames {
+            l_handle = Some(tokio::spawn(async move {
+                let _ = lidar.act().await;
+                lidar
+            }));
+            c_handle = Some(tokio::spawn(async move {
+                let _ = camera.act().await;
+                camera
+            }));
+        }
+
+        // Step 3: 跟踪（与 lidar|cam(i+1) 并行）
+        let _ = tracker.run().await;
+        let t3 = frame_start.elapsed().as_secs_f64() * 1000.0;
+
+        // ─── 读取输出并统计 ──────────────────────────────────────────────
         let swapl = global_swapl();
         let (n_ground_pts, n_filtered_pts, n_cld_buds) = {
             let cloud = swapl.clouds_out.lock().await;
@@ -257,21 +315,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             (n_raw.saturating_sub(n_filt), n_filt, n_buds)
         };
 
-        // Step 2: 融合（需要 2D + 3D 都完成）
-        fuse.act().await;
-
-        // Step 3: 跟踪（融合完成后）
-        let _ = tracker.run().await;
-
-        let elapsed = frame_start.elapsed().as_secs_f64() * 1000.0;
-
-        // ─── 读取输出并统计 ──────────────────────────────────────────────
         let targets: Vec<Target> = {
             let mut t_stream = swapl.targets.lock().await;
             t_stream.read().unwrap_or_default()
         };
+        let t4 = frame_start.elapsed().as_secs_f64() * 1000.0;
 
-        print_stats(i, n_frames, elapsed, n_ground_pts, n_filtered_pts, n_cld_buds,
+        if i % 50 == 0 || i == n_frames - 1 {
+            let d_fuse = t2;
+            let d_tracker = t3 - t2;
+            let d_overhead = t4 - t3;
+            println!("  ⏱  fuse={d_fuse:.0}  tracker={d_tracker:.0}  overhead={d_overhead:.0}  total={t4:.0}ms");
+        }
+
+        print_stats(i, n_frames, t4, n_ground_pts, n_filtered_pts, n_cld_buds,
                     targets.len(), &targets,
                     &mut csv_writer, &mut csv_detail);
 
