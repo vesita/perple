@@ -62,6 +62,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn write_frame(writer: &mut RdraWriter, frame: usize, total: usize) -> Result<(), Box<dyn std::error::Error>> {
+    writer.destroy_all();
+
     let swapl = global_swapl();
 
     // ── 点云（白色） ──
@@ -71,7 +73,7 @@ async fn write_frame(writer: &mut RdraWriter, frame: usize, total: usize) -> Res
         let step = (cloud.len() / 5000).max(1);
         for (i, p) in cloud.iter().enumerate() {
             if i % step == 0 {
-                writer.spawn(spawn_sphere(*p, 0.03, "white").id(1_000_000 + i as u64 * 4));
+                writer.spawn(spawn_point(*p, "white").id(1_000_000 + i as u64 * 4));
             }
         }
     } else {

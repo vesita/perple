@@ -1,29 +1,34 @@
 use crate::config::fixif;
 use crate::utils::random::select_some;
-use super::{GroundResult, GroundStrategy};
+use crate::utils::boxes::Box3D;
+use super::GroundPickStrategy;
+use super::super::CldBud;
 
 /// RANSAC 地面提取
-///
-/// 直接在全点云上运行 RANSAC 拟合平面，法向量接近 Z 轴的为地面。
-/// 对倾斜地面鲁棒，但比 histoseed 慢。
-pub struct RansacGround;
-
-impl RansacGround {
-    pub fn new() -> Self { Self }
+pub struct RansacGround {
+    distance: Option<f32>,
+    iterations: Option<usize>,
 }
 
-impl GroundStrategy for RansacGround {
+impl RansacGround {
+    pub fn new() -> Self { Self { distance: None, iterations: None } }
+    pub fn with_params(distance: f32, iterations: usize) -> Self {
+        Self { distance: Some(distance), iterations: Some(iterations) }
+    }
+}
+
+impl GroundPickStrategy for RansacGround {
     fn strategy_name(&self) -> &'static str { "ransac" }
 
-    fn extract(&mut self, cloud: &mut [[f32; 3]]) -> GroundResult {
+    fn pick(&mut self, cloud: &mut [[f32; 3]]) -> (usize, Vec<CldBud>, Option<[f32; 4]>) {
         let n = cloud.len();
         if n < 10 {
-            return GroundResult { n_ground: 0, ground_mask: vec![false; n], plane_eq: None };
+            return (0, Vec::new(), None);
         }
 
         let cfg = fixif();
-        let distance_threshold = cfg.ground_ransac_distance;
-        let iterations = cfg.ground_ransac_iterations;
+        let distance_threshold = self.distance.unwrap_or(cfg.ground_ransac_distance);
+        let iterations = self.iterations.unwrap_or(cfg.ground_ransac_iterations);
         let upside_down = cfg.upside_down;
 
         if upside_down { for p in cloud.iter_mut() { p[2] = -p[2]; } }
@@ -70,8 +75,18 @@ impl GroundStrategy for RansacGround {
             None
         };
 
+        // 重排：地面点移到前部
+        let mut write = 0;
+        for read in 0..n {
+            if inlier_mask[read] { cloud.swap(read, write); write += 1; }
+        }
+
         if upside_down { for p in cloud.iter_mut() { p[2] = -p[2]; } }
 
-        GroundResult { n_ground, ground_mask: inlier_mask, plane_eq }
+        let mut ground_box = Box3D::empty_box();
+        ground_box.cloud2box(&cloud[..n_ground].to_vec());
+        let bud = CldBud::new(ground_box, 0, "ground".to_string(), 1.0);
+
+        (n_ground, vec![bud], plane_eq)
     }
 }

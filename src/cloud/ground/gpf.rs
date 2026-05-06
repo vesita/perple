@@ -1,38 +1,43 @@
 use nalgebra::{Matrix3, SVD};
 use crate::config::fixif;
-use super::{GroundResult, GroundStrategy};
+use crate::utils::boxes::Box3D;
+use super::GroundPickStrategy;
+use super::super::CldBud;
 
 /// GPF (Ground Plane Fitting) 地面提取
-///
-/// 1. 取最低 n_lpr 个点的平均高度作为种子阈值
-/// 2. 迭代：SVD 拟合平面 → 扩展内点 → 重复直到收敛
-pub struct GpfGround;
-
-impl GpfGround {
-    pub fn new() -> Self { Self }
+pub struct GpfGround {
+    n_lpr: Option<usize>,
+    th_seed: Option<f32>,
+    th_dist: Option<f32>,
 }
 
-impl GroundStrategy for GpfGround {
+impl GpfGround {
+    pub fn new() -> Self { Self { n_lpr: None, th_seed: None, th_dist: None } }
+    pub fn with_params(n_lpr: usize, th_seed: f32, th_dist: f32) -> Self {
+        Self { n_lpr: Some(n_lpr), th_seed: Some(th_seed), th_dist: Some(th_dist) }
+    }
+}
+
+impl GroundPickStrategy for GpfGround {
     fn strategy_name(&self) -> &'static str { "gpf" }
 
-    fn extract(&mut self, cloud: &mut [[f32; 3]]) -> GroundResult {
+    fn pick(&mut self, cloud: &mut [[f32; 3]]) -> (usize, Vec<CldBud>, Option<[f32; 4]>) {
         let n = cloud.len();
         if n < 10 {
-            return GroundResult { n_ground: 0, ground_mask: vec![false; n], plane_eq: None };
+            return (0, Vec::new(), None);
         }
 
         let cfg = fixif();
         let upside_down = cfg.upside_down;
-        let n_lpr = 100usize.min(n);
-        let th_seed = 0.5f32;
-        let th_dist = cfg.ground_ransac_distance;
+        let n_lpr = self.n_lpr.unwrap_or(100).min(n);
+        let th_seed = self.th_seed.unwrap_or(0.5);
+        let th_dist = self.th_dist.unwrap_or(cfg.ground_ransac_distance);
 
         let mut indexed: Vec<(usize, [f32; 3])> = (0..n).zip(cloud.iter().copied()).collect();
         if upside_down { for p in cloud.iter_mut() { p[2] = -p[2]; } }
         indexed.sort_by(|a, b| a.1[2].partial_cmp(&b.1[2]).unwrap());
         for (i, (_, p)) in indexed.iter().enumerate() { cloud[i] = *p; }
 
-        // LPR: 最低 n_lpr 个点的平均 Z
         let lpr: f32 = cloud[..n_lpr].iter().map(|p| p[2]).sum::<f32>() / n_lpr as f32;
 
         let mut mask = vec![false; n];
@@ -46,14 +51,11 @@ impl GroundStrategy for GpfGround {
 
         if seed_count < 3 {
             if upside_down { for p in cloud.iter_mut() { p[2] = -p[2]; } }
-            return GroundResult { n_ground: 0, ground_mask: vec![false; n], plane_eq: None };
+            return (0, Vec::new(), None);
         }
 
-        // 迭代拟合
         let mut ground_count = seed_count;
-        #[allow(unused_assignments)]
         let mut plane_normal = [0.0f32; 3];
-        #[allow(unused_assignments)]
         let mut plane_d = 0.0f32;
         loop {
             let gp: Vec<[f32; 3]> = cloud.iter().enumerate()
@@ -76,13 +78,19 @@ impl GroundStrategy for GpfGround {
             ground_count = new_count;
         }
 
-        // 转换为原始索引顺序
         let mut ground_mask = vec![false; n];
         for (sorted_i, &is_ground) in mask.iter().enumerate() {
             if is_ground { ground_mask[indexed[sorted_i].0] = true; }
         }
 
         let n_ground = ground_mask.iter().filter(|&&m| m).count();
+
+        // 重排地面点到前部
+        let mut write = 0;
+        for read in 0..n {
+            if ground_mask[read] { cloud.swap(read, write); write += 1; }
+        }
+
         let plane_eq = if n_ground > 0 {
             Some([plane_normal[0], plane_normal[1], plane_normal[2], plane_d])
         } else {
@@ -91,7 +99,11 @@ impl GroundStrategy for GpfGround {
 
         if upside_down { for p in cloud.iter_mut() { p[2] = -p[2]; } }
 
-        GroundResult { n_ground, ground_mask, plane_eq }
+        let mut ground_box = Box3D::empty_box();
+        ground_box.cloud2box(&cloud[..n_ground].to_vec());
+        let bud = CldBud::new(ground_box, 0, "ground".to_string(), 1.0);
+
+        (n_ground, vec![bud], plane_eq)
     }
 }
 

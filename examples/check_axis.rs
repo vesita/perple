@@ -32,7 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── 点云（青色） ──
     for (i, p) in sampled.iter().enumerate() {
-        writer.spawn(spawn_sphere(*p, 0.05, "cyan").id(1_000_000 + i as u64 * 4));
+        writer.spawn(spawn_point(*p, "cyan").id(1_000_000 + i as u64 * 4));
     }
 
     // ── 坐标轴（从原点沿各方向延伸 15m） ──

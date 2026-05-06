@@ -54,12 +54,6 @@ pub struct Cream<IofActor: Default + Send + Clone, OofActor: Default + Send + Cl
     pub out_stream: Eap<Stream<OofActor>>,
 }
 
-// 定义类型别名简化常见的流类型
-pub type StreamPtr<T> = Eap<Stream<T>>;
-
-// 为常用的流类型定义特定别名
-pub type DataStream<T> = StreamPtr<T>;
-
 impl<T: Default + Send + Clone> Stream<T> {
     pub fn new() -> Self {
         let ixi = fixif();

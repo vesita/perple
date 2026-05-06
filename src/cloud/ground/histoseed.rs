@@ -1,38 +1,39 @@
 use crate::config::fixif;
 use crate::utils::random::select_some;
-use super::{GroundResult, GroundStrategy};
+use crate::utils::boxes::Box3D;
+use super::GroundPickStrategy;
+use super::super::CldBud;
 
 /// 直方图种子 + RANSAC 平面拟合生长
-///
-/// 1. Z 直方图找峰值 → 种子区域 (peak_z ± expand)
-/// 2. 种子区域上运行 RANSAC 找最佳平面
-/// 3. 将最佳平面生长到全点云
-///
-/// 对倾斜地面比纯 Z 直方图更鲁棒，比全点云 RANSAC 快约 3 倍。
-pub struct HistoseedPlane;
-
-impl HistoseedPlane {
-    pub fn new() -> Self { Self }
+pub struct HistoseedPlane {
+    expand: Option<f32>,
+    distance: Option<f32>,
+    iterations: Option<usize>,
 }
 
-impl GroundStrategy for HistoseedPlane {
+impl HistoseedPlane {
+    pub fn new() -> Self { Self { expand: None, distance: None, iterations: None } }
+    pub fn with_params(expand: f32, distance: f32, iterations: usize) -> Self {
+        Self { expand: Some(expand), distance: Some(distance), iterations: Some(iterations) }
+    }
+}
+
+impl GroundPickStrategy for HistoseedPlane {
     fn strategy_name(&self) -> &'static str { "histoseed" }
 
-    fn extract(&mut self, cloud: &mut [[f32; 3]]) -> GroundResult {
+    fn pick(&mut self, cloud: &mut [[f32; 3]]) -> (usize, Vec<CldBud>, Option<[f32; 4]>) {
         let n = cloud.len();
         if n < 10 {
-            return GroundResult { n_ground: 0, ground_mask: vec![false; n], plane_eq: None };
+            return (0, Vec::new(), None);
         }
 
         let cfg = fixif();
         let upside_down = cfg.upside_down;
-        let expand = cfg.ground_expand;
-        let distance = cfg.ground_ransac_distance;
-        let iterations = cfg.ground_ransac_iterations;
+        let expand = self.expand.unwrap_or(cfg.ground_expand);
+        let distance = self.distance.unwrap_or(cfg.ground_ransac_distance);
+        let iterations = self.iterations.unwrap_or(cfg.ground_ransac_iterations);
 
-        if upside_down {
-            for p in cloud.iter_mut() { p[2] = -p[2]; }
-        }
+        if upside_down { for p in cloud.iter_mut() { p[2] = -p[2]; } }
 
         cloud.sort_by(|a, b| a[2].partial_cmp(&b[2]).unwrap());
         let z_min = cloud[0][2];
@@ -41,10 +42,9 @@ impl GroundStrategy for HistoseedPlane {
 
         if z_range < 1e-6 {
             if upside_down { for p in cloud.iter_mut() { p[2] = -p[2]; } }
-            return GroundResult { n_ground: 0, ground_mask: vec![false; n], plane_eq: None };
+            return (0, Vec::new(), None);
         }
 
-        // Z 直方图
         let num_bins = 128usize;
         let bin_w = z_range / num_bins as f32;
         let mut bins = vec![0usize; num_bins];
@@ -54,7 +54,6 @@ impl GroundStrategy for HistoseedPlane {
             bins[b] += 1;
         }
 
-        // 找地面峰值
         let peak = if upside_down {
             let max_count = *bins.iter().max().unwrap_or(&1);
             let threshold = (max_count / 10).max(1);
@@ -72,7 +71,6 @@ impl GroundStrategy for HistoseedPlane {
         let z_low = peak_z - expand;
         let z_high = peak_z + expand;
 
-        // 种子区域
         let mut seed_start = 0;
         for (i, p) in cloud.iter().enumerate() {
             if p[2] >= z_low { seed_start = i; break; }
@@ -86,21 +84,17 @@ impl GroundStrategy for HistoseedPlane {
         let (n_ground, plane_eq) = if n_seed >= 10 {
             ransac_and_grow(cloud, n, seed_start, n_seed, distance, iterations)
         } else {
-            // 种子区域太小，回退到简单 Z 范围
             for i in 0..n_seed { cloud.swap(seed_start + i, i); }
             (n_seed, None)
         };
 
-        // 构建 ground_mask
-        let mut ground_mask = vec![false; n];
-        for i in 0..n_ground { ground_mask[i] = true; }
+        if upside_down { for p in cloud.iter_mut() { p[2] = -p[2]; } }
 
-        // 恢复 Z 坐标
-        if upside_down {
-            for p in cloud.iter_mut() { p[2] = -p[2]; }
-        }
+        let mut ground_box = Box3D::empty_box();
+        ground_box.cloud2box(&cloud[..n_ground].to_vec());
+        let bud = CldBud::new(ground_box, 0, "ground".to_string(), 1.0);
 
-        GroundResult { n_ground, ground_mask, plane_eq }
+        (n_ground, vec![bud], plane_eq)
     }
 }
 
@@ -111,7 +105,6 @@ fn ransac_and_grow(
 ) -> (usize, Option<[f32; 4]>) {
     let seed_cloud: Vec<[f32; 3]> = cloud[seed_start..seed_start + n_seed].to_vec();
 
-    // RANSAC on seed
     let mut best_plane = ([0.0f32; 3], [0.0f32; 3]);
     let mut best_count = 0usize;
 
@@ -145,7 +138,6 @@ fn ransac_and_grow(
         return (n_seed, None);
     }
 
-    // 生长到全点云
     let (pp, norm) = &best_plane;
     let inlier_mask: Vec<bool> = cloud.iter().map(|p| {
         let dx = p[0]-pp[0]; let dy = p[1]-pp[1]; let dz = p[2]-pp[2];
