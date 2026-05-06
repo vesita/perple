@@ -29,3 +29,4 @@ perf.data*
 .vscode/
 .claude
 log/
+output/

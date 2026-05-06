@@ -1,18 +1,25 @@
 use std::time::Instant;
 
-use perple::config::fixif;
 use perple::optional::data_loader::DataLoader;
 use perple::swapl::global_swapl;
 use perple::utils::random::select_some;
-use perple::cloud::CldBud;
 use perple::utils::boxes::Box3D;
+use perple::cloud::ground::{
+    GroundPickStrategy, create_ground_strategy,
+    HistogramExpandStrategy,
+};
 
-use expto::rdmp::auto::unit::generate_unit;
-use expto::rdmp::proto::command::{CommandType, ExCommand};
-use expto::rdmp::*;
-use redra_client::*;
+use nalgebra::{Matrix3, SVD};
+use redra_client::{RdraWriter, spawn_sphere, spawn_cube};
 
-use nalgebra::{Matrix3, Vector3, SVD};
+/// 单个测试用例的结果
+struct BenchResult {
+    label: String,
+    ground_mask: Vec<bool>,
+    elapsed_us: u128,
+    n_ground: usize,
+    n_total: usize,
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -20,201 +27,208 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .filter_level(log::LevelFilter::Info)
         .init();
 
-    println!("=== 地面检测策略对比测试 ===");
+    println!("=== 地面检测策略对比测试（并行） ===\n");
 
-    // ── 加载数据 ──
+    // ── 加载数据（不限帧数） ──
     let mut data_loader = DataLoader::new("./data/test".to_string());
     data_loader.set_frame_limit(5);
-    let _ = data_loader.load().await;
+    data_loader.load().await?;
+    data_loader.load_next().await?;
 
     let swapl = global_swapl();
-    let cloud = {
+    let cloud: Vec<[f32; 3]> = {
         let mut stream = swapl.clouds.lock().await;
         stream.read().unwrap_or_default()
     };
-    let _ = swapl;
 
-    let upside_down = fixif().upside_down;
-
-    if cloud.is_empty() {
-        eprintln!("无数据");
-        return Ok(());
+    {
+        let ds = create_ground_strategy();
+        println!("当前默认策略: {}\n", ds.strategy_name());
     }
 
-    println!("点云总数: {}\n", cloud.len());
+    let n_total = cloud.len();
+    println!("点云总数: {}\n", n_total);
 
-    // ── 测试所有策略，收集结果 ──
-    let mut results: Vec<(String, Vec<[f32; 3]>, f32)> = Vec::new();
+    // ── 构建所有测试用例 ──
+    struct TestCase {
+        label_fn: Box<dyn Fn() -> String + Send + Sync>,
+        run_fn: Box<dyn Fn(&mut [[f32; 3]]) -> (usize, Vec<bool>) + Send + Sync>,
+    }
+
+    let mut cases: Vec<TestCase> = Vec::new();
 
     // 策略 1：Z-直方图 + expand
     for &expand in &[0.05, 0.10, 0.15, 0.20, 0.30] {
-        let mut c = cloud.clone();
-        let start = Instant::now();
-        let (n_ground, _) = histogram_expand(&mut c, expand, upside_down);
-        let elapsed = start.elapsed();
-        let ground_pts: Vec<[f32; 3]> = c[..n_ground].to_vec();
-        print_result("直方图+expand", elapsed, expand, n_ground, cloud.len());
-        results.push((format!("expand={:.2}", expand), ground_pts, expand));
+        cases.push(TestCase {
+            label_fn: Box::new(move || format!("expand={:.2}", expand)),
+            run_fn: Box::new(move |c: &mut [[f32; 3]]| histogram_expand(c, expand, upside_down)),
+        });
     }
 
-    // 策略 2：从峰值向下扫（threshold）+ 向上扩（expand）
+    // 策略 2：峰下扫 + 上扩
     for &threshold in &[0.05, 0.10, 0.15, 0.20] {
         for &expand in &[0.05, 0.10, 0.20] {
-            let mut c = cloud.clone();
-            let start = Instant::now();
-            let (n_ground, _n_ceil) = peak_down_expand_up(&mut c, threshold, expand, 128, upside_down);
-            let elapsed = start.elapsed();
-            if n_ground > 0 {
-                let ground_pts: Vec<[f32; 3]> = c[..n_ground].to_vec();
-                print_result("峰下扫+上扩", elapsed, threshold, n_ground, cloud.len());
-                results.push((
-                    format!("sd={:.2}_ex={:.2}", threshold, expand),
-                    ground_pts, threshold + expand,
-                ));
-            }
+            cases.push(TestCase {
+                label_fn: Box::new(move || format!("sd={:.2}_ex={:.2}", threshold, expand)),
+                run_fn: Box::new(move |c: &mut [[f32; 3]]| {
+                    peak_down_expand_up(c, threshold, expand, 128, upside_down)
+                }),
+            });
         }
     }
 
     // 策略 3：RANSAC
     for &distance in &[0.3, 0.5] {
-        let mut c = cloud.clone();
-        let start = Instant::now();
-        let (n_ground, _) = ransac_ground(&mut c, distance, 200, 0.25);
-        let elapsed = start.elapsed();
-        let ground_pts: Vec<[f32; 3]> = c[..n_ground].to_vec();
-        print_result("RANSAC", elapsed, distance, n_ground, cloud.len());
-        results.push((format!("ransac={:.1}", distance), ground_pts, distance + 2.0));
+        cases.push(TestCase {
+            label_fn: Box::new(move || format!("ransac={:.1}", distance)),
+            run_fn: Box::new(move |c: &mut [[f32; 3]]| ransac_ground(c, distance, 200, 0.25)),
+        });
     }
 
-    // 策略 4：直方图种子 → 平面拟合生长
+    // 策略 4：种子+生长
     for &distance in &[0.3, 0.5] {
         for &expand in &[0.10, 0.20] {
-            let mut c = cloud.clone();
-            let start = Instant::now();
-            let (n_ground, _) = histoseed_grow(&mut c, expand, distance, 100, upside_down);
-            let elapsed = start.elapsed();
-            if n_ground > 0 {
-                let ground_pts: Vec<[f32; 3]> = c[..n_ground].to_vec();
-                print_result("种子+生长", elapsed, distance, n_ground, cloud.len());
-                results.push((
-                    format!("seed_ex={:.2}_d={:.1}", expand, distance),
-                    ground_pts, distance + expand,
-                ));
-            }
+            cases.push(TestCase {
+                label_fn: Box::new(move || format!("seed_ex={:.2}_d={:.1}", expand, distance)),
+                run_fn: Box::new(move |c: &mut [[f32; 3]]| histoseed_grow(c, expand, distance, 100, upside_down)),
+            });
         }
     }
 
-    // 策略 5：GPF（Ground Plane Fitting）— SVD 迭代平面拟合
+    // 策略 5：GPF
     for &n_lpr in &[100, 200] {
         for &th_dist in &[0.2, 0.3, 0.5] {
-            let mut c = cloud.clone();
-            let start = Instant::now();
-            let (n_ground, _) = gpf_ground(&mut c, n_lpr, 0.5, th_dist, 3, upside_down);
-            let elapsed = start.elapsed();
-            if n_ground > 0 {
-                let ground_pts: Vec<[f32; 3]> = c[..n_ground].to_vec();
-                print_result("GPF", elapsed, th_dist, n_ground, cloud.len());
-                results.push((
-                    format!("gpf_nlpr={}_d={:.1}", n_lpr, th_dist),
-                    ground_pts, th_dist,
-                ));
-            }
+            cases.push(TestCase {
+                label_fn: Box::new(move || format!("gpf_nlpr={}_d={:.1}", n_lpr, th_dist)),
+                run_fn: Box::new(move |c: &mut [[f32; 3]]| gpf_ground(c, n_lpr, 0.5, th_dist, upside_down)),
+            });
         }
     }
 
-    // ── 发送到 redra 可视化 ──
-    println!("\n发送地面点到 redra ...");
+    let n_cases = cases.len();
+    println!("共 {} 个测试用例，并行执行...\n", n_cases);
 
-    let colors = ["red", "green", "blue", "yellow", "cyan", "magenta"];
+    // ── 并行执行所有测试 ──
+    let total_start = Instant::now();
 
-    // 每个策略单独一帧
-    for (idx, (label, points, _)) in results.iter().enumerate() {
-        let color = colors[idx % colors.len()];
-        
-        // 下采样到最多 3000 点
-        let step = (points.len() / 3000).max(1);
-        let sampled: Vec<[f32; 3]> = points.iter()
-            .enumerate()
-            .filter(|(i, _)| i % step == 0)
+    let results: Vec<BenchResult> = std::thread::scope(|s| {
+        let handles: Vec<_> = cases.iter().map(|case| {
+            let label = (case.label_fn)();
+            let cloud_clone = cloud.clone();
+            s.spawn(move || {
+                let mut c = cloud_clone;
+                let start = Instant::now();
+                let (n_ground, ground_mask) = (case.run_fn)(&mut c);
+                let elapsed = start.elapsed();
+                BenchResult {
+                    label,
+                    ground_mask,
+                    elapsed_us: elapsed.as_micros(),
+                    n_ground,
+                    n_total,
+                }
+            })
+        }).collect();
+
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+
+    let total_elapsed = total_start.elapsed();
+
+    // ── 输出统计表 ──
+    println!("┌{:<24}┬{:>8}┬{:>8}┬{:>8}┬{:>7}┐",
+        "────────────────────────", "────────", "────────", "────────", "───────");
+    println!("│{:<24}│{:>8}│{:>8}│{:>8}│{:>7}│",
+        " 策略", "耗时(μs)", "地面", "非地面", "比例");
+    println!("├{:<24}┼{:>8}┼{:>8}┼{:>8}┼{:>7}┤",
+        "────────────────────────", "────────", "────────", "────────", "───────");
+
+    for r in &results {
+        let ng = r.n_ground.min(r.n_total);
+        let non_g = r.n_total - ng;
+        let pct = ng as f64 / r.n_total as f64 * 100.0;
+        println!("│{:<24}│{:>8}│{:>8}│{:>8}│{:>6.1}%│",
+            format!(" {}", r.label), r.elapsed_us, ng, non_g, pct);
+    }
+
+    println!("└{:<24}┴{:>8}┴{:>8}┴{:>8}┴{:>7}┘",
+        "────────────────────────", "────────", "────────", "────────", "───────");
+    println!("并行总耗时: {:.1}ms\n", total_elapsed.as_secs_f64() * 1000.0);
+
+    // ── 每个策略写入独立 .rdra 文件 ──
+    let output_dir = "output/ground_bench";
+    std::fs::create_dir_all(output_dir)?;
+
+    let cloud_step = (cloud.len() / 5000).max(1);
+    let sampled_indices: Vec<usize> = (0..cloud.len())
+        .filter(|i| i % cloud_step == 0)
+        .collect();
+
+    for (idx, r) in results.iter().enumerate() {
+        if r.n_ground == 0 {
+            println!("  [跳过] {} — 无地面点", r.label);
+            continue;
+        }
+
+        let mut writer = RdraWriter::new();
+
+        // 写入完整点云（白色 = 非地面，绿色 = 地面）
+        let mut n_written_ground = 0usize;
+        for (si, &orig_i) in sampled_indices.iter().enumerate() {
+            let p = cloud[orig_i];
+            let mat = if r.ground_mask[orig_i] { n_written_ground += 1; "green" } else { "white" };
+            writer.spawn(
+                spawn_sphere(p, 0.03, mat)
+                    .id(1_000_000 + si as u64 * 4)
+            );
+        }
+
+        // 地面点集包围盒
+        let ground_pts: Vec<[f32; 3]> = cloud.iter().enumerate()
+            .filter(|(i, _)| r.ground_mask[*i])
             .map(|(_, p)| *p)
             .collect();
+        let mut box3d = Box3D::empty_box();
+        box3d.cloud2box(&ground_pts);
+        let verts: Vec<(f32, f32, f32)> = box3d.vertices().iter()
+            .map(|v| (v.x, v.y, v.z))
+            .collect();
+        let tag = format!("{} | {}/{} 地面 | {}μs", r.label, n_written_ground, sampled_indices.len(), r.elapsed_us);
+        writer.spawn(
+            spawn_cube(verts, "glass")
+                .id(2_000_000)
+                .tag(tag)
+        );
 
-        println!("  [Frame {}] {} ({}): {} 点 / 采样 {} → color={}",
-            idx + 1, label, points.len(), sampled.len(), step, color);
+        writer.end_frame();
 
-        // 每帧只发送该策略的地面点
-        send_colored_cloud(&sampled, color, 1_000_000u64).await?;
-
-        // 发送标签
-        send_label(&format!("{} ({})", label, color), -5.0, 5.0, 2.0, 1_100_000u64).await?;
-
-        // 发送帧结束命令，分隔不同策略的帧
-        {
-            let mut unit = generate_unit();
-            unit.command = Some(ExCommand { u_command: CommandType::Frameend as i32 });
-            unit.send().await?;
-        }
-
-        // 短暂延迟以便观察
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        let safe_label = r.label.replace(['=', '.', ' '], "_");
+        let path = format!("{}/{}.rdra", output_dir, safe_label);
+        writer.save(&path)?;
+        println!("  [{}] {} → {} ({}/{} 点)", idx + 1, r.label, path, n_written_ground, sampled_indices.len());
     }
 
-    println!("\n可视化完成，请查看 redra。共 {} 帧，每帧一个策略。", results.len());
+    println!("\n完成，共 {} 个 .rdra 文件保存到 {}", results.len(), output_dir);
     Ok(())
-}
-
-async fn send_colored_cloud(points: &[[f32; 3]], color: &str, base_id: u64) -> Result<(), Box<dyn std::error::Error>> {
-    if points.is_empty() { return Ok(()); }
-    let mut unit = generate_unit();
-    for (i, p) in points.iter().enumerate() {
-        let eid = base_id + (i as u64) * 4;
-        unit.objects.extend(vec![
-            ExObject::from(eid),
-            ExObject::from(ExMesh::from(Point { x: 0.0, y: 0.0, z: 0.0 })),
-            ExObject::from(ExTransform { x: p[0], y: p[1], z: p[2], rx: 0.0, ry: 0.0, rz: 0.0, sx: 1.0, sy: 1.0, sz: 1.0 }),
-            ExObject { u_object: Some(ex_object::UObject::MaterialId(color.to_string())) },
-        ]);
-    }
-    unit.send().await?;
-    Ok(())
-}
-
-async fn send_label(text: &str, x: f32, y: f32, z: f32, base_id: u64) -> Result<(), Box<dyn std::error::Error>> {
-    let mut unit = generate_unit();
-    unit.objects.extend(vec![
-        ExObject::from(base_id),
-        ExObject::from(Tag::new(text).with_offset(ExTransform { x, y, z, rx: 0.0, ry: 0.0, rz: 0.0, sx: 1.0, sy: 1.0, sz: 1.0 })),
-    ]);
-    unit.send().await?;
-    Ok(())
-}
-
-fn print_result(name: &str, elapsed: std::time::Duration, param: f32, ground_count: usize, total: usize) {
-    let ground_count = ground_count.min(total);
-    let non_ground = total - ground_count;
-    let us = elapsed.as_micros();
-    println!(
-        "  {:<20} param={:<5.2}  {:>5}μs  ground={:<6}  non-ground={:<6}  {:.1}%",
-        name, param, us, ground_count, non_ground,
-        ground_count as f64 / total as f64 * 100.0,
-    );
 }
 
 // ═══════════════════════════════════════════════════════════════
 // 策略 1：Z-直方图 + expand
 // ═══════════════════════════════════════════════════════════════
-/// 原地交换：调用后 ground 在 [0, n_ground)，剩余在 [n_ground..)
-fn histogram_expand(cloud: &mut [[f32; 3]], expand: f32, upside_down: bool) -> (usize, Vec<CldBud>) {
-    if cloud.len() < 10 { return (0, vec![]); }
-    if upside_down { for p in cloud.iter_mut() { p[2] = -p[2]; } }
-    cloud.sort_by(|a, b| a[2].partial_cmp(&b[2]).unwrap());
+fn histogram_expand(cloud: &mut [[f32; 3]], expand: f32, upside_down: bool) -> (usize, Vec<bool>) {
     let n = cloud.len();
+    if n < 10 { return (0, vec![false; n]); }
+    if upside_down { for p in cloud.iter_mut() { p[2] = -p[2]; } }
+    let mut indexed: Vec<(usize, [f32; 3])> = (0..n).zip(cloud.iter().copied()).collect();
+    indexed.sort_by(|a, b| a.1[2].partial_cmp(&b.1[2]).unwrap());
+    for (i, (_, p)) in indexed.iter().enumerate() { cloud[i] = *p; }
+
     let z_min = cloud[0][2];
     let z_max = cloud[n - 1][2];
     let z_range = z_max - z_min;
     if z_range < 1e-6 {
         if upside_down { for p in cloud.iter_mut() { p[2] = -p[2]; } }
-        return (0, vec![]);
+        return (0, vec![false; n]);
     }
 
     let num_bins = 128;
@@ -231,7 +245,6 @@ fn histogram_expand(cloud: &mut [[f32; 3]], expand: f32, upside_down: bool) -> (
     let z_low = peak_z - expand;
     let z_high = peak_z + expand;
 
-    // 找出地面在排序数组中的范围
     let mut start = 0;
     for (i, p) in cloud.iter().enumerate() {
         if p[2] >= z_low { start = i; break; }
@@ -242,38 +255,31 @@ fn histogram_expand(cloud: &mut [[f32; 3]], expand: f32, upside_down: bool) -> (
     }
 
     let n_ground = end - start;
-    eprintln!(
-        "  [histogram_expand] expand={:.3} z=[{:.3}, {:.3}] peak_z={:.3} range=[{:.3}, {:.3}] idx=[{}, {}) n_ground={}",
-        expand, z_min, z_max, peak_z, z_low, z_high, start, end, n_ground
-    );
-
-    // 原地交换：把 ground [start..end) 换到 [0..n_ground)
-    for i in 0..n_ground {
-        cloud.swap(start + i, i);
+    let mut ground_mask = vec![false; n];
+    for i in start..end {
+        ground_mask[indexed[i].0] = true;
     }
 
-    let buds = make_buds(&cloud[..n_ground]);
     if upside_down { for p in cloud.iter_mut() { p[2] = -p[2]; } }
-    (n_ground, buds)
+    (n_ground, ground_mask)
 }
 
 // ═══════════════════════════════════════════════════════════════
-// 策略 2：从峰值向下扫（threshold）+ 向上扩（expand）
+// 策略 2：峰下扫 + 上扩
 // ═══════════════════════════════════════════════════════════════
-/// 从直方图峰值向下扫描，直到 bins 低于 threshold × peak
-/// 地面范围 = [下边界, peak_z + expand]
-/// ceiling 从顶部下扫（单独找顶部的密集层）
-fn peak_down_expand_up(cloud: &mut [[f32; 3]], threshold: f32, expand: f32, num_bins: usize, upside_down: bool) -> (usize, usize) {
-    if cloud.len() < 10 { return (0, 0); }
-    if upside_down { for p in cloud.iter_mut() { p[2] = -p[2]; } }
-    cloud.sort_by(|a, b| a[2].partial_cmp(&b[2]).unwrap());
+fn peak_down_expand_up(cloud: &mut [[f32; 3]], threshold: f32, expand: f32, num_bins: usize, upside_down: bool) -> (usize, Vec<bool>) {
     let n = cloud.len();
+    if n < 10 { return (0, vec![false; n]); }
+    let mut indexed: Vec<(usize, [f32; 3])> = (0..n).zip(cloud.iter().copied()).collect();
+    if upside_down { for p in cloud.iter_mut() { p[2] = -p[2]; } }
+    indexed.sort_by(|a, b| a.1[2].partial_cmp(&b.1[2]).unwrap());
+    for (i, (_, p)) in indexed.iter().enumerate() { cloud[i] = *p; }
     let z_min = cloud[0][2];
     let z_max = cloud[n - 1][2];
     let z_range = z_max - z_min;
     if z_range < 1e-6 {
         if upside_down { for p in cloud.iter_mut() { p[2] = -p[2]; } }
-        return (0, 0);
+        return (0, vec![false; n]);
     }
 
     let bin_w = z_range / num_bins as f32;
@@ -289,7 +295,6 @@ fn peak_down_expand_up(cloud: &mut [[f32; 3]], threshold: f32, expand: f32, num_
     let peak_z = z_min + (peak as f32 + 0.5) * bin_w;
     let t = (peak_count as f32 * threshold).max(1.0) as usize;
 
-    // scan DOWN from peak: first bin below threshold = ground lower bound
     let mut ground_start_bin = 0;
     for i in (0..peak).rev() {
         if bins[i] < t {
@@ -300,7 +305,6 @@ fn peak_down_expand_up(cloud: &mut [[f32; 3]], threshold: f32, expand: f32, num_
     let z_lower = z_min + ground_start_bin as f32 * bin_w;
     let z_upper = peak_z + expand;
 
-    // find ground indices in sorted array
     let mut ground_start = 0;
     for (i, p) in cloud.iter().enumerate() {
         if p[2] >= z_lower { ground_start = i; break; }
@@ -311,40 +315,21 @@ fn peak_down_expand_up(cloud: &mut [[f32; 3]], threshold: f32, expand: f32, num_
     }
 
     let n_ground = if ground_end > ground_start { ground_end - ground_start } else { 0 };
-    // swap ground [ground_start..ground_end) to front
-    for i in 0..n_ground {
-        cloud.swap(ground_start + i, i);
-    }
-
-    // ceiling: scan from top bins
-    let mut n_ceil = 0;
-    if peak + 1 < num_bins {
-        let mut ceil_start_bin = num_bins;
-        for i in (peak + 1..num_bins).rev() {
-            if bins[i] < t {
-                ceil_start_bin = i + 1;
-                break;
-            }
-            ceil_start_bin = i;
-        }
-        if ceil_start_bin < num_bins {
-            let z_ceil = z_min + ceil_start_bin as f32 * bin_w;
-            for p in cloud[n_ground..].iter().rev() {
-                if p[2] >= z_ceil { n_ceil += 1; } else { break; }
-            }
-        }
+    let mut ground_mask = vec![false; n];
+    for i in ground_start..ground_end {
+        ground_mask[indexed[i].0] = true;
     }
 
     if upside_down { for p in cloud.iter_mut() { p[2] = -p[2]; } }
-    (n_ground, n_ceil)
+    (n_ground, ground_mask)
 }
 
 // ═══════════════════════════════════════════════════════════════
 // 策略 3：RANSAC
 // ═══════════════════════════════════════════════════════════════
-fn ransac_ground(cloud: &mut [[f32; 3]], distance_threshold: f32, iterations: usize, min_ratio: f32) -> (usize, Vec<CldBud>) {
+fn ransac_ground(cloud: &mut [[f32; 3]], distance_threshold: f32, iterations: usize, min_ratio: f32) -> (usize, Vec<bool>) {
     let n = cloud.len();
-    if n < 10 { return (0, vec![]); }
+    if n < 10 { return (0, vec![false; n]); }
 
     let mut best_count = 0usize;
     let mut best_plane = ([0.0f32; 3], [0.0f32; 3]);
@@ -379,7 +364,7 @@ fn ransac_ground(cloud: &mut [[f32; 3]], distance_threshold: f32, iterations: us
     }
 
     let min_inliers = (n as f32 * min_ratio) as usize;
-    if best_count < min_inliers { return (0, vec![]); }
+    if best_count < min_inliers { return (0, vec![false; n]); }
 
     let (pp, norm) = &best_plane;
     let inlier_mask: Vec<bool> = cloud.iter().map(|p| {
@@ -389,34 +374,26 @@ fn ransac_ground(cloud: &mut [[f32; 3]], distance_threshold: f32, iterations: us
         (norm[0]*dx + norm[1]*dy + norm[2]*dz).abs() < distance_threshold
     }).collect();
 
-    let mut write = 0;
-    for read in 0..n {
-        if inlier_mask[read] {
-            cloud.swap(read, write);
-            write += 1;
-        }
-    }
-
-    let buds = make_buds(&cloud[..write]);
-    (write, buds)
+    let n_ground = inlier_mask.iter().filter(|&&m| m).count();
+    (n_ground, inlier_mask)
 }
 
 // ═══════════════════════════════════════════════════════════════
-// 策略 4：直方图种子 → 平面拟合生长
+// 策略 4：直方图种子 + 平面拟合生长
 // ═══════════════════════════════════════════════════════════════
-fn histoseed_grow(cloud: &mut [[f32; 3]], expand: f32, distance: f32, iterations: usize, upside_down: bool) -> (usize, Vec<CldBud>) {
+fn histoseed_grow(cloud: &mut [[f32; 3]], expand: f32, distance: f32, iterations: usize, upside_down: bool) -> (usize, Vec<bool>) {
     let n = cloud.len();
-    if n < 10 { return (0, vec![]); }
+    if n < 10 { return (0, vec![false; n]); }
+    let mut indexed: Vec<(usize, [f32; 3])> = (0..n).zip(cloud.iter().copied()).collect();
     if upside_down { for p in cloud.iter_mut() { p[2] = -p[2]; } }
-
-    // Step 1: Z-histogram → seed region
-    cloud.sort_by(|a, b| a[2].partial_cmp(&b[2]).unwrap());
+    indexed.sort_by(|a, b| a.1[2].partial_cmp(&b.1[2]).unwrap());
+    for (i, (_, p)) in indexed.iter().enumerate() { cloud[i] = *p; }
     let z_min = cloud[0][2];
     let z_max = cloud[n - 1][2];
     let z_range = z_max - z_min;
     if z_range < 1e-6 {
         if upside_down { for p in cloud.iter_mut() { p[2] = -p[2]; } }
-        return (0, vec![]);
+        return (0, vec![false; n]);
     }
 
     let num_bins = 128;
@@ -440,14 +417,12 @@ fn histoseed_grow(cloud: &mut [[f32; 3]], expand: f32, distance: f32, iterations
     let n_seed = seed_end - seed_start;
     if n_seed < 10 {
         if upside_down { for p in cloud.iter_mut() { p[2] = -p[2]; } }
-        return (0, vec![]);
+        return (0, vec![false; n]);
     }
 
-    // Build seed cloud (Vec for easy indexing)
     let seed_cloud: Vec<[f32; 3]> = cloud[seed_start..seed_end].to_vec();
 
-    // Step 2: cheap RANSAC on seed points only → best plane
-    let mut best_plane = ([0.0f32; 3], [0.0f32; 3]); // (point_on_plane, normal)
+    let mut best_plane = ([0.0f32; 3], [0.0f32; 3]);
     let mut best_count = 0usize;
 
     for _ in 0..iterations {
@@ -480,10 +455,9 @@ fn histoseed_grow(cloud: &mut [[f32; 3]], expand: f32, distance: f32, iterations
 
     if best_count < 3 {
         if upside_down { for p in cloud.iter_mut() { p[2] = -p[2]; } }
-        return (0, vec![]);
+        return (0, vec![false; n]);
     }
 
-    // Step 3: grow to full cloud
     let (pp, norm) = &best_plane;
     let inlier_mask: Vec<bool> = cloud.iter().map(|p| {
         let dx = p[0] - pp[0];
@@ -492,17 +466,72 @@ fn histoseed_grow(cloud: &mut [[f32; 3]], expand: f32, distance: f32, iterations
         (norm[0]*dx + norm[1]*dy + norm[2]*dz).abs() < distance
     }).collect();
 
-    let mut write = 0;
-    for read in 0..n {
-        if inlier_mask[read] {
-            cloud.swap(read, write);
-            write += 1;
+    let n_ground = inlier_mask.iter().filter(|&&m| m).count();
+    if upside_down { for p in cloud.iter_mut() { p[2] = -p[2]; } }
+    (n_ground, inlier_mask)
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 策略 5：GPF
+// ═══════════════════════════════════════════════════════════════
+fn gpf_ground(cloud: &mut [[f32; 3]], n_lpr: usize, th_seed: f32, th_dist: f32, upside_down: bool) -> (usize, Vec<bool>) {
+    let n = cloud.len();
+    if n < 10 { return (0, vec![false; n]); }
+
+    let mut indexed: Vec<(usize, [f32; 3])> = (0..n).zip(cloud.iter().copied()).collect();
+    if upside_down { for p in cloud.iter_mut() { p[2] = -p[2]; } }
+    indexed.sort_by(|a, b| a.1[2].partial_cmp(&b.1[2]).unwrap());
+    for (i, (_, p)) in indexed.iter().enumerate() { cloud[i] = *p; }
+
+    let n_lpr = n_lpr.min(n);
+    let lpr: f32 = cloud[..n_lpr].iter().map(|p| p[2]).sum::<f32>() / n_lpr as f32;
+
+    let mut mask = vec![false; n];
+    let mut seed_count = 0;
+    for (i, p) in cloud.iter().enumerate() {
+        if p[2] < lpr + th_seed {
+            mask[i] = true;
+            seed_count += 1;
         }
     }
 
-    let buds = make_buds(&cloud[..write]);
+    if seed_count < 3 {
+        if upside_down { for p in cloud.iter_mut() { p[2] = -p[2]; } }
+        return (0, vec![false; n]);
+    }
+
+    let mut ground_count = seed_count;
+    loop {
+        let gp: Vec<[f32; 3]> = cloud.iter().enumerate()
+            .filter(|(i, _)| mask[*i]).map(|(_, p)| *p).collect();
+        let (normal, d) = fit_plane_svd(&gp);
+
+        let mut new_count = 0;
+        let mut new_mask = vec![false; n];
+        for (i, p) in cloud.iter().enumerate() {
+            if (normal[0]*p[0] + normal[1]*p[1] + normal[2]*p[2] + d).abs() < th_dist {
+                new_mask[i] = true;
+                new_count += 1;
+            }
+        }
+
+        if new_count <= ground_count { break; }
+        mask = new_mask;
+        ground_count = new_count;
+    }
+
+    // 将排序后的 mask 转换为原始索引顺序
+    let mut ground_mask = vec![false; n];
+    for (sorted_i, &is_ground) in mask.iter().enumerate() {
+        if is_ground {
+            ground_mask[indexed[sorted_i].0] = true;
+        }
+    }
+
+    let n_ground = ground_mask.iter().filter(|&&m| m).count();
     if upside_down { for p in cloud.iter_mut() { p[2] = -p[2]; } }
-    (write, buds)
+
+    (n_ground, ground_mask)
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -510,7 +539,6 @@ fn histoseed_grow(cloud: &mut [[f32; 3]], expand: f32, distance: f32, iterations
 // ═══════════════════════════════════════════════════════════════
 fn find_peak_bin(bins: &[usize], upside_down: bool) -> usize {
     if upside_down {
-        // Z 已取反，地面在 LOW Z 端：从底部向上扫，找第一个超过平均值的 bin
         let avg = bins.iter().sum::<usize>() / bins.len().max(1);
         bins.iter()
             .enumerate()
@@ -518,7 +546,6 @@ fn find_peak_bin(bins: &[usize], upside_down: bool) -> usize {
             .map(|(i, _)| i)
             .unwrap_or(0)
     } else {
-        // 正常：取全局最高峰
         bins.iter().enumerate()
             .max_by_key(|(_, c)| *c)
             .map(|(i, _)| i)
@@ -526,7 +553,6 @@ fn find_peak_bin(bins: &[usize], upside_down: bool) -> usize {
     }
 }
 
-/// SVD 平面拟合 — 返回 (法向量, d) 满足 n·x + d = 0
 fn fit_plane_svd(points: &[[f32; 3]]) -> ([f32; 3], f32) {
     let n = points.len();
     if n < 3 { return ([0.0, 0.0, 1.0], 0.0); }
@@ -552,80 +578,8 @@ fn fit_plane_svd(points: &[[f32; 3]]) -> ([f32; 3], f32) {
             let col = v.column(2);
             [col[0], col[1], col[2]]
         }
-        None => [0.0, 0.0, 1.0], // 回退：水平法向量
+        None => [0.0, 0.0, 1.0],
     };
     let d = -(norm[0] * mx + norm[1] * my + norm[2] * mz);
     (norm, d)
-}
-
-/// GPF（Ground Plane Fitting）— 迭代 SVD 平面拟合
-fn gpf_ground(cloud: &mut [[f32; 3]], n_lpr: usize, th_seed: f32, th_dist: f32, n_iter: usize, upside_down: bool) -> (usize, Vec<CldBud>) {
-    let n = cloud.len();
-    if n < 10 { return (0, vec![]); }
-
-    if upside_down {
-        for p in cloud.iter_mut() { p[2] = -p[2]; }
-    }
-
-    cloud.sort_by(|a, b| a[2].partial_cmp(&b[2]).unwrap());
-
-    // 1. Initial seed: lowest N_LPR points
-    let n_lpr = n_lpr.min(n);
-    let lpr: f32 = cloud[..n_lpr].iter().map(|p| p[2]).sum::<f32>() / n_lpr as f32;
-
-    let mut mask = vec![false; n];
-    let mut seed_count = 0;
-    for (i, p) in cloud.iter().enumerate() {
-        if p[2] < lpr + th_seed {
-            mask[i] = true;
-            seed_count += 1;
-        }
-    }
-
-    if seed_count < 3 {
-        if upside_down { for p in cloud.iter_mut() { p[2] = -p[2]; } }
-        return (0, vec![]);
-    }
-
-    // 2. Iterative SVD plane fitting
-    let mut ground_count = seed_count;
-    loop {
-        let gp: Vec<[f32; 3]> = cloud.iter().enumerate()
-            .filter(|(i, _)| mask[*i]).map(|(_, p)| *p).collect();
-        let (normal, d) = fit_plane_svd(&gp);
-
-        let mut new_count = 0;
-        let mut new_mask = vec![false; n];
-        for (i, p) in cloud.iter().enumerate() {
-            if (normal[0]*p[0] + normal[1]*p[1] + normal[2]*p[2] + d).abs() < th_dist {
-                new_mask[i] = true;
-                new_count += 1;
-            }
-        }
-
-        if new_count <= ground_count { break; }
-        mask = new_mask;
-        ground_count = new_count;
-    }
-
-    // 3. Swap ground to front
-    let mut write = 0;
-    for read in 0..n {
-        if mask[read] { cloud.swap(read, write); write += 1; }
-    }
-
-    if upside_down {
-        for p in cloud.iter_mut() { p[2] = -p[2]; }
-    }
-
-    let buds = make_buds(&cloud[..write]);
-    (write, buds)
-}
-
-fn make_buds(points: &[[f32; 3]]) -> Vec<CldBud> {
-    if points.is_empty() { return vec![]; }
-    let mut box3d = Box3D::empty_box();
-    let v: Vec<[f32; 3]> = points.to_vec();
-    box3d.cloud2box(&v);
-    vec![CldBud::new(box3d, 0, "ground".to_string(), 0.9)]
 }

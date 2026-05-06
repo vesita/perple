@@ -2,7 +2,6 @@ stream_capacity = 1024
 detections_capacity = 16
 person_class_label = "person"
 points_capacity = 16384
-resolution = 0.07
 
 # 目标检测超参数配置
 default_input_width = 640
@@ -13,62 +12,78 @@ default_nms_threshold = 0.7
 # 模型路径
 model_path = "module/color/yolo11n.onnx"
 
-# DBSCAN聚类算法参数
-dbscan_min_points = 3
-# dbscan_eps会基于resolution动态计算，值为resolution * 4.0
-
 # 地面检测参数（直方图种子 + RANSAC 平面拟合生长）
-ground_expand = 0.20
-ground_ransac_distance = 0.3
-ground_ransac_iterations = 50
-upside_down = true
-has_ceiling = false
+ground_expand = 0.20       # 地面种子区域 Z 向扩展量（米），peak_z ± expand 为初始地面区域
+ground_ransac_distance = 0.3   # RANSAC 平面拟合内点距离阈值（米）
+ground_ransac_iterations = 50  # RANSAC 迭代次数
+upside_down = true         # 点云 Z 轴是否上下翻转（LiDAR 安装朝下时为 true）
+has_ceiling = false        # 是否有天花板（配合 [claster].ceiling_filter 使用）
 
 # 点云聚类参数
 [claster]
-# 聚类策略: "dbscan", "dbscan_adaptive", "range_image"
+# 聚类策略: "dbscan"（固定eps）, "dbscan_adaptive"（eps随距离线性增长）, "range_image"
 strategy = "dbscan_adaptive"
-merge_patience = 0.15
-merge_threshold = 0.6
-voxel_size = 0.1
-min_points_per_cluster = 8
-eps_slope = 0.03
+# 基础邻域半径 eps（米），自适应模式下为 eps 截距；eps(p) = merge_patience + eps_slope * range(p)
+merge_patience = 0.10
+# 体素下采样格子大小（米），0 表示不下采样
+voxel_size = 0.3
+# DBSCAN 核心点最少邻居数，低于此数的点被视为噪声
+min_points_per_cluster = 10
+# 自适应 eps 斜率，值越大远处邻域半径越大；设为 0 则退化为固定 eps 模式
+eps_slope = 0.2
+# 四叉树节点最大点数，超过则分裂（空间索引加速邻域查询）
 max_points_per_node = 50
+# 四叉树最大深度
 max_tree_depth = 10
-use_parallel = true
-# 下采样方法: "voxel" 或 "gaussian"
+# 下采样方法: "voxel"（均匀体素） 或 "gaussian"（距离概率采样，近密远疏）
 downsample_method = "gaussian"
-# Gaussian 概率下采样参数（仅 downsample_method="gaussian" 时有效）
+# Gaussian 下采样 σ 值（米），keep_prob = exp(-d²/2σ²)；σ 越大远处保留越多
+# 6m 处保留约 60%，12m 处保留约 14%
 gaussian_downsample_rate = 6.0
-# 聚类输入最大距离（超过此距离的非地面点被剔除，0=不限制）
+# 聚类输入最大距离（米），超过此距离的非地面点被剔除；0 = 不限制
 max_range = 12.0
-# 室内天花板过滤（剔除天花板上方杂点，减少无效簇）
+# 天花板过滤：剔除 Z > ceiling_height 的点，减少天花板附近杂点产生的无效簇
 ceiling_filter = true
 ceiling_height = 2.5
-# 密度感知质心加权（0=禁用，1=1/r补偿，2=1/r²补偿）
-density_weight_alpha = 1.0
-# PCA 定向包围盒（true=开启，false=使用 AABB）
-use_pca_obb = true
+# 密度感知质心加权：用 1/r^α 补偿 LiDAR 近密远疏导致的质心偏向传感器偏差
+# 0 = 禁用（算术平均），1 = 1/r 补偿，2 = 1/r² 补偿
+density_weight_alpha = 2.0
+# 包围盒类型：true = PCA 定向包围盒（OBB），false = 轴对齐包围盒（AABB）
+use_pca_obb = false
 
-# Range image 参数
-azimuth_resolution = 2.0
-elevation_resolution = 2.0
-cluster_threshold = 1.0
+# Range image 策略参数（仅 strategy="range_image" 时有效）
+azimuth_resolution = 2.0   # 方位角分辨率（度）
+elevation_resolution = 2.0 # 俯仰角分辨率（度）
+cluster_threshold = 1.0    # 相邻像素深度差阈值（米），超过则视为不同簇
 
 [tracker]
+# 目标连续未匹配帧数超过此值则永久删除轨迹
 max_disappeared = 8
-min_confidence = 0.3
+# 聚类结果置信度低于此值的检测被过滤，不参与匹配
+min_confidence = 0.5
+# 轨迹累计出现次数低于此值不输出（过滤一次性噪声目标）
 min_appearances = 3
+# 点云投票开关：通过对比历史点云位移判断目标是否真正在运动
 use_point_cloud_voting = true
+# 点云投票阈值：超过此比例的点发生位移则判定为运动
 point_cloud_vote_threshold = 0.8
+# 点云投票回溯帧数：对比当前帧与 N 帧前的点云
 point_cloud_skip_frames = 5
+# 每个轨迹保留的点云历史帧数上限
 point_cloud_history_len = 10
+# 箱体尺寸锁定开关：稳定跟踪后冻结尺寸，抑制抖动
 use_fix_size = true
+# 出现帧数超过此值后才启用尺寸锁定（避免初始阶段误锁）
 fix_size_frames = 10
+# 尺寸变化率阈值：三维尺寸变化率均低于此值则冻结，否则更新参考
 fix_size_dim_thresh = 0.4
+# Kalman 滤波器平滑窗口：用最近 K 帧的位置均值修正状态
 kf_avg_frames = 10
+# 漂浮→静态 回归所需连续帧数（在静态簇中持续 N 帧才确认为静态）
 floating_to_static_frames = 30
+# 运动速度阈值（m/s）：自运动补偿后速度高于此值判定为 Moving，低于为 Movable
 moving_speed_threshold = 0.35
+# 点云投票连续确认帧数：连续 N 帧投票通过才触发 Floating → Moving 转换
 voting_consistency_frames = 5
 
 [camera]
@@ -79,8 +94,8 @@ intrinsic = [
 ]
 
 extrinsic = [
-  [ 0.5947311099479503,   -0.7581582777519342,  -0.267377883783046,    -2.4976536649521894  ],
-  [-0.05945191784505893,   0.2902022126746384,  -0.9551168228145122,   -0.3708529610726749  ],
-  [ 0.801723378931052,     0.5839338161426901,   0.12751832041087943,   3.190733849345525   ],
-  [ 0.0,                   0.0,                 0.0,                    1.0                 ]
+  [-0.056887799133550465,  0.9936700680062754,  0.09686885081461855,  0.08020993363388462],
+  [ 0.05788134964743186,  -0.09358025849066098,  0.9939278065251083, -0.5483203035133406],
+  [ 0.9967013232020576,    0.062149265234796636, -0.052191389692576196, 0.467306849271381],
+  [ 0.0,                   0.0,                  0.0,                  1.0],
 ]

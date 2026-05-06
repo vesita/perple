@@ -74,6 +74,64 @@
 - `skip_frames=5` 在 25 FPS 下 = 200ms 间隔，是否太长
 - `vote_threshold=0.8` 是否太严格导致漏检
 
+### G: 聚类帧间稳定性优化（对标 LV-DOT）
+
+**现状**：聚类结果帧间抖动大，bounding box 位置/尺寸/朝向跳动明显
+**根因**：
+
+1. Gaussian 下采样用 `rand::random`，每帧随机保留不同点 → 聚类组成不稳定
+2. PCA OBB 对点集变化极敏感，点集微变导致主方向旋转/长宽互换
+3. 自适应 eps 用 `max_range`（当前帧最远点），最远点每帧波动 → eps 波动 → 聚类边界变化
+4. 无时序平滑，每帧聚类完全独立
+
+**参考**：LV-DOT（E:\library\github\LV-DOT）用以下策略实现稳定聚类：
+
+- eps=0.05 极小固定值 + min_points=10（紧边界，不易合并/分裂）
+- Gaussian + VoxelGrid 双重下采样（VoxelGrid 确定性兜底）
+- AABB 轴对齐包围盒（不受点分布旋转影响）
+- 特征余弦相似度关联 + 线性速度外推预测
+
+**立即可做（改动小，效果显著）**：
+
+- [x] **G1: 去随机下采样** — `src/cloud/classify/strategy/dbscan.rs` `gaussian_downsample()`
+  - 方案：改为坐标哈希确定性采样，或直接用 voxel 下采样替代
+  - 改动量：~10 行
+
+- [x] **G2: 包围盒切换为 AABB** — `config/default.toml`
+  - 方案：设 `use_pca_obb = false`
+  - 改动量：1 行配置
+
+- [x] **G3: 缩小 eps + 提高 min_points** — `config/default.toml`
+  - 方案：`merge_patience` 从 0.15 降到 0.08~0.10，`min_points_per_cluster` 提高到 10~12
+  - 改动量：2 行配置
+
+**中期优化（~50 行）**：
+
+- [x] **G4: 加 VoxelGrid 二次下采样** — `src/cloud/classify/strategy/dbscan.rs`
+  - 方案：Gaussian 后再做一次确定性体素滤波（leaf=0.1m），保证点数稳定
+  - 参考 LV-DOT 的 `downsample_threshold=3500` 逐步放大策略
+  - 改动量：~30 行
+
+- [x] **G5: 数据关联加线性传播** — `src/tracker/core.rs`
+  - 方案：匹配前把已有 track 的 box 用 Kalman 速度外推一帧再关联
+  - 参考 LV-DOT 的 `linearProp()` + `cosine(prev, curr) + cosine(propagated, curr)`
+  - 改动量：~20 行
+
+**实施顺序**：G1 → G2 → G3，每项改完跑 `pipeline_test` 对比 .rdra 输出观察效果，再决定是否继续。
+
+**关键参数对比**：
+
+| 参数 | LV-DOT | Perple 当前 |
+| ------ | -------- | ------------ |
+| DBSCAN eps | 0.05 固定 | 0.15 + 0.1*range 自适应 |
+| DBSCAN min_points | 10~20 | 8 |
+| 下采样 | Gaussian + VoxelGrid | 单次 |
+| 包围盒 | AABB | PCA OBB |
+| Kalman 状态 | 6 维 (pos+vel+acc) | pos+vel |
+| 关联方法 | 特征余弦 + 线性传播 | Hungarian |
+
+---
+
 ### F: 长期跟踪稳定性
 **现状**：目标消失后 `max_disappeared=8` 帧移除，重新出现时分配新 ID
 **问题**：

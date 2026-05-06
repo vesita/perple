@@ -1,7 +1,8 @@
 use crate::{
     cloud::{
         CldBud,
-        classify::{claster::Claster, environment::*},
+        classify::claster::Claster,
+        ground::{GroundPickStrategy, create_ground_strategy},
     },
     color::ClrBud,
     swapl::global_swapl,
@@ -16,6 +17,7 @@ pub enum ClassifyError {
 pub struct Classify {
     cream: Cream<Vec<[f32; 3]>, Vec<CldBud>>,
     claster: Claster,
+    ground_strategy: Box<dyn GroundPickStrategy>,
     ground_plane_out: Eap<Stream<[f32; 4]>>,
     clouds_filtered_out: Eap<Stream<Vec<[f32; 3]>>>,
     clr_objs_in: Eap<Stream<Vec<ClrBud>>>,
@@ -30,6 +32,7 @@ impl Classify {
                 out_stream: swapl.cld_buds_raw.clone(),
             },
             claster: Claster::new(),
+            ground_strategy: create_ground_strategy(),
             ground_plane_out: swapl.ground_plane.clone(),
             clouds_filtered_out: swapl.clouds_filtered.clone(),
             clr_objs_in: swapl.clr_objs.clone(),
@@ -45,7 +48,7 @@ impl Classify {
             }
         };
 
-        let (slice_index, _grounds, plane_eq) = single_pick_ground(&mut target);
+        let (slice_index, grounds, plane_eq) = self.ground_strategy.pick(&mut target);
         println!("完成地面提取，已过滤{}个点", slice_index);
         if let Some(eq) = plane_eq {
             let mut gp = self.ground_plane_out.lock().await;
@@ -95,10 +98,10 @@ impl Classify {
             }
         }
 
-        let targets = self.claster.to_cldbuds();
+        let mut all_buds = self.claster.to_cldbuds();
 
-        // 只保留非地面聚类结果，地面不参与跟踪
-        let all_buds = targets;
+        // 地面保留在聚类结果中（作为 class_id=0 的 CldBud）
+        all_buds.extend(grounds);
 
         {
             let mut stream = self.cream.out_stream.lock().await;

@@ -70,8 +70,10 @@ impl DbscanStrategy {
 
     /// 执行聚类，返回 (处理后的点集, 簇索引列表)
     pub fn run(&mut self, lifra: &[[f32; 3]]) -> (Vec<[f32; 3]>, Vec<Vec<usize>>) {
-        // 下采样
-        let mut sampled = self.downsample_points(lifra);
+        // 一次下采样（voxel 或 gaussian）
+        let sampled = self.downsample_points(lifra);
+        // 二次确定性体素滤波：每个体素取质心，消除随机采样残余噪声
+        let mut sampled = self.voxel_centroid_downsample(&sampled);
         let n = sampled.len();
         if n == 0 {
             return (sampled, Vec::new());
@@ -120,22 +122,54 @@ impl DbscanStrategy {
         result
     }
 
-    /// Gaussian 概率下采样：近处稀疏、远处密集
+    /// Gaussian 概率下采样（LV-DOT 风格）
     ///
-    /// 先用 voxel 做一次基础过滤，再以 exp(-d²/2σ²) 概率保留每个点，
-    /// sigma 越大保留越多远处点（LV-DOT 启发）
+    /// 直接作用于原始点，用 2D XY 水平距离计算保留概率 exp(-d_xy²/2σ²)。
+    /// 近处点保留率高、远处点保留率低，补偿 LiDAR 近密远疏的特性。
+    /// 使用坐标哈希确定性采样，保证相同位置的点每帧行为一致。
     fn gaussian_downsample(&self, points: &[[f32; 3]]) -> Vec<[f32; 3]> {
-        // 先用体素粗过滤
-        let base = self.voxel_downsample(points);
         if self.gaussian_sigma <= 0.0 {
-            return base;
+            return points.to_vec();
         }
         let sigma2 = self.gaussian_sigma * self.gaussian_sigma;
-        base.into_iter()
+        points.iter()
             .filter(|p| {
-                let d2 = p[0] * p[0] + p[1] * p[1] + p[2] * p[2];
+                // LV-DOT: 仅用 XY 水平距离，Z 不参与概率计算
+                let d2 = p[0] * p[0] + p[1] * p[1];
                 let keep_prob = (-d2 / (2.0 * sigma2)).exp();
-                rand::random::<f32>() < keep_prob
+                // 确定性哈希代替随机数
+                let hash = ((p[0] * 73856093.0) as i32 ^ (p[1] * 19349663.0) as i32)
+                           .unsigned_abs() as f32 / u32::MAX as f32;
+                hash < keep_prob
+            })
+            .copied()
+            .collect()
+    }
+
+    /// 确定性体素质心下采样：每个体素内所有点取质心作为代表
+    /// 与 voxel_downsample（取第一个点）不同，这里取平均值，消除点集组成噪声
+    fn voxel_centroid_downsample(&self, points: &[[f32; 3]]) -> Vec<[f32; 3]> {
+        if self.voxel_size <= 0.0 {
+            return points.to_vec();
+        }
+        let inv = 1.0 / self.voxel_size;
+        let mut voxels: HashMap<[i32; 3], (f64, f64, f64, usize)> = HashMap::new();
+        for p in points {
+            let key = [
+                (p[0] * inv).floor() as i32,
+                (p[1] * inv).floor() as i32,
+                (p[2] * inv).floor() as i32,
+            ];
+            let entry = voxels.entry(key).or_insert((0.0, 0.0, 0.0, 0));
+            entry.0 += p[0] as f64;
+            entry.1 += p[1] as f64;
+            entry.2 += p[2] as f64;
+            entry.3 += 1;
+        }
+        voxels.into_iter()
+            .map(|(_, (sx, sy, sz, cnt))| {
+                let n = cnt as f64;
+                [(sx / n) as f32, (sy / n) as f32, (sz / n) as f32]
             })
             .collect()
     }

@@ -2,6 +2,7 @@ use image::DynamicImage;
 use log::{error, info};
 use pcd_rs::DynReader;
 use std::collections::HashMap;
+use std::num::NonZero;
 use std::{fs, io, sync::Arc, thread, time::Duration};
 
 use crate::{
@@ -23,6 +24,85 @@ where
         }
     }
     result
+}
+
+fn build_file_paths(
+    target_path: &str,
+    image_path: Option<&str>,
+    pcd_path: Option<&str>,
+    file_pair: &[String],
+) -> (String, String) {
+    if let (Some(ip), Some(pp)) = (image_path, pcd_path) {
+        (
+            format!("{}/{}", ip, &file_pair[0]),
+            format!("{}/{}", pp, &file_pair[1]),
+        )
+    } else {
+        (
+            format!("{}/camera/{}", target_path, &file_pair[0]),
+            format!("{}/lidar/{}", target_path, &file_pair[1]),
+        )
+    }
+}
+
+/// 并行预加载全部帧数据（图像 + 点云）
+///
+/// 将文件对按线程数分块，每块在一个线程内顺序加载，
+/// 整体并行执行。返回 `(images, clouds)` 保持原始顺序。
+fn preload_parallel(
+    files: &[Vec<String>],
+    target_path: &str,
+    image_path: Option<&str>,
+    pcd_path: Option<&str>,
+) -> (Vec<DynamicImage>, Vec<Vec<[f32; 3]>>)
+{
+    let n = files.len();
+    if n == 0 {
+        return (Vec::new(), Vec::new());
+    }
+
+    let num_threads = thread::available_parallelism()
+        .map(NonZero::get)
+        .unwrap_or(4)
+        .min(8)
+        .min(n);
+
+    info!("并行预加载 {} 帧，使用 {} 线程", n, num_threads);
+
+    let chunk_size = (n + num_threads - 1) / num_threads;
+
+    thread::scope(|s| {
+        let mut handles = Vec::with_capacity(num_threads);
+
+        for chunk in files.chunks(chunk_size) {
+            handles.push(s.spawn(move || -> (Vec<DynamicImage>, Vec<Vec<[f32; 3]>>) {
+                let mut images = Vec::with_capacity(chunk.len());
+                let mut clouds = Vec::with_capacity(chunk.len());
+                for file_pair in chunk {
+                    let (camera_file, lidar_file) = build_file_paths(target_path, image_path, pcd_path, file_pair);
+                    let img = load_image(&camera_file).unwrap_or_else(|_| {
+                        use image::RgbaImage;
+                        DynamicImage::ImageRgba8(RgbaImage::new(640, 480))
+                    });
+                    let cloud = DynReader::open(&lidar_file)
+                        .map(|mut r| load_cloud(&mut r))
+                        .unwrap_or_default();
+                    images.push(img);
+                    clouds.push(cloud);
+                }
+                (images, clouds)
+            }));
+        }
+
+        let mut all_images = Vec::with_capacity(n);
+        let mut all_clouds = Vec::with_capacity(n);
+        for handle in handles {
+            let (images, clouds) = handle.join().expect("预加载线程 panic");
+            all_images.extend(images);
+            all_clouds.extend(clouds);
+        }
+        (all_images, all_clouds)
+    })
 }
 
 /// 数据加载器
@@ -132,6 +212,15 @@ impl DataLoader {
             .collect()
     }
 
+    /// 返回已加载或已列出的帧数
+    pub fn frame_count(&self) -> usize {
+        if !self.images.is_empty() {
+            self.images.len()
+        } else {
+            self.files.len()
+        }
+    }
+
     /// 列出目标路径中的所有文件
     ///
     /// 返回在 camera 和 lidar 目录中都存在的文件对列表，
@@ -147,7 +236,7 @@ impl DataLoader {
         let camera_path = format!("{}/camera", self.target_path);
 
         // 读取 camera 目录中的所有文件，构建文件干名到完整文件名的映射
-        let clr_files: HashMap<String, String> = fs::read_dir(camera_path)?
+        let clr_files: HashMap<String, String> = fs::read_dir(&camera_path)?
             .filter_map(|entry| {
                 entry.ok().and_then(|e| {
                     e.path()
@@ -165,7 +254,7 @@ impl DataLoader {
             .collect();
 
         // 读取 lidar 目录中的所有文件，构建文件干名到完整文件名的映射
-        let cld_files: HashMap<String, String> = fs::read_dir(lidar_path)?
+        let cld_files: HashMap<String, String> = fs::read_dir(&lidar_path)?
             .filter_map(|entry| {
                 entry.ok().and_then(|e| {
                     e.path()
@@ -182,8 +271,11 @@ impl DataLoader {
             })
             .collect();
 
+        let n_camera = clr_files.len();
+        let n_lidar = cld_files.len();
+
         // 使用函数式方法找出两个目录中基本名称相同的文件对
-        let target: Vec<Vec<String>> = clr_files
+        let mut target: Vec<Vec<String>> = clr_files
             .into_iter()
             .filter_map(|(stem, camera_file)| {
                 cld_files
@@ -191,6 +283,20 @@ impl DataLoader {
                     .map(|lidar_file| vec![camera_file, lidar_file.clone()])
             })
             .collect();
+
+        // 按文件名排序，确保帧顺序一致
+        target.sort_by(|a, b| a[0].cmp(&b[0]));
+
+        let n_matched = target.len();
+        if n_matched < n_camera || n_matched < n_lidar {
+            log::warn!(
+                "文件匹配：camera={} lidar={} 匹配={}（缺失 {} 帧）",
+                n_camera, n_lidar, n_matched,
+                n_lidar.saturating_sub(n_matched),
+            );
+        } else {
+            info!("文件匹配：camera={} lidar={} 匹配={}", n_camera, n_lidar, n_matched);
+        }
 
         Ok(target)
     }
@@ -218,6 +324,9 @@ impl DataLoader {
                 })
             })
             .collect();
+
+        let n_image = image_files.len();
+        let n_pcd = pcd_files.len();
 
         // 尝试按文件名匹配（去除扩展名后比较）
         let mut matched_pairs = Vec::new();
@@ -255,6 +364,20 @@ impl DataLoader {
             }
         }
 
+        // 按文件名排序，确保帧顺序一致
+        matched_pairs.sort_by(|a, b| a[0].cmp(&b[0]));
+
+        let n_matched = matched_pairs.len();
+        if n_matched < n_image || n_matched < n_pcd {
+            log::warn!(
+                "文件匹配：image={} pcd={} 匹配={}（缺失 {} 帧）",
+                n_image, n_pcd, n_matched,
+                n_pcd.saturating_sub(n_matched),
+            );
+        } else {
+            info!("文件匹配：image={} pcd={} 匹配={}", n_image, n_pcd, n_matched);
+        }
+
         Ok(matched_pairs)
     }
 
@@ -270,22 +393,15 @@ impl DataLoader {
                 self.apply_frame_limit();
             }
             let n = self.files.len();
-            self.images.reserve(n);
-            self.clouds.reserve(n);
             info!("预加载 {} 帧数据到内存...", n);
-            for file_pair in &self.files {
-                let (camera_file, lidar_file) = self.build_paths(file_pair);
-                let img = load_image(&camera_file).unwrap_or_else(|_| {
-                    // 加载失败时创建一个空白图像
-                    use image::RgbaImage;
-                    DynamicImage::ImageRgba8(RgbaImage::new(640, 480))
-                });
-                let lifra = DynReader::open(&lidar_file)
-                    .map(|mut r| load_cloud(&mut r))
-                    .unwrap_or_default();
-                self.images.push(img);
-                self.clouds.push(lifra);
-            }
+            let (images, clouds) = preload_parallel(
+                &self.files,
+                &self.target_path,
+                self.image_path.as_deref(),
+                self.pcd_path.as_deref(),
+            );
+            self.images = images;
+            self.clouds = clouds;
             info!("预加载完成，共 {} 帧", n);
         }
 
@@ -307,21 +423,6 @@ impl DataLoader {
         Ok(true)
     }
 
-    /// 构建文件路径（内部辅助）
-    fn build_paths(&self, file_pair: &[String]) -> (String, String) {
-        if self.image_path.is_some() && self.pcd_path.is_some() {
-            (
-                format!("{}/{}", self.image_path.as_ref().unwrap(), &file_pair[0]),
-                format!("{}/{}", self.pcd_path.as_ref().unwrap(), &file_pair[1]),
-            )
-        } else {
-            (
-                format!("{}/camera/{}", self.target_path, &file_pair[0]),
-                format!("{}/lidar/{}", self.target_path, &file_pair[1]),
-            )
-        }
-    }
-
     /// 预加载全部数据到内存缓冲，不写入流。
     /// 预加载后可用 `load_next()` 从内存逐帧写入流。
     pub async fn load(&mut self) -> io::Result<()> {
@@ -333,21 +434,15 @@ impl DataLoader {
             self.apply_frame_limit();
         }
         let n = self.files.len();
-        self.images.reserve(n);
-        self.clouds.reserve(n);
         info!("预加载 {} 帧数据到内存...", n);
-        for file_pair in &self.files {
-            let (camera_file, lidar_file) = self.build_paths(file_pair);
-            let img = load_image(&camera_file).unwrap_or_else(|_| {
-                use image::RgbaImage;
-                DynamicImage::ImageRgba8(RgbaImage::new(640, 480))
-            });
-            let lifra = DynReader::open(&lidar_file)
-                .map(|mut r| load_cloud(&mut r))
-                .unwrap_or_default();
-            self.images.push(img);
-            self.clouds.push(lifra);
-        }
+        let (images, clouds) = preload_parallel(
+            &self.files,
+            &self.target_path,
+            self.image_path.as_deref(),
+            self.pcd_path.as_deref(),
+        );
+        self.images = images;
+        self.clouds = clouds;
         info!("预加载完成，共 {} 帧", n);
         Ok(())
     }

@@ -14,19 +14,17 @@ pub struct Config {
     pub detections_capacity: usize,
     pub person_class_label: String,
     pub points_capacity: usize,
-    pub resolution: f32,
 
     pub default_input_width: usize,
     pub default_input_height: usize,
     pub default_confidence_threshold: f32,
     pub default_nms_threshold: f32,
 
-    pub dbscan_min_points: usize,
-
-    // 点云聚类参数移到claster配置中
+    // 点云聚类参数
     pub claster: ClasterConfig,
 
-    // 地面检测参数（直方图种子 + RANSAC 平面拟合生长）
+    // 地面检测参数
+    pub ground_strategy: String,
     pub ground_expand: f32,
     pub ground_ransac_distance: f32,
     pub ground_ransac_iterations: usize,
@@ -46,12 +44,10 @@ pub struct Config {
 pub struct ClasterConfig {
     pub strategy: String,
     pub merge_patience: f32,
-    pub merge_threshold: f32,
     pub voxel_size: f32,
     pub min_points_per_cluster: Option<usize>,
     pub max_points_per_node: Option<usize>,
     pub max_tree_depth: Option<usize>,
-    pub use_parallel: bool,
     pub eps_slope: f32,
     pub azimuth_resolution: f32,
     pub elevation_resolution: f32,
@@ -151,14 +147,13 @@ impl Config {
         update_field!(detections_capacity);
         update_field!(person_class_label);
         update_field!(points_capacity);
-        update_field!(resolution);
         update_field!(default_input_width);
         update_field!(default_input_height);
         update_field!(default_confidence_threshold);
         update_field!(default_nms_threshold);
-        update_field!(dbscan_min_points);
         update_field!(model_path);
 
+        update_field!(ground_strategy);
         update_field!(ground_expand);
         update_field!(ground_ransac_distance);
         update_field!(ground_ransac_iterations);
@@ -167,9 +162,7 @@ impl Config {
 
         // 使用新的宏来更新claster配置
         update_claster_field!(merge_patience);
-        update_claster_field!(merge_threshold);
         update_claster_field!(voxel_size);
-        update_claster_field!(use_parallel);
         update_claster_field!(eps_slope);
         update_claster_field!(strategy);
         update_claster_field!(azimuth_resolution);
@@ -231,17 +224,15 @@ struct PartialConfig {
     pub detections_capacity: Option<usize>,
     pub person_class_label: Option<String>,
     pub points_capacity: Option<usize>,
-    pub resolution: Option<f32>,
 
     pub default_input_width: Option<usize>,
     pub default_input_height: Option<usize>,
     pub default_confidence_threshold: Option<f32>,
     pub default_nms_threshold: Option<f32>,
 
-    pub dbscan_min_points: Option<usize>,
-
     pub claster: Option<PartialClasterConfig>,
 
+    pub ground_strategy: Option<String>,
     pub ground_expand: Option<f32>,
     pub ground_ransac_distance: Option<f32>,
     pub ground_ransac_iterations: Option<usize>,
@@ -283,12 +274,10 @@ struct PartialTrackerConfig {
 struct PartialClasterConfig {
     pub strategy: Option<String>,
     pub merge_patience: Option<f32>,
-    pub merge_threshold: Option<f32>,
     pub voxel_size: Option<f32>,
     pub min_points_per_cluster: Option<usize>,
     pub max_points_per_node: Option<usize>,
     pub max_tree_depth: Option<usize>,
-    pub use_parallel: Option<bool>,
     pub eps_slope: Option<f32>,
     pub azimuth_resolution: Option<f32>,
     pub elevation_resolution: Option<f32>,

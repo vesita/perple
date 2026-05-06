@@ -399,7 +399,20 @@ impl Tracker {
                 let meas = Vector3::new(center.x as f64, center.y as f64, center.z as f64);
                 let dist = obj.kalman_filter.mahalanobis_distance(meas);
                 if dist < Self::MAHALANOBIS_THRESHOLD {
-                    cost_buf[obj_idx][det_idx] = dist;
+                    // 尺寸一致性惩罚：归一化尺寸差越大，代价越高
+                    let size_penalty = if let Some(ref lb) = obj.last_box {
+                        let dl = (lb.length - det.the_box.length).abs();
+                        let dw = (lb.width  - det.the_box.width ).abs();
+                        let dh = (lb.height - det.the_box.height).abs();
+                        let al = (lb.length + det.the_box.length).max(1e-6);
+                        let aw = (lb.width  + det.the_box.width ).max(1e-6);
+                        let ah = (lb.height + det.the_box.height).max(1e-6);
+                        // 取三维中最大相对差，>1.0 表示尺寸翻倍
+                        (dl / al).max(dw / aw).max(dh / ah) * 2.0
+                    } else {
+                        0.0
+                    };
+                    cost_buf[obj_idx][det_idx] = dist + size_penalty as f64;
                 }
             }
         }
