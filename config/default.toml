@@ -13,8 +13,8 @@ default_nms_threshold = 0.7
 model_path = "module/color/yolo11n.onnx"
 
 # 地面检测参数（直方图种子 + RANSAC 平面拟合生长）
-ground_strategy = "histogram"  # 地面提取策略: "histogram", "histoseed", "ransac", "peak_down", "gpf"
-ground_expand = 0.20       # 地面种子区域 Z 向扩展量（米），peak_z ± expand 为初始地面区域
+ground_strategy = "peak_scan"  # 地面提取策略: "histogram", "histoseed", "ransac", "peak_scan", "gpf"
+ground_expand = 0.10       # 地面种子区域 Z 向扩展量（米），peak_z ± expand 为初始地面区域
 ground_ransac_distance = 0.3   # RANSAC 平面拟合内点距离阈值（米）
 ground_ransac_iterations = 50  # RANSAC 迭代次数
 upside_down = true         # 点云 Z 轴是否上下翻转（LiDAR 安装朝下时为 true）

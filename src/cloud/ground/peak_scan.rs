@@ -3,21 +3,21 @@ use crate::utils::boxes::Box3D;
 use super::GroundPickStrategy;
 use super::super::CldBud;
 
-/// 峰下扫 + 上扩 地面提取
-pub struct PeakDownExpandUp {
+/// 峰扫描地面提取：从 Z 直方图峰值向下扫描找地面下界，向上扩展找地面上界。
+pub struct PeakScan {
     threshold: Option<f32>,
     expand: Option<f32>,
 }
 
-impl PeakDownExpandUp {
+impl PeakScan {
     pub fn new() -> Self { Self { threshold: None, expand: None } }
     pub fn with_params(threshold: f32, expand: f32) -> Self {
         Self { threshold: Some(threshold), expand: Some(expand) }
     }
 }
 
-impl GroundPickStrategy for PeakDownExpandUp {
-    fn strategy_name(&self) -> &'static str { "peak_down" }
+impl GroundPickStrategy for PeakScan {
+    fn strategy_name(&self) -> &'static str { "peak_scan" }
 
     fn pick(&mut self, cloud: &mut [[f32; 3]]) -> (usize, Vec<CldBud>, Option<[f32; 4]>) {
         let n = cloud.len();
@@ -31,10 +31,8 @@ impl GroundPickStrategy for PeakDownExpandUp {
         let threshold = self.threshold.unwrap_or(0.10);
         let num_bins = 128;
 
-        let mut indexed: Vec<(usize, [f32; 3])> = (0..n).zip(cloud.iter().copied()).collect();
         if upside_down { for p in cloud.iter_mut() { p[2] = -p[2]; } }
-        indexed.sort_by(|a, b| a.1[2].partial_cmp(&b.1[2]).unwrap());
-        for (i, (_, p)) in indexed.iter().enumerate() { cloud[i] = *p; }
+        cloud.sort_unstable_by(|a, b| a[2].partial_cmp(&b[2]).unwrap());
 
         let z_min = cloud[0][2];
         let z_max = cloud[n - 1][2];

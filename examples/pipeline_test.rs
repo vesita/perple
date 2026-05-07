@@ -16,38 +16,22 @@ use perple::optional::data_loader::DataLoader;
 use perple::swapl::global_swapl;
 use perple::tracker::core::Tracker;
 use perple::tracker::output::Target;
+use perple::utils::rdra::FrameWriter;
 
 use log::info;
-use redra_client::{RdraWriter, ShapeBuilder};
 
 // ─── .rdra 输出 ───────────────────────────────────────────────────────────
-fn write_targets(writer: &mut RdraWriter, targets: &[Target]) {
-    for (i, target) in targets.iter().enumerate() {
-        let verts: Vec<(f32, f32, f32)> = target.the_box.vertices().iter()
-            .map(|v| (v.x, v.y, v.z))
-            .collect();
+fn write_targets(writer: &mut FrameWriter, targets: &[Target]) {
+    for target in targets.iter() {
         let tag = format!("{} | {} | {:.1}m/s", target.id, target.classification, target.speed);
-        writer.spawn(
-            ShapeBuilder::cube(verts)
-                .id(2_000_000 + i as u64 * 4)
-                .material("glass")
-                .tag(tag)
-        );
+        writer.write_box(&target.the_box, "disabled", &tag);
     }
 }
 
-fn write_cldbuds(writer: &mut RdraWriter, buds: &[CldBud]) {
-    for (i, bud) in buds.iter().enumerate() {
-        let verts: Vec<(f32, f32, f32)> = bud.the_box.vertices().iter()
-            .map(|v| (v.x, v.y, v.z))
-            .collect();
+fn write_cldbuds(writer: &mut FrameWriter, buds: &[CldBud]) {
+    for bud in buds.iter() {
         let tag = format!("{} | {:.2}", bud.class_name, bud.confidence);
-        writer.spawn(
-            ShapeBuilder::cube(verts)
-                .id(1_000_000 + i as u64 * 4)
-                .material("point_cloud")
-                .tag(tag)
-        );
+        writer.write_box(&bud.the_box, "point_cloud", &tag);
     }
 }
 
@@ -119,8 +103,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut camera = Camera::new();
     let mut fuse = Fuse::new();
     let mut tracker = Tracker::new();
-    let mut writer = RdraWriter::new();
-    let mut cluster_writer = RdraWriter::new();
+    let mut writer = FrameWriter::new();
+    let mut cluster_writer = FrameWriter::new();
 
     // ─── 两级流水 ────────────────────────────────────────────────────────
     let total_start = Instant::now();
@@ -160,6 +144,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let swapl = global_swapl();
             let buds_guard = swapl.cld_buds_raw.lock().await;
             if let Some(buds) = buds_guard.peek_latest() {
+                cluster_writer.begin_frame(i);
                 write_cldbuds(&mut cluster_writer, &buds);
             }
         }
@@ -210,6 +195,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     targets.len(), &targets);
 
         // ─── 写入 .rdra ──────────────────────────────────────────────────
+        writer.begin_frame(i);
         write_targets(&mut writer, &targets);
         writer.end_frame();
     }

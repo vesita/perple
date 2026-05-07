@@ -9,7 +9,7 @@ Perple 是一个基于 LiDAR + 相机融合的实时 3D 目标检测与跟踪系
 | 模块 | 职责 | 关键类型 |
 |------|------|----------|
 | `cloud` | 点云处理全流程：地面提取、聚类、融合输出 | `Classify`, `CldBud`, `GroundPickStrategy`, `ClusteringStrategy` |
-| `cloud/ground` | 地面提取策略族（5 种实现） | `HistogramExpand`, `HistoseedPlane`, `RansacGround`, `PeakDownExpandUp`, `GpfGround` |
+| `cloud/ground` | 地面提取策略族（5 种实现） | `HistogramExpand`, `HistoseedPlane`, `RansacGround`, `PeakScan`, `GpfGround` |
 | `cloud/classify` | 聚类策略族 + 分类管线 | `DbscanStrategy`, `RangeImageStrategy`, `Claster` |
 | `color` | 图像目标检测（YOLO ONNX 推理） | `ClrBud`, `load_model()` |
 | `fuse` | 多模态融合（点云 + 视觉检测结果） | — |
@@ -76,7 +76,7 @@ pub trait GroundPickStrategy: Send {
 - `HistogramExpand` — Z 直方图峰值 + expand（默认，最简单）
 - `HistoseedPlane` — 直方图种子 + RANSAC 平面生长
 - `RansacGround` — 纯 RANSAC 平面拟合
-- `PeakDownExpandUp` — 峰下扫描 + 上扩
+- `PeakScan` — 峰下扫描 + 上扩
 - `GpfGround` — Ground Plane Fitting
 
 **工厂函数：** `create_ground_strategy()` 返回 `Box<dyn GroundPickStrategy>`，当前默认 `HistogramExpand::new()`。

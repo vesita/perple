@@ -6,7 +6,7 @@ use perple::utils::boxes::Box3D;
 
 // redra 语义材质短名
 const MAT_BG: &str = "point_cloud";        // 暖白背景
-const MAT_BOX: &str = "glass";             // 半透明包围盒，可透视内部点
+const MAT_BOX: &str = "disabled";          // 暗灰半透明包围盒，区分内外点
 
 // 聚类色板（12 色最大感知区分，30° 色相间距）
 const CLUSTER_COLORS: &[&str] = &[
@@ -84,8 +84,7 @@ impl BenchStrategy for ClusterBenchCase {
                 for i in (0..cluster.len()).step_by(step) {
                     recorder.write_point_cloud(&[cluster[i]], color, 1);
                 }
-                let mut box3d = Box3D::empty_box();
-                box3d.cloud2box(cluster);
+                let box3d = Box3D::from_cloud_aabb(cluster, 0.05);
                 let tag = format!("{}pts h={:.1}m", cluster.len(), box3d.height);
                 recorder.write_boxes(&[(box3d, tag)], MAT_BOX);
             }
@@ -219,8 +218,7 @@ fn count_human_like(clusters: &[Vec<[f32; 3]>]) -> usize {
     let mut count = 0;
     for cluster in clusters {
         if cluster.len() < 3 { continue; }
-        let mut box3d = Box3D::empty_box();
-        box3d.cloud2box(cluster);
+        let box3d = Box3D::from_cloud_aabb(cluster, 0.05);
         let w = box3d.length.max(box3d.width);
         let h = box3d.height;
         if w < 0.25 || h < 0.5 { continue; }

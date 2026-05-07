@@ -21,7 +21,7 @@ const MAT_RAW: &str = "point_cloud";      // 暖白
 const MAT_GROUND: &str = "ground";         // 暗橄榄绿
 const MAT_WALL: &str = "red";              // 暖色警示
 const MAT_REMAIN: &str = "yellow";         // 暖色，与红/绿/青均区分
-const MAT_BOX: &str = "glass";             // 半透明包围盒，可透视内部点
+const MAT_BOX: &str = "disabled";          // 暗灰半透明包围盒，区分内外点
 
 // ─── 墙体 RANSAC ───
 
@@ -225,8 +225,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         for (wi, (plane, &count)) in wall_planes.iter().zip(wall_counts.iter()).enumerate() {
             let tag = format!("wall{} n=({:.2},{:.2},{:.2}) d={:.2} {}pts",
                 wi, plane[0], plane[1], plane[2], plane[3], count);
-            let mut wall_box = Box3D::empty_box();
-            wall_box.cloud2box(&wall_points[wall_offset..wall_offset + count].to_vec());
+            let wall_box = Box3D::from_cloud_aabb(&wall_points[wall_offset..wall_offset + count], 0.05);
             recorder.write_boxes(&[(wall_box, tag)], MAT_BOX);
             wall_offset += count;
         }
@@ -236,11 +235,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         for i in (0..remaining.len()).step_by(remain_step) {
             recorder.write_point_cloud(&[remaining[i]], MAT_REMAIN, 1);
         }
-        // 聚类包围盒（半透明，可透视内部点）
+        // 聚类包围盒（半透明，最小边长 0.05m）
         for (ci, cluster) in clusters.iter().enumerate() {
             let pts: Vec<[f32; 3]> = cluster.iter().map(|&i| remaining[i]).collect();
-            let mut box3d = Box3D::empty_box();
-            box3d.cloud2box(&pts);
+            let box3d = Box3D::from_cloud_aabb(&pts, 0.05);
             let tag = format!("cluster{} {}pts", ci, pts.len());
             recorder.write_boxes(&[(box3d, tag)], MAT_BOX);
         }

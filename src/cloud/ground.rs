@@ -1,14 +1,14 @@
 mod histogram;
 mod histoseed;
 mod ransac;
-mod peak_down;
+mod peak_scan;
 mod gpf;
 
 pub use histogram::HistogramExpand;
 pub use histogram::HistogramExpand as HistogramExpandStrategy;
 pub use histoseed::HistoseedPlane;
 pub use ransac::RansacGround;
-pub use peak_down::PeakDownExpandUp;
+pub use peak_scan::PeakScan;
 pub use gpf::GpfGround;
 
 use super::CldBud;

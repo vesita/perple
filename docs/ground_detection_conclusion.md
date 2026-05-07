@@ -11,7 +11,7 @@
 | # | 策略 | 机制 | 速度 |
 |---|------|------|------|
 | 1 | **histogram_expand** | Z 直方图峰值 → 阈值扩展 | ~2ms |
-| 2 | **peak_down_expand_up** | Z 直方图峰值 → 向下扫描至阈值 → 向上扩展 | ~2ms |
+| 2 | **peak_scan** | Z 直方图峰值 → 向下扫描至阈值 → 向上扩展 | ~2ms |
 | 3 | **ransac_ground** | 全点云 RANSAC 平面拟合 | ~20-30ms |
 | 4 | **histoseed_grow** | 直方图种子 → 对种子执行 RANSAC → 生长至全点云 | ~8-12ms |
 | 5 | **gpf_ground** | SVD 迭代平面拟合（Ground Plane Fitting） | ~8-23ms |
@@ -55,10 +55,10 @@
 | 帧号 | 策略 | 参数 | 地面点数 | 质量 |
 |------|------|------|---------|------|
 | 3 | histogram_expand | expand=0.15 | ~2500 | 良好 |
-| 8 | peak_down_expand_up | th=0.05, ex=0.20 | ~2800 | 良好 |
-| 11 | peak_down_expand_up | th=0.10, ex=0.20 | ~2800 | 良好 |
-| 14 | peak_down_expand_up | th=0.15, ex=0.20 | ~2800 | 良好 |
-| 17 | peak_down_expand_up | th=0.20, ex=0.20 | ~2800 | 良好 |
+| 8 | peak_scan | th=0.05, ex=0.20 | ~2800 | 良好 |
+| 11 | peak_scan | th=0.10, ex=0.20 | ~2800 | 良好 |
+| 14 | peak_scan | th=0.15, ex=0.20 | ~2800 | 良好 |
+| 17 | peak_scan | th=0.20, ex=0.20 | ~2800 | 良好 |
 | 20 | histoseed_grow | seed=0.10, d=0.3 | ~3000 | **最优** |
 
 **关键观察：**
@@ -103,7 +103,7 @@ fn histoseed_plane(cloud, distance, iterations) {
 | 方法 | 平均耗时 | 方差 | 地面召回率 |
 |------|---------|------|-----------|
 | histogram_expand | 1.8ms | 低 | ~70% |
-| peak_down_expand_up | 1.9ms | 低 | ~72% |
+| peak_scan | 1.9ms | 低 | ~72% |
 | **histoseed_grow** | **9.4ms** | **低** | **~95%** |
 | ransac_ground | 27.1ms | 高 | ~98% |
 | gpf_ground | 14.2ms | 中 | ~90% |
@@ -116,8 +116,8 @@ fn histoseed_plane(cloud, distance, iterations) {
 
 | 模式 | 现象 | 受影响的策略 |
 |------|------|-------------|
-| **倾斜地面** | 地面部分或全部丢失 | histogram, peak_down |
-| **墙面边界** | 墙面点被分类为地面 | histogram, peak_down（expand 过大） |
+| **倾斜地面** | 地面部分或全部丢失 | histogram, peak_scan |
+| **墙面边界** | 墙面点被分类为地面 | histogram, peak_scan（expand 过大） |
 | **种子稀疏** | RANSAC 退化到错误平面 | histoseed（种子太小） |
 | **倒装 LiDAR** | 地面在高 Z 处，车体在 Z≈0 | 所有策略（通过 Z 取反修复） |
 | **SVD 奇异** | 协方差矩阵退化 → 无平面 | GPF（通过回退法向量处理） |

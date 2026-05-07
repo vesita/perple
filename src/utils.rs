@@ -1,6 +1,7 @@
 pub mod boxes;
 pub mod muloop;
 pub mod random;
+pub mod rdra;
 pub mod sight;
 pub mod sort;
 pub mod stream;

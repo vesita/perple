@@ -188,13 +188,15 @@ impl Box3D {
         Ok(())
     }
 
-    /// 从点云创建包围盒
-    pub fn cloud2box(&mut self, cloud3d: &Vec<[f32; 3]>) {
+    /// 从点云计算 AABB（轴对齐包围盒）
+    ///
+    /// 接受任意 slice，自动 clamp 最小边长到 `min_edge`（米），
+    /// 避免退化为零体积盒导致渲染异常。
+    pub fn from_cloud_aabb(cloud3d: &[[f32; 3]], min_edge: f32) -> Self {
         if cloud3d.is_empty() {
-            return;
+            return Self::empty_box();
         }
 
-        // 简单的AABB实现 - 计算点云在世界坐标系中的边界
         let mut x_min = cloud3d[0][0];
         let mut x_max = cloud3d[0][0];
         let mut y_min = cloud3d[0][1];
@@ -202,27 +204,30 @@ impl Box3D {
         let mut z_min = cloud3d[0][2];
         let mut z_max = cloud3d[0][2];
 
-        for point in cloud3d {
-            x_min = x_min.min(point[0]);
-            x_max = x_max.max(point[0]);
-            y_min = y_min.min(point[1]);
-            y_max = y_max.max(point[1]);
-            z_min = z_min.min(point[2]);
-            z_max = z_max.max(point[2]);
+        for p in &cloud3d[1..] {
+            x_min = x_min.min(p[0]);
+            x_max = x_max.max(p[0]);
+            y_min = y_min.min(p[1]);
+            y_max = y_max.max(p[1]);
+            z_min = z_min.min(p[2]);
+            z_max = z_max.max(p[2]);
         }
 
-        // 计算中心点坐标
-        let center_x = (x_min + x_max) / 2.0;
-        let center_y = (y_min + y_max) / 2.0;
-        let center_z = (z_min + z_max) / 2.0;
+        let cx = (x_min + x_max) * 0.5;
+        let cy = (y_min + y_max) * 0.5;
+        let cz = (z_min + z_max) * 0.5;
 
-        // 设置包围盒的位姿矩阵（无旋转，仅平移）
-        self.pose = Matrix4::new_translation(&Vector3::new(center_x, center_y, center_z));
+        Box3D {
+            pose: Matrix4::new_translation(&Vector3::new(cx, cy, cz)),
+            length: (x_max - x_min).max(min_edge),
+            width:  (y_max - y_min).max(min_edge),
+            height: (z_max - z_min).max(min_edge),
+        }
+    }
 
-        // 设置尺寸
-        self.length = x_max - x_min;
-        self.width = y_max - y_min;
-        self.height = z_max - z_min;
+    /// 从点云创建包围盒（旧接口，委托给 `from_cloud_aabb`）
+    pub fn cloud2box(&mut self, cloud3d: &Vec<[f32; 3]>) {
+        *self = Self::from_cloud_aabb(cloud3d, 0.0);
     }
 
     /// 通过 PCA 从点云拟合 OBB（定向包围盒）

@@ -33,10 +33,8 @@ impl GroundPickStrategy for GpfGround {
         let th_seed = self.th_seed.unwrap_or(0.5);
         let th_dist = self.th_dist.unwrap_or(cfg.ground_ransac_distance);
 
-        let mut indexed: Vec<(usize, [f32; 3])> = (0..n).zip(cloud.iter().copied()).collect();
         if upside_down { for p in cloud.iter_mut() { p[2] = -p[2]; } }
-        indexed.sort_by(|a, b| a.1[2].partial_cmp(&b.1[2]).unwrap());
-        for (i, (_, p)) in indexed.iter().enumerate() { cloud[i] = *p; }
+        cloud.sort_unstable_by(|a, b| a[2].partial_cmp(&b[2]).unwrap());
 
         let lpr: f32 = cloud[..n_lpr].iter().map(|p| p[2]).sum::<f32>() / n_lpr as f32;
 
@@ -55,19 +53,14 @@ impl GroundPickStrategy for GpfGround {
         }
 
         let mut ground_count = seed_count;
-        let mut plane_normal = [0.0f32; 3];
-        let mut plane_d = 0.0f32;
+        let gp: Vec<[f32; 3]> = cloud.iter().enumerate()
+            .filter(|(i, _)| mask[*i]).map(|(_, p)| *p).collect();
+        let (mut plane_normal, mut plane_d) = fit_plane_svd(&gp);
         loop {
-            let gp: Vec<[f32; 3]> = cloud.iter().enumerate()
-                .filter(|(i, _)| mask[*i]).map(|(_, p)| *p).collect();
-            let (normal, d) = fit_plane_svd(&gp);
-            plane_normal = normal;
-            plane_d = d;
-
             let mut new_count = 0;
             let mut new_mask = vec![false; n];
             for (i, p) in cloud.iter().enumerate() {
-                if (normal[0]*p[0] + normal[1]*p[1] + normal[2]*p[2] + d).abs() < th_dist {
+                if (plane_normal[0]*p[0] + plane_normal[1]*p[1] + plane_normal[2]*p[2] + plane_d).abs() < th_dist {
                     new_mask[i] = true;
                     new_count += 1;
                 }
@@ -76,23 +69,30 @@ impl GroundPickStrategy for GpfGround {
             if new_count <= ground_count { break; }
             mask = new_mask;
             ground_count = new_count;
+
+            let gp: Vec<[f32; 3]> = cloud.iter().enumerate()
+                .filter(|(i, _)| mask[*i]).map(|(_, p)| *p).collect();
+            let (normal, d) = fit_plane_svd(&gp);
+            plane_normal = normal;
+            plane_d = d;
         }
 
-        let mut ground_mask = vec![false; n];
-        for (sorted_i, &is_ground) in mask.iter().enumerate() {
-            if is_ground { ground_mask[indexed[sorted_i].0] = true; }
-        }
+        // mask 基于排序后的 cloud 索引，直接用 mask 分区
+        let n_ground = mask.iter().filter(|&&m| m).count();
 
-        let n_ground = ground_mask.iter().filter(|&&m| m).count();
-
-        // 重排地面点到前部
+        // 重排地面点到前部（cloud 已排序，mask 索引对应正确）
         let mut write = 0;
         for read in 0..n {
-            if ground_mask[read] { cloud.swap(read, write); write += 1; }
+            if mask[read] { cloud.swap(read, write); write += 1; }
         }
 
         let plane_eq = if n_ground > 0 {
-            Some([plane_normal[0], plane_normal[1], plane_normal[2], plane_d])
+            // plane 在翻转坐标系下拟合，转回原始坐标系
+            if upside_down {
+                Some([plane_normal[0], plane_normal[1], -plane_normal[2], -plane_d])
+            } else {
+                Some([plane_normal[0], plane_normal[1], plane_normal[2], plane_d])
+            }
         } else {
             None
         };

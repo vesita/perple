@@ -8,7 +8,7 @@ use perple::utils::boxes::Box3D;
 const MAT_RAW: &str = "point_cloud";      // 暖白，专为点云设计
 const MAT_GROUND: &str = "ground";         // 暗橄榄绿，低饱和不抢视线
 const MAT_NON_GROUND: &str = "cyan";       // 冷色，与地面互补
-const MAT_BOX: &str = "glass";             // 半透明包围盒，可透视内部点
+const MAT_BOX: &str = "disabled";          // 暗灰半透明包围盒，区分内外点
 
 struct GroundBenchCase {
     name: String,
@@ -73,21 +73,22 @@ impl BenchStrategy for GroundBenchCase {
             recorder.write_point_cloud(&[cloud[i]], MAT_NON_GROUND, 1);
         }
 
-        // 地面包围盒（亮绿，语义层）
+        // 地面包围盒（半透明，最小边长 0.05m）
         if n_ground > 0 {
-            let mut ground_box = Box3D::empty_box();
-            ground_box.cloud2box(&cloud[..n_ground].to_vec());
+            let ground_pts = &cloud[..n_ground];
+            let ground_box = Box3D::from_cloud_aabb(ground_pts, 0.05);
+
+            // 诊断：打印地面点 Z 范围和包围盒尺寸
+            let z_min = ground_pts.iter().map(|p| p[2]).fold(f32::INFINITY, f32::min);
+            let z_max = ground_pts.iter().map(|p| p[2]).fold(f32::NEG_INFINITY, f32::max);
+            let ratio = n_ground as f64 / cloud.len() as f64 * 100.0;
+            println!("[{}] 地面 {}/{} ({:.0}%) | Z=[{:.2},{:.2}] | 盒 {:.1}×{:.1}×{:.2}m",
+                self.name, n_ground, cloud.len(), ratio,
+                z_min, z_max, ground_box.length, ground_box.width, ground_box.height);
+
             let avg_us = self.total_us / self.frame_count.max(1) as u128;
             let tag = format!("{} | {}pts | {}μs/帧", self.name, n_ground, avg_us);
             recorder.write_boxes(&[(ground_box, tag)], MAT_BOX);
-        }
-
-        // 非地面包围盒（半透明，可透视内部点）
-        if non_ground_count > 0 {
-            let mut ng_box = Box3D::empty_box();
-            ng_box.cloud2box(&cloud[n_ground..].to_vec());
-            let tag = format!("非地面 {}pts", non_ground_count);
-            recorder.write_boxes(&[(ng_box, tag)], MAT_BOX);
         }
 
         recorder.end_frame();
@@ -125,10 +126,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 策略 2：峰下扫 + 上扩
     for &threshold in &[0.05, 0.10, 0.15, 0.20] {
         for &expand in &[0.05, 0.10, 0.20] {
-            let name = format!("peak_sd={:.2}_ex={:.2}", threshold, expand);
+            let name = format!("peak_scan_ex={:.2}_sd={:.2}", expand, threshold);
             strategies.push(Box::new(GroundBenchCase::new(
                 &name,
-                Box::new(PeakDownExpandUp::with_params(threshold, expand)),
+                Box::new(PeakScan::with_params(threshold, expand)),
             )));
         }
     }

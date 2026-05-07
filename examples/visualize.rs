@@ -5,9 +5,9 @@ use perple::optional::data_loader::DataLoader;
 use perple::tracker::core::Tracker;
 use perple::swapl::global_swapl;
 use perple::tracker::output::Target;
+use perple::utils::rdra::FrameWriter;
 
 use log::info;
-use redra_client::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -25,7 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let lidar = Arc::new(Mutex::new(Lidar::new()));
     let tracker = Arc::new(Mutex::new(Tracker::new()));
-    let mut writer = RdraWriter::new();
+    let mut writer = FrameWriter::new();
 
     let n_frames = 14;
     for i in 0..n_frames {
@@ -61,8 +61,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn write_frame(writer: &mut RdraWriter, frame: usize, total: usize) -> Result<(), Box<dyn std::error::Error>> {
-    writer.destroy_all();
+async fn write_frame(writer: &mut FrameWriter, frame: usize, total: usize) -> Result<(), Box<dyn std::error::Error>> {
+    writer.begin_frame(frame);
 
     let swapl = global_swapl();
 
@@ -70,12 +70,7 @@ async fn write_frame(writer: &mut RdraWriter, frame: usize, total: usize) -> Res
     let cloud_stream = swapl.clouds_out.lock().await;
     if let Some(cloud) = cloud_stream.peek_latest() {
         println!("  帧 {}/{} | 点云: {} points", frame + 1, total, cloud.len());
-        let step = (cloud.len() / 5000).max(1);
-        for (i, p) in cloud.iter().enumerate() {
-            if i % step == 0 {
-                writer.spawn(spawn_point(*p, "point_cloud").id(1_000_000 + i as u64 * 4));
-            }
-        }
+        writer.write_cloud(&cloud, "point_cloud", 5000);
     } else {
         println!("  帧 {}/{} | 点云: 无数据", frame + 1, total);
     }
@@ -101,23 +96,15 @@ async fn write_frame(writer: &mut RdraWriter, frame: usize, total: usize) -> Res
     Ok(())
 }
 
-fn write_targets(writer: &mut RdraWriter, targets: &[Target]) {
-    for (i, target) in targets.iter().enumerate() {
-        let verts: Vec<(f32, f32, f32)> = target.the_box.vertices().iter()
-            .map(|v| (v.x, v.y, v.z))
-            .collect();
-
+fn write_targets(writer: &mut FrameWriter, targets: &[Target]) {
+    for target in targets.iter() {
         let tag = format!("{} | {} | {} | {:.1}m/s",
             target.id, target.class_type, target.classification, target.speed);
-        writer.spawn(
-            spawn_cube(verts, "glass")
-                .id(2_000_000 + i as u64 * 4)
-                .tag(tag)
-        );
+        writer.write_box(&target.the_box, "disabled", &tag);
     }
 }
 
-fn write_speed_arrows(writer: &mut RdraWriter, targets: &[Target]) {
+fn write_speed_arrows(writer: &mut FrameWriter, targets: &[Target]) {
     for target in targets {
         if target.speed > 0.5 {
             let center = target.the_box.center();
@@ -126,11 +113,11 @@ fn write_speed_arrows(writer: &mut RdraWriter, targets: &[Target]) {
             let dy = target.velocity[1] / target.speed * scale;
             let dz = target.velocity[2] / target.speed * scale;
 
-            writer.spawn(spawn_line(
+            writer.write_line(
                 [center.x, center.y, center.z],
                 [center.x + dx, center.y + dy, center.z + dz],
                 "trajectory",
-            ));
+            );
         }
     }
 }
