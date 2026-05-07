@@ -103,12 +103,23 @@ pub trait BenchStrategy {
 }
 ```
 
-`FrameData` 提供三层点云视图：`cloud`（原始）、`preprocessed`（默认策略排序后）、`non_ground`（非地面子集）。
+`FrameData` 提供 `cloud`（原始点云）和 `preprocessed`（`Preprocessed` 枚举，承载预处理结果）。通过 `frame.non_ground()` 便捷方法获取非地面点。
+
+### Preprocessor（级联预处理）
+
+```rust
+pub trait Preprocessor {
+    fn name(&self) -> &str;
+    fn preprocess(&mut self, cloud: &[[f32; 3]]) -> Preprocessed;
+}
+```
+
+`Preprocessed` 枚举：`Passthrough`（无预处理）→ `Ground { non_ground }`（地面提取完成）。新增下游策略时扩展枚举。
 
 ## Bench 框架设计原则
 
 1. **串行执行** — 同一帧的所有策略依次执行，避免并发干扰计时
-2. **每帧预处理一次** — `create_ground_strategy().pick()` 在策略循环外执行，所有策略共享同一份预处理结果
+2. **级联预处理** — 预处理器由 benchmark 注入（`PassthroughPreprocessor` / `GroundPreprocessor`），每帧执行一次，结果共享给所有候选策略
 3. **100ms 告警** — 单帧单策略超过 `WARN_THRESHOLD_MS`（100ms）时打印 `[WARN]`
 4. **独立输出** — 每个策略持有独立的 `BenchRecorder`，结果写入独立 `.rdra` 文件
 5. **参数扫描** — 通过 `with_params()` 构造函数批量生成参数组合（见 `ground_bench.rs` 示例）

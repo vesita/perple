@@ -1,8 +1,14 @@
 use std::time::{Duration, Instant};
 
-use perple::bench::{BenchStrategy, BenchHarness, BenchRecorder, FrameData};
+use perple::bench::{BenchStrategy, BenchHarness, BenchRecorder, FrameData, PassthroughPreprocessor};
 use perple::cloud::ground::*;
 use perple::utils::boxes::Box3D;
+
+// redra 语义材质短名（register_category 注册）
+const MAT_RAW: &str = "point_cloud";      // 暖白，专为点云设计
+const MAT_GROUND: &str = "ground";         // 暗橄榄绿，低饱和不抢视线
+const MAT_NON_GROUND: &str = "cyan";       // 冷色，与地面互补
+const MAT_BOX: &str = "glass";             // 半透明包围盒，可透视内部点
 
 struct GroundBenchCase {
     name: String,
@@ -10,6 +16,7 @@ struct GroundBenchCase {
     total_us: u128,
     frame_count: usize,
     last_n_ground: usize,
+    last_cloud: Vec<[f32; 3]>,
 }
 
 impl GroundBenchCase {
@@ -20,6 +27,7 @@ impl GroundBenchCase {
             total_us: 0,
             frame_count: 0,
             last_n_ground: 0,
+            last_cloud: Vec::new(),
         }
     }
 }
@@ -35,28 +43,51 @@ impl BenchStrategy for GroundBenchCase {
         self.total_us += elapsed.as_micros();
         self.frame_count += 1;
         self.last_n_ground = n_ground;
+        self.last_cloud = cloud;
         elapsed
     }
 
     fn write_frame(&mut self, recorder: &mut BenchRecorder, frame: &FrameData) {
-        let mut cloud = frame.cloud.to_vec();
-        let (n_ground, _, _) = self.strategy.pick(&mut cloud);
+        let cloud = &self.last_cloud;
+        let n_ground = self.last_n_ground;
 
         recorder.begin_frame(frame.frame_idx);
 
-        let cloud_step = (cloud.len() / 5000).max(1);
-        for i in (0..cloud.len()).step_by(cloud_step) {
-            let p = cloud[i];
-            let mat = if i < n_ground { "green" } else { "white" };
-            recorder.write_point_cloud(&[p], mat, 1);
+        // 原始点云背景（受 write_raw 开关控制，默认关闭避免与分类点云重复）
+        let raw_step = (frame.cloud.len() / 5000).max(1);
+        for i in (0..frame.cloud.len()).step_by(raw_step) {
+            recorder.write_raw_cloud(&[frame.cloud[i]], MAT_RAW, 1);
         }
 
+        // 地面点（暗橄榄绿，语义层）
+        let g_step = (n_ground / 3000).max(1);
+        for i in (0..n_ground).step_by(g_step) {
+            recorder.write_point_cloud(&[cloud[i]], MAT_GROUND, 1);
+        }
+
+        // 非地面点（青色，冷色与地面互补）
+        let non_ground_start = n_ground;
+        let non_ground_count = cloud.len() - n_ground;
+        let ng_step = (non_ground_count / 3000).max(1);
+        for i in (non_ground_start..cloud.len()).step_by(ng_step) {
+            recorder.write_point_cloud(&[cloud[i]], MAT_NON_GROUND, 1);
+        }
+
+        // 地面包围盒（亮绿，语义层）
         if n_ground > 0 {
             let mut ground_box = Box3D::empty_box();
             ground_box.cloud2box(&cloud[..n_ground].to_vec());
             let avg_us = self.total_us / self.frame_count.max(1) as u128;
             let tag = format!("{} | {}pts | {}μs/帧", self.name, n_ground, avg_us);
-            recorder.write_boxes(&[(ground_box, tag)], "glass");
+            recorder.write_boxes(&[(ground_box, tag)], MAT_BOX);
+        }
+
+        // 非地面包围盒（半透明，可透视内部点）
+        if non_ground_count > 0 {
+            let mut ng_box = Box3D::empty_box();
+            ng_box.cloud2box(&cloud[n_ground..].to_vec());
+            let tag = format!("非地面 {}pts", non_ground_count);
+            recorder.write_boxes(&[(ng_box, tag)], MAT_BOX);
         }
 
         recorder.end_frame();
@@ -140,7 +171,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("共 {} 个策略\n", strategies.len());
 
     let harness = BenchHarness::new("./data/test", 5, "output/ground_bench");
-    harness.run(&mut strategies).await?;
+    let mut preprocessor = PassthroughPreprocessor;
+    harness.run(&mut preprocessor, &mut strategies).await?;
 
     Ok(())
 }

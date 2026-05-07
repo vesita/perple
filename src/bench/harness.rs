@@ -2,9 +2,8 @@ use std::time::Instant;
 
 use crate::optional::data_loader::DataLoader;
 use crate::swapl::global_swapl;
-use crate::cloud::ground::create_ground_strategy;
 use super::recorder::BenchRecorder;
-use super::strategy::{BenchStrategy, FrameData};
+use super::strategy::{BenchStrategy, FrameData, Preprocessor};
 
 const WARN_THRESHOLD_MS: f64 = 100.0;
 
@@ -29,10 +28,16 @@ impl BenchHarness {
 
     /// 运行所有策略的 benchmark。
     ///
-    /// 每帧预处理（create_ground_strategy）只执行一次，所有策略串行执行。
-    pub async fn run(&self, strategies: &mut Vec<Box<dyn BenchStrategy>>) -> Result<(), Box<dyn std::error::Error>> {
+    /// `preprocessor` 每帧执行一次，结果共享给所有候选策略。
+    /// ground_bench 传 `PassthroughPreprocessor`，cluster_bench 传 `GroundPreprocessor`。
+    pub async fn run(
+        &self,
+        preprocessor: &mut dyn Preprocessor,
+        strategies: &mut Vec<Box<dyn BenchStrategy>>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let n_strategies = strategies.len();
-        println!("=== 策略测试 ({} 策略, {} 帧) ===", n_strategies, self.frame_limit);
+        println!("=== 策略测试 ({} 策略, {} 帧, 预处理: {}) ===",
+            n_strategies, self.frame_limit, preprocessor.name());
 
         let mut data_loader = DataLoader::new(self.data_path.clone());
         data_loader.set_frame_limit(self.frame_limit);
@@ -62,16 +67,12 @@ impl BenchHarness {
                 continue;
             }
 
-            // 预处理：每帧执行一次默认地面提取
-            let mut preprocess_cloud = cloud.clone();
-            let mut ground_strategy = create_ground_strategy();
-            let (n_ground, _grounds, _plane_eq) = ground_strategy.pick(&mut preprocess_cloud);
-            let non_ground = &preprocess_cloud[n_ground..];
+            // 预处理：每帧执行一次，结果共享给所有策略
+            let preprocessed = preprocessor.preprocess(&cloud);
 
             let frame = FrameData {
                 cloud: &cloud,
-                preprocessed: &preprocess_cloud,
-                non_ground,
+                preprocessed: &preprocessed,
                 frame_idx,
             };
 

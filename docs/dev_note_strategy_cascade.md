@@ -32,9 +32,9 @@ Output
 
 ```
 src/bench/
-├── mod.rs          — 模块导出
+├── bench.rs        — 模块导出
 ├── recorder.rs     — BenchRecorder（数据输出模块）
-├── strategy.rs     — BenchStrategy trait（策略接口）
+├── strategy.rs     — BenchStrategy trait + Preprocessor trait + Preprocessed 枚举
 └── harness.rs      — BenchHarness（测试执行器）
 ```
 
@@ -43,17 +43,31 @@ src/bench/
 ```rust
 pub trait BenchStrategy {
     fn name(&self) -> &str;
-    fn preprocess(&mut self, cloud: &mut [[f32; 3]]) -> PreprocessResult;
     fn run(&mut self, frame: &FrameData) -> Duration;
-    fn write_frame(&self, recorder: &mut BenchRecorder, frame: &FrameData);
+    fn write_frame(&mut self, recorder: &mut BenchRecorder, frame: &FrameData);
     fn summarize(&self);
 }
 ```
 
-- `preprocess` — 前序处理（地面提取等），每帧每策略独立调用
 - `run` — 执行候选策略，返回耗时
 - `write_frame` — 将检测结果写入 recorder（策略自行决定可视化方式）
 - `summarize` — 输出汇总统计表
+
+### Preprocessor trait（级联预处理）
+
+```rust
+pub trait Preprocessor {
+    fn name(&self) -> &str;
+    fn preprocess(&mut self, cloud: &[[f32; 3]]) -> Preprocessed;
+}
+```
+
+预处理步骤，每帧执行一次，结果共享给所有候选策略。级联规则：
+- ground_bench → `PassthroughPreprocessor`（无前序处理）
+- cluster_bench → `GroundPreprocessor`（地面提取作为前序）
+- 未来 tracker_bench → `ClusterPreprocessor`（地面+聚类作为前序）
+
+`Preprocessed` 枚举承载每层产出，新增下游策略时扩展枚举即可。
 
 ### BenchRecorder（数据输出模块）
 
@@ -69,39 +83,46 @@ recorder.save("output.rdra");              // 保存文件
 
 ### BenchHarness（测试执行器）
 
-自动完成：DataLoader 加载 → 逐帧迭代 → 每策略独立 preprocess → run → write_frame → 保存 .rdra
+自动完成：DataLoader 加载 → 逐帧迭代 → 预处理（每帧一次） → 策略串行执行 → 保存 .rdra
 
 ```rust
-BenchHarness::new("./data/test", 64, "output/ground_bench")
-    .run(&mut strategies)
+// ground_bench：无前序处理
+let mut preprocessor = PassthroughPreprocessor;
+BenchHarness::new("./data/test", 5, "output/ground_bench")
+    .run(&mut preprocessor, &mut strategies)
+    .await?;
+
+// cluster_bench：地面提取作为前序
+let mut preprocessor = GroundPreprocessor::default();
+BenchHarness::new("./data/test", 64, "output/cluster_bench")
+    .run(&mut preprocessor, &mut strategies)
     .await?;
 ```
 
 ### Example 用法
 
 ```rust
-struct GroundBench { label: String, factory: fn() -> Box<dyn GroundStrategy>, /* stats */ }
+struct GroundBench { label: String, strategy: Box<dyn GroundPickStrategy>, /* stats */ }
 
 impl BenchStrategy for GroundBench {
     fn name(&self) -> &str { &self.label }
-    fn preprocess(&mut self, _: &mut [[f32; 3]]) -> PreprocessResult {
-        PreprocessResult { n_ground: 0 }  // ground_bench 无前序处理
-    }
     fn run(&mut self, frame: &FrameData) -> Duration {
-        let mut s = (self.factory)();
+        let mut cloud = frame.cloud.to_vec();
         let start = Instant::now();
-        s.extract(&mut frame.cloud.to_vec());
+        self.strategy.pick(&mut cloud);
         start.elapsed()
     }
-    fn write_frame(&self, rec: &mut BenchRecorder, frame: &FrameData) { /* ... */ }
+    fn write_frame(&mut self, rec: &mut BenchRecorder, frame: &FrameData) { /* ... */ }
     fn summarize(&self) { /* 打印统计表 */ }
 }
 
 let mut strategies: Vec<Box<dyn BenchStrategy>> = vec![
-    Box::new(GroundBench::new("histogram", || Box::new(HistogramExpand::new()))),
-    Box::new(GroundBench::new("ransac",    || Box::new(RansacGround::new()))),
+    Box::new(GroundBench::new("histogram", Box::new(HistogramExpand::new()))),
+    Box::new(GroundBench::new("ransac",    Box::new(RansacGround::new()))),
 ];
-BenchHarness::new("./data/test", 64, "output/ground_bench").run(&mut strategies).await?;
+let mut preprocessor = PassthroughPreprocessor;
+BenchHarness::new("./data/test", 64, "output/ground_bench")
+    .run(&mut preprocessor, &mut strategies).await?;
 ```
 
 ## 生产环境：配置驱动

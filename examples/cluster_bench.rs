@@ -1,8 +1,19 @@
 use std::time::{Duration, Instant};
 
-use perple::bench::{BenchStrategy, BenchHarness, BenchRecorder, FrameData};
+use perple::bench::{BenchStrategy, BenchHarness, BenchRecorder, FrameData, GroundPreprocessor};
 use perple::cloud::classify::strategy::{ClusteringStrategy, DbscanStrategy, RangeImageStrategy};
 use perple::utils::boxes::Box3D;
+
+// redra 语义材质短名
+const MAT_BG: &str = "point_cloud";        // 暖白背景
+const MAT_BOX: &str = "glass";             // 半透明包围盒，可透视内部点
+
+// 聚类色板（12 色最大感知区分，30° 色相间距）
+const CLUSTER_COLORS: &[&str] = &[
+    "cluster_01", "cluster_02", "cluster_03", "cluster_04",
+    "cluster_05", "cluster_06", "cluster_07", "cluster_08",
+    "cluster_09", "cluster_10", "cluster_11", "cluster_12",
+];
 
 struct ClusterBenchCase {
     name: String,
@@ -34,7 +45,7 @@ impl BenchStrategy for ClusterBenchCase {
     fn name(&self) -> &str { &self.name }
 
     fn run(&mut self, frame: &FrameData) -> Duration {
-        let points = frame.non_ground.to_vec();
+        let points = frame.non_ground().to_vec();
         let start = Instant::now();
         let (processed, objects) = self.strategy.run(&points);
         let elapsed = start.elapsed();
@@ -58,17 +69,28 @@ impl BenchStrategy for ClusterBenchCase {
 
             recorder.begin_frame(frame.frame_idx);
 
-            let colors = ["red", "green", "blue", "yellow", "magenta", "cyan", "orange", "purple"];
-
-            for (ci, cluster) in clusters.iter().enumerate() {
-                if cluster.is_empty() { continue; }
-                let mut box3d = Box3D::empty_box();
-                box3d.cloud2box(cluster);
-                let color = colors[ci % colors.len()];
-                let tag = format!("{}pts h={:.1}m", cluster.len(), box3d.height);
-                recorder.write_boxes(&[(box3d, tag)], color);
+            // 非地面输入点背景（受 write_raw 开关控制，默认关闭避免与簇点云重复）
+            let ng = frame.non_ground();
+            let bg_step = (ng.len() / 3000).max(1);
+            for i in (0..ng.len()).step_by(bg_step) {
+                recorder.write_raw_cloud(&[ng[i]], MAT_BG, 1);
             }
 
+            // 各簇点云 + 包围盒（12 色聚类色板循环）
+            for (ci, cluster) in clusters.iter().enumerate() {
+                if cluster.is_empty() { continue; }
+                let color = CLUSTER_COLORS[ci % CLUSTER_COLORS.len()];
+                let step = (cluster.len() / 1000).max(1);
+                for i in (0..cluster.len()).step_by(step) {
+                    recorder.write_point_cloud(&[cluster[i]], color, 1);
+                }
+                let mut box3d = Box3D::empty_box();
+                box3d.cloud2box(cluster);
+                let tag = format!("{}pts h={:.1}m", cluster.len(), box3d.height);
+                recorder.write_boxes(&[(box3d, tag)], MAT_BOX);
+            }
+
+            // 汇总信息（半透明框，与簇包围盒一致）
             let n = self.frame_count.max(1) as f64;
             let summary_tag = format!("{} | {:.1}簇 {:.1}人 {:.0}ms/帧",
                 self.name,
@@ -76,7 +98,7 @@ impl BenchStrategy for ClusterBenchCase {
                 self.total_humans as f64 / n,
                 self.total_ms / n);
             let dummy = Box3D::empty_box();
-            recorder.write_boxes(&[(dummy, summary_tag)], "glass");
+            recorder.write_boxes(&[(dummy, summary_tag)], MAT_BOX);
 
             recorder.end_frame();
         }
@@ -116,7 +138,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )));
 
     // 策略 2: 固定 eps DBSCAN
-    for &voxel in &[0.05f32, 0.10, 0.20] {
+    // 剔除 v0.05：体素过小导致邻域查询慢，实测 118-275ms/帧（v0.10/v0.20 均 <100ms）
+    for &voxel in &[0.10f32, 0.20] {
         for &eps in &[0.15f32, 0.25, 0.35, 0.50, 0.80] {
             for &min_pts in &[3usize, 5, 8, 15] {
                 let name = format!("eps{:.2}_m{}_v{:.2}", eps, min_pts, voxel);
@@ -129,7 +152,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // 策略 3: 自适应 eps DBSCAN
-    for &voxel in &[0.05f32, 0.10, 0.20] {
+    // 剔除 v0.05：同上，155-330ms/帧
+    for &voxel in &[0.10f32, 0.20] {
         for &eps_0 in &[0.05f32, 0.10, 0.15] {
             for &slope in &[0.02f32, 0.05, 0.10] {
                 for &min_pts in &[3usize, 5, 8, 15] {
@@ -143,25 +167,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // 策略 4: 无下采样
-    for &(eps_0, slope, min_pts, label) in &[
-        (0.35f32, 0.0f32, 5usize, "无体素_eps0.35_m5"),
-        (0.05, 0.05, 5, "无体素_adapt_e0.05_s0.05_m5"),
-        (0.10, 0.05, 3, "无体素_adapt_e0.10_s0.05_m3"),
-    ] {
-        strategies.push(Box::new(ClusterBenchCase::new(
-            label,
-            Box::new(DbscanStrategy::with_params(eps_0, slope, min_pts, 50, 10, 0.0)),
-        )));
-    }
+    // 策略 4: 无下采样 — 剔除
+    // 原因：跳过体素化直接对全量点云做 DBSCAN，点数多必然超时
 
     // 策略 5: Range Image
+    // 剔除 0.5° 分辨率：网格过密（720×360 像素），实测超时
     for &(az, el, thresh, min_pts, label) in &[
-        (0.5f32, 0.5f32, 0.5f32, 3usize, "ri_0.5deg_t0.5_m3"),
         (1.0, 1.0, 0.5, 3, "ri_1.0deg_t0.5_m3"),
         (1.0, 1.0, 1.0, 3, "ri_1.0deg_t1.0_m3"),
         (2.0, 2.0, 1.0, 3, "ri_2.0deg_t1.0_m3"),
-        (0.5, 0.5, 0.3, 5, "ri_0.5deg_t0.3_m5"),
     ] {
         strategies.push(Box::new(ClusterBenchCase::new(
             label,
@@ -173,7 +187,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 全量帧执行，输出到 output/cluster_bench
     let harness = BenchHarness::new("./data/test", 64, "output/cluster_bench");
-    harness.run(&mut strategies).await?;
+    let mut preprocessor = GroundPreprocessor::default();
+    harness.run(&mut preprocessor, &mut strategies).await?;
 
     // 按平均耗时排序，标注超 100ms 的策略
     println!("\n=== 按平均耗时排序 ===");
