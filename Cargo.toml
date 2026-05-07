@@ -24,6 +24,7 @@ approx = "0.5"
 # ROS1 桥接
 rosrust = { version = "0.9", optional = true }
 byteorder = "1.5"
+serde_json = "1.0.149"
 
 [features]
 ros1 = ["rosrust"]

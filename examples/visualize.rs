@@ -66,14 +66,14 @@ async fn write_frame(writer: &mut RdraWriter, frame: usize, total: usize) -> Res
 
     let swapl = global_swapl();
 
-    // ── 点云（白色） ──
+    // ── 点云（暖白，语义层） ──
     let cloud_stream = swapl.clouds_out.lock().await;
     if let Some(cloud) = cloud_stream.peek_latest() {
         println!("  帧 {}/{} | 点云: {} points", frame + 1, total, cloud.len());
         let step = (cloud.len() / 5000).max(1);
         for (i, p) in cloud.iter().enumerate() {
             if i % step == 0 {
-                writer.spawn(spawn_point(*p, "white").id(1_000_000 + i as u64 * 4));
+                writer.spawn(spawn_point(*p, "point_cloud").id(1_000_000 + i as u64 * 4));
             }
         }
     } else {
@@ -107,24 +107,10 @@ fn write_targets(writer: &mut RdraWriter, targets: &[Target]) {
             .map(|v| (v.x, v.y, v.z))
             .collect();
 
-        let is_ground = target.class_type == "ground";
-        let is_person = target.class_type == "person";
-        let material = if is_ground {
-            "blue"
-        } else if is_person {
-            "cyan"
-        } else {
-            match target.classification.as_str() {
-                "dynamic" => "red",
-                "static" => "green",
-                "movable" => "yellow",
-                _ => "white",
-            }
-        };
-
-        let tag = format!("{} | {} | {:.1}m/s", target.id, target.classification, target.speed);
+        let tag = format!("{} | {} | {} | {:.1}m/s",
+            target.id, target.class_type, target.classification, target.speed);
         writer.spawn(
-            spawn_cube(verts, material)
+            spawn_cube(verts, "glass")
                 .id(2_000_000 + i as u64 * 4)
                 .tag(tag)
         );
@@ -143,7 +129,7 @@ fn write_speed_arrows(writer: &mut RdraWriter, targets: &[Target]) {
             writer.spawn(spawn_line(
                 [center.x, center.y, center.z],
                 [center.x + dx, center.y + dy, center.z + dz],
-                "yellow",
+                "trajectory",
             ));
         }
     }

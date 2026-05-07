@@ -30,21 +30,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut writer = RdraWriter::new();
 
-    // ── 点云（青色） ──
+    // ── 点云（暖白，语义层） ──
     for (i, p) in sampled.iter().enumerate() {
-        writer.spawn(spawn_point(*p, "cyan").id(1_000_000 + i as u64 * 4));
+        writer.spawn(spawn_point(*p, "point_cloud").id(1_000_000 + i as u64 * 4));
     }
 
     // ── 坐标轴（从原点沿各方向延伸 15m） ──
-    // 红色线 = X轴，绿色线 = Y轴，蓝色线 = Z轴
-    writer.spawn(spawn_line([0.0, 0.0, 0.0], [15.0, 0.0, 0.0], "red").id(1_500_000));
-    writer.spawn(spawn_line([0.0, 0.0, 0.0], [0.0, 15.0, 0.0], "green").id(1_500_001));
-    writer.spawn(spawn_line([0.0, 0.0, 0.0], [0.0, 0.0, 15.0], "blue").id(1_500_002));
+    writer.spawn(spawn_line([0.0, 0.0, 0.0], [15.0, 0.0, 0.0], "axis_x").id(1_500_000));
+    writer.spawn(spawn_line([0.0, 0.0, 0.0], [0.0, 15.0, 0.0], "axis_y").id(1_500_001));
+    writer.spawn(spawn_line([0.0, 0.0, 0.0], [0.0, 0.0, 15.0], "axis_z").id(1_500_002));
 
     // ── 轴标签 ──
-    writer.spawn(spawn_point([16.0, 0.0, 0.0], "red").id(1_600_000).tag("X"));
-    writer.spawn(spawn_point([0.0, 16.0, 0.0], "green").id(1_600_001).tag("Y"));
-    writer.spawn(spawn_point([0.0, 0.0, 16.0], "blue").id(1_600_002).tag("Z"));
+    writer.spawn(spawn_point([16.0, 0.0, 0.0], "axis_x").id(1_600_000).tag("X"));
+    writer.spawn(spawn_point([0.0, 16.0, 0.0], "axis_y").id(1_600_001).tag("Y"));
+    writer.spawn(spawn_point([0.0, 0.0, 16.0], "axis_z").id(1_600_002).tag("Z"));
 
     writer.end_frame();
 

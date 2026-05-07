@@ -65,6 +65,8 @@ pub struct ClasterConfig {
 pub struct CameraConfig {
     pub intrinsic: [[f32; 3]; 3],
     pub extrinsic: [[f32; 4]; 4],
+    /// OpenCV 畸变系数 [k1, k2, p1, p2, k3]，None 表示无畸变
+    pub dist_coeffs: Option<[f32; 5]>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -178,6 +180,11 @@ impl Config {
 
         update_nested_field!(camera, intrinsic);
         update_nested_field!(camera, extrinsic);
+        if let Some(ref camera) = partial_config.camera {
+            if let Some(value) = camera.dist_coeffs {
+                self.camera.dist_coeffs = Some(value);
+            }
+        }
 
         // tracker 配置更新
         if let Some(ref tracker) = partial_config.tracker {
@@ -250,6 +257,7 @@ struct PartialConfig {
 struct PartialCameraConfig {
     pub intrinsic: Option<[[f32; 3]; 3]>,
     pub extrinsic: Option<[[f32; 4]; 4]>,
+    pub dist_coeffs: Option<[f32; 5]>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

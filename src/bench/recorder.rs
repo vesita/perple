@@ -8,6 +8,8 @@ use crate::utils::boxes::Box3D;
 pub struct BenchRecorder {
     writer: RdraWriter,
     base_id: u64,
+    point_counter: u64,
+    write_raw: bool,
 }
 
 impl BenchRecorder {
@@ -15,21 +17,43 @@ impl BenchRecorder {
         BenchRecorder {
             writer: RdraWriter::new(),
             base_id: 0,
+            point_counter: 0,
+            write_raw: false,
         }
+    }
+
+    /// 设置是否写入原始点云背景。
+    ///
+    /// 开启后调用 `write_raw_cloud` 会写入原始点云作为背景参照层。
+    /// 关闭时 `write_raw_cloud` 为 no-op，避免与分类点云重复。
+    pub fn set_write_raw(&mut self, enable: bool) {
+        self.write_raw = enable;
     }
 
     /// 开始新帧，清理上一帧的实体。
     pub fn begin_frame(&mut self, frame_idx: usize) {
         self.writer.destroy_all();
         self.base_id = frame_idx as u64 * 1_000_000;
+        self.point_counter = 0;
     }
 
-    /// 写入点云（白色），自动下采样到 max_points。
+    /// 写入原始点云背景（受 `write_raw` 开关控制）。
+    ///
+    /// 开启时写入原始点云作为背景参照层，关闭时为 no-op。
+    /// 用于避免与后续分类点云（地面/非地面/墙面等）重复写入。
+    pub fn write_raw_cloud(&mut self, points: &[[f32; 3]], material: &str, max_points: usize) {
+        if !self.write_raw { return; }
+        self.write_point_cloud(points, material, max_points);
+    }
+
+    /// 写入点云，自动下采样到 max_points。
     pub fn write_point_cloud(&mut self, points: &[[f32; 3]], material: &str, max_points: usize) {
         let step = (points.len() / max_points.max(1)).max(1);
         for (i, p) in points.iter().enumerate() {
             if i % step == 0 {
-                self.writer.spawn(spawn_point(*p, material).id(self.base_id + i as u64 * 4));
+                let id = self.base_id + self.point_counter * 4;
+                self.writer.spawn(spawn_point(*p, material).id(id));
+                self.point_counter += 1;
             }
         }
     }

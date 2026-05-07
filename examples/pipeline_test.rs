@@ -26,18 +26,11 @@ fn write_targets(writer: &mut RdraWriter, targets: &[Target]) {
         let verts: Vec<(f32, f32, f32)> = target.the_box.vertices().iter()
             .map(|v| (v.x, v.y, v.z))
             .collect();
-        let color = match target.classification.as_str() {
-            "moving" => "red",
-            "static" => "green",
-            "movable" => "yellow",
-            "floating" => "blue",
-            _ => "white",
-        };
         let tag = format!("{} | {} | {:.1}m/s", target.id, target.classification, target.speed);
         writer.spawn(
             ShapeBuilder::cube(verts)
                 .id(2_000_000 + i as u64 * 4)
-                .material(color)
+                .material("glass")
                 .tag(tag)
         );
     }
@@ -52,7 +45,7 @@ fn write_cldbuds(writer: &mut RdraWriter, buds: &[CldBud]) {
         writer.spawn(
             ShapeBuilder::cube(verts)
                 .id(1_000_000 + i as u64 * 4)
-                .material("cyan")
+                .material("point_cloud")
                 .tag(tag)
         );
     }
