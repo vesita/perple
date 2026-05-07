@@ -3,15 +3,11 @@ use std::time::Instant;
 
 use perple::bench::BenchRecorder;
 use perple::cloud::ground::create_ground_strategy;
+use perple::cloud::wall::{WallPickStrategy, TopDownCluster};
 use perple::optional::data_loader::DataLoader;
 use perple::swapl::global_swapl;
 use perple::utils::boxes::Box3D;
-use perple::utils::random::select_some;
 
-const WALL_DISTANCE: f32 = 0.15;
-const WALL_ITERS: usize = 200;
-const NORMAL_THRESH: f32 = 0.3;
-const MAX_WALLS: usize = 5;
 const CLUSTER_EPS: f32 = 0.3;
 const CLUSTER_MIN: usize = 5;
 const FRAME_LIMIT: usize = 10;
@@ -20,93 +16,27 @@ const FRAME_LIMIT: usize = 10;
 const MAT_RAW: &str = "point_cloud";      // 暖白
 const MAT_GROUND: &str = "ground";         // 暗橄榄绿
 const MAT_WALL: &str = "red";              // 暖色警示
-const MAT_REMAIN: &str = "yellow";         // 暖色，与红/绿/青均区分
-const MAT_BOX: &str = "disabled";          // 暗灰半透明包围盒，区分内外点
+const MAT_REMAIN: &str = "yellow";         // 黄色剩余点
+const MAT_BOX: &str = "disabled";          // 暗灰半透明包围盒
 
-// ─── 墙体 RANSAC ───
+// ─── 墙面点分配 ───
 
-fn extract_walls(
-    points: &mut [[f32; 3]],
-    distance: f32,
-    iterations: usize,
-    normal_thresh: f32,
-    max_walls: usize,
-) -> (usize, Vec<[f32; 4]>, Vec<usize>) {
-    let mut total_wall = 0usize;
-    let mut walls = Vec::new();
-    let mut wall_counts = Vec::new();
-
-    for _ in 0..max_walls {
-        let remaining = &mut points[total_wall..];
-        if remaining.len() < 10 { break; }
-
-        let (n_inliers, plane) = ransac_vertical_plane(remaining, distance, iterations, normal_thresh);
-        if n_inliers < 10 { break; }
-
-        walls.push(plane);
-        wall_counts.push(n_inliers);
-        total_wall += n_inliers;
-    }
-
-    (total_wall, walls, wall_counts)
-}
-
-fn ransac_vertical_plane(
-    points: &mut [[f32; 3]],
-    distance: f32,
-    iterations: usize,
-    normal_thresh: f32,
-) -> (usize, [f32; 4]) {
-    let n = points.len();
-    if n < 3 { return (0, [0.0, 0.0, 1.0, 0.0]); }
-
-    let mut best_count = 0usize;
-    let mut best_plane = [0.0f32; 4];
-
-    for _ in 0..iterations {
-        let idxs = select_some(0, n, 3);
-        let p1 = points[idxs[0]];
-        let p2 = points[idxs[1]];
-        let p3 = points[idxs[2]];
-
-        let v1 = [p2[0]-p1[0], p2[1]-p1[1], p2[2]-p1[2]];
-        let v2 = [p3[0]-p1[0], p3[1]-p1[1], p3[2]-p1[2]];
-
-        let nx = v1[1]*v2[2] - v1[2]*v2[1];
-        let ny = v1[2]*v2[0] - v1[0]*v2[2];
-        let nz = v1[0]*v2[1] - v1[1]*v2[0];
-        let len = (nx*nx + ny*ny + nz*nz).sqrt();
-        if len < 1e-6 { continue; }
-        let (nx, ny, nz) = (nx/len, ny/len, nz/len);
-
-        // 竖直性约束：法线接近水平（|nz| 小）→ 竖直平面 → 墙
-        if nz.abs() > normal_thresh { continue; }
-
-        let d = -(nx*p1[0] + ny*p1[1] + nz*p1[2]);
-
-        let count = points.iter().filter(|p| {
-            (nx*p[0] + ny*p[1] + nz*p[2] + d).abs() < distance
-        }).count();
-
-        if count > best_count {
-            best_count = count;
-            best_plane = [nx, ny, nz, d];
+fn assign_wall_counts(wall_points: &[[f32; 3]], planes: &[[f32; 4]]) -> Vec<usize> {
+    if planes.is_empty() { return Vec::new(); }
+    let mut counts = vec![0usize; planes.len()];
+    for p in wall_points {
+        let mut best = 0;
+        let mut best_dist = f32::MAX;
+        for (i, plane) in planes.iter().enumerate() {
+            let dist = (plane[0]*p[0] + plane[1]*p[1] + plane[2]*p[2] + plane[3]).abs();
+            if dist < best_dist {
+                best_dist = dist;
+                best = i;
+            }
         }
+        counts[best] += 1;
     }
-
-    if best_count == 0 { return (0, [0.0, 0.0, 1.0, 0.0]); }
-
-    // Partition: 内点移到前面
-    let [nx, ny, nz, d] = best_plane;
-    let mut write = 0usize;
-    for read in 0..n {
-        if (nx*points[read][0] + ny*points[read][1] + nz*points[read][2] + d).abs() < distance {
-            points.swap(read, write);
-            write += 1;
-        }
-    }
-
-    (write, best_plane)
+    counts
 }
 
 // ─── 欧式聚类 ───
@@ -154,13 +84,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .filter_level(log::LevelFilter::Info)
         .init();
 
-    println!("=== 墙体提取测试：法线 → RANSAC 墙面 → 欧式聚类 ===\n");
+    println!("=== 墙体提取测试：RANSAC 墙面 → 欧式聚类 ===\n");
 
     let mut data_loader = DataLoader::new("./data/test".into());
     data_loader.set_frame_limit(FRAME_LIMIT);
     data_loader.load().await?;
 
     let mut recorder = BenchRecorder::new();
+    let mut wall_strategy = TopDownCluster::new();
     let mut frame_idx = 0usize;
 
     while data_loader.load_next().await.unwrap_or(false) {
@@ -181,13 +112,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
 
-        // 2. 墙体 RANSAC
+        // 2. 墙体提取（使用 TopDownCluster 策略）
         let mut wall_points: Vec<[f32; 3]> = non_ground.to_vec();
 
         let t1 = Instant::now();
-        let (n_walls, wall_planes, wall_counts) = extract_walls(
-            &mut wall_points, WALL_DISTANCE, WALL_ITERS, NORMAL_THRESH, MAX_WALLS,
-        );
+        let (n_walls, wall_planes) = wall_strategy.pick(&mut wall_points);
         let wall_ms = t1.elapsed().as_secs_f64() * 1000.0;
 
         // 3. 欧式聚类（剔除墙面后的剩余点）
@@ -220,12 +149,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         for i in (0..n_walls).step_by(wall_step) {
             recorder.write_point_cloud(&[wall_points[i]], MAT_WALL, 1);
         }
-        // 墙面平面方程 tag（半透明包围盒）
+        // 墙面 OBB 包围盒（按平面方程分配点到各墙面）
+        let wall_counts = assign_wall_counts(&wall_points[..n_walls], &wall_planes);
         let mut wall_offset = 0usize;
         for (wi, (plane, &count)) in wall_planes.iter().zip(wall_counts.iter()).enumerate() {
-            let tag = format!("wall{} n=({:.2},{:.2},{:.2}) d={:.2} {}pts",
-                wi, plane[0], plane[1], plane[2], plane[3], count);
-            let wall_box = Box3D::from_cloud_aabb(&wall_points[wall_offset..wall_offset + count], 0.05);
+            if count == 0 { continue; }
+            let wall_pts: Vec<[f32; 3]> = wall_points[wall_offset..wall_offset + count].to_vec();
+            let wall_box = Box3D::from_cloud_aabb(&wall_pts, 0.05);
+            let tag = format!("wall{} n=({:.2},{:.2},{:.2}) d={:.2} {:.1}x{:.1}x{:.1} {}pts",
+                wi, plane[0], plane[1], plane[2], plane[3],
+                wall_box.length, wall_box.width, wall_box.height, count);
             recorder.write_boxes(&[(wall_box, tag)], MAT_BOX);
             wall_offset += count;
         }

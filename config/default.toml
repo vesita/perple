@@ -49,8 +49,6 @@ ceiling_height = 2.5
 # 密度感知质心加权：用 1/r^α 补偿 LiDAR 近密远疏导致的质心偏向传感器偏差
 # 0 = 禁用（算术平均），1 = 1/r 补偿，2 = 1/r² 补偿
 density_weight_alpha = 2.0
-# 包围盒类型：true = PCA 定向包围盒（OBB），false = 轴对齐包围盒（AABB）
-use_pca_obb = false
 
 # Range image 策略参数（仅 strategy="range_image" 时有效）
 azimuth_resolution = 2.0   # 方位角分辨率（度）

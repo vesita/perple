@@ -105,7 +105,12 @@ impl BenchHarness {
             println!("  [{}] {} → {}", i + 1, strategy.name(), path);
         }
 
-        println!("\n共 {} 个 .rdra 文件保存到 {}", n_strategies, self.output_dir);
+        // 导出 JSON 统计
+        let stats: Vec<_> = strategies.iter().map(|s| s.stats()).collect();
+        let json_path = format!("{}/stats.json", self.output_dir);
+        let json = serde_json::to_string_pretty(&stats)?;
+        std::fs::write(&json_path, json)?;
+        println!("\n统计已导出到 {}", json_path);
         Ok(())
     }
 }

@@ -12,6 +12,7 @@ pub use peak_scan::PeakScan;
 pub use gpf::GpfGround;
 
 use super::CldBud;
+use crate::config::fixif;
 
 /// 地面提取策略 trait
 ///
@@ -22,7 +23,14 @@ pub trait GroundPickStrategy: Send {
     fn strategy_name(&self) -> &'static str { "unknown" }
 }
 
-/// 创建默认地面提取策略（HistogramExpand, expand=0.20）
+/// 创建地面提取策略（从配置读取 ground_strategy 分发）
 pub fn create_ground_strategy() -> Box<dyn GroundPickStrategy> {
-    Box::new(HistogramExpand::new())
+    let cfg = fixif();
+    match cfg.ground_strategy.as_str() {
+        "peak_scan" => Box::new(PeakScan::new()),
+        "histoseed" => Box::new(HistoseedPlane::new()),
+        "ransac" => Box::new(RansacGround::new()),
+        "gpf" => Box::new(GpfGround::new()),
+        _ => Box::new(HistogramExpand::new()),
+    }
 }

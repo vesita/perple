@@ -55,7 +55,6 @@ pub struct ClasterConfig {
     pub downsample_method: String,
     pub gaussian_downsample_rate: f32,
     pub density_weight_alpha: f32,
-    pub use_pca_obb: bool,
     pub max_range: f32,
     pub ceiling_filter: bool,
     pub ceiling_height: f32,
@@ -173,7 +172,6 @@ impl Config {
         update_claster_field!(downsample_method);
         update_claster_field!(gaussian_downsample_rate);
         update_claster_field!(density_weight_alpha);
-        update_claster_field!(use_pca_obb);
         update_claster_field!(max_range);
         update_claster_field!(ceiling_filter);
         update_claster_field!(ceiling_height);
@@ -293,7 +291,6 @@ struct PartialClasterConfig {
     pub downsample_method: Option<String>,
     pub gaussian_downsample_rate: Option<f32>,
     pub density_weight_alpha: Option<f32>,
-    pub use_pca_obb: Option<bool>,
     pub max_range: Option<f32>,
     pub ceiling_filter: Option<bool>,
     pub ceiling_height: Option<f32>,

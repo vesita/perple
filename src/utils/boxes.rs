@@ -1,4 +1,4 @@
-use nalgebra::{Matrix3, Matrix4, Point3, Vector3};
+use nalgebra::{Matrix4, Point3, Vector3};
 
 /// 2D边界框结构
 ///
@@ -228,82 +228,6 @@ impl Box3D {
     /// 从点云创建包围盒（旧接口，委托给 `from_cloud_aabb`）
     pub fn cloud2box(&mut self, cloud3d: &Vec<[f32; 3]>) {
         *self = Self::from_cloud_aabb(cloud3d, 0.0);
-    }
-
-    /// 通过 PCA 从点云拟合 OBB（定向包围盒）
-    ///
-    /// 计算协方差矩阵 → 特征值分解 → 主方向 → 点云旋转到主方向坐标系
-    /// → AABB → 反旋转得到 OBB。相比 AABB，OBB 能更好贴合斜向物体，
-    /// 减少框体体积并提高中心点精度。
-    pub fn from_points_pca(points: &[[f32; 3]]) -> Self {
-        if points.is_empty() {
-            return Self::empty_box();
-        }
-        let n = points.len() as f32;
-
-        // 1. 均值（质心）
-        let cx = points.iter().map(|p| p[0]).sum::<f32>() / n;
-        let cy = points.iter().map(|p| p[1]).sum::<f32>() / n;
-        let cz = points.iter().map(|p| p[2]).sum::<f32>() / n;
-
-        // 2. 协方差矩阵（3x3）
-        let mut cov = Matrix3::zeros();
-        for p in points {
-            let dx = p[0] - cx;
-            let dy = p[1] - cy;
-            let dz = p[2] - cz;
-            cov[(0, 0)] += dx * dx;
-            cov[(0, 1)] += dx * dy;
-            cov[(0, 2)] += dx * dz;
-            cov[(1, 0)] += dy * dx;
-            cov[(1, 1)] += dy * dy;
-            cov[(1, 2)] += dy * dz;
-            cov[(2, 0)] += dz * dx;
-            cov[(2, 1)] += dz * dy;
-            cov[(2, 2)] += dz * dz;
-        }
-        cov /= n;
-
-        // 3. 对称特征值分解 → 主方向
-        let eigen = cov.symmetric_eigen();
-        let mut rot = Matrix3::identity();
-        rot.set_column(0, &eigen.eigenvectors.column(0).normalize());
-        rot.set_column(1, &eigen.eigenvectors.column(1).normalize());
-        // 叉积保证右手系
-        let c0 = rot.column(0).into_owned();
-        let c1 = rot.column(1).into_owned();
-        rot.set_column(2, &c0.cross(&c1));
-
-        // 4. 将点旋转到主方向坐标系，计算局部 AABB
-        let mut min_b = Vector3::new(f32::MAX, f32::MAX, f32::MAX);
-        let mut max_b = Vector3::new(f32::MIN, f32::MIN, f32::MIN);
-        for p in points {
-            let v = Vector3::new(p[0] - cx, p[1] - cy, p[2] - cz);
-            let local = rot.transpose() * v;
-            min_b.x = min_b.x.min(local.x);
-            min_b.y = min_b.y.min(local.y);
-            min_b.z = min_b.z.min(local.z);
-            max_b.x = max_b.x.max(local.x);
-            max_b.y = max_b.y.max(local.y);
-            max_b.z = max_b.z.max(local.z);
-        }
-
-        // 5. 局部 AABB 中心 → 世界坐标
-        let local_center = (min_b + max_b) / 2.0;
-        let world_center = rot * local_center + Vector3::new(cx, cy, cz);
-        let length = max_b.x - min_b.x;
-        let width = max_b.y - min_b.y;
-        let height = max_b.z - min_b.z;
-
-        // 6. 构建 pose：旋转 | 平移
-        let pose = Matrix4::new(
-            rot[(0, 0)], rot[(0, 1)], rot[(0, 2)], world_center.x,
-            rot[(1, 0)], rot[(1, 1)], rot[(1, 2)], world_center.y,
-            rot[(2, 0)], rot[(2, 1)], rot[(2, 2)], world_center.z,
-            0.0,         0.0,         0.0,         1.0,
-        );
-
-        Self::new(pose, length, width, height)
     }
 
     /// 从2D点云创建包围盒（俯视视角）

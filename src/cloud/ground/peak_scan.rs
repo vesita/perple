@@ -28,7 +28,7 @@ impl GroundPickStrategy for PeakScan {
         let cfg = fixif();
         let upside_down = cfg.upside_down;
         let expand = self.expand.unwrap_or(cfg.ground_expand);
-        let threshold = self.threshold.unwrap_or(0.10);
+        let threshold = self.threshold.unwrap_or(0.15);
         let num_bins = 128;
 
         if upside_down { for p in cloud.iter_mut() { p[2] = -p[2]; } }

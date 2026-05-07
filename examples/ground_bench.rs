@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use perple::bench::{BenchStrategy, BenchHarness, BenchRecorder, FrameData, PassthroughPreprocessor};
+use perple::bench::{BenchStrategy, BenchStats, BenchHarness, BenchRecorder, FrameData, PassthroughPreprocessor};
 use perple::cloud::ground::*;
 use perple::utils::boxes::Box3D;
 
@@ -15,6 +15,7 @@ struct GroundBenchCase {
     strategy: Box<dyn GroundPickStrategy>,
     total_us: u128,
     frame_count: usize,
+    frame_times: Vec<f64>,
     last_n_ground: usize,
     last_cloud: Vec<[f32; 3]>,
 }
@@ -26,6 +27,7 @@ impl GroundBenchCase {
             strategy,
             total_us: 0,
             frame_count: 0,
+            frame_times: Vec::new(),
             last_n_ground: 0,
             last_cloud: Vec::new(),
         }
@@ -42,6 +44,7 @@ impl BenchStrategy for GroundBenchCase {
         let elapsed = start.elapsed();
         self.total_us += elapsed.as_micros();
         self.frame_count += 1;
+        self.frame_times.push(elapsed.as_secs_f64() * 1000.0);
         self.last_n_ground = n_ground;
         self.last_cloud = cloud;
         elapsed
@@ -101,6 +104,15 @@ impl BenchStrategy for GroundBenchCase {
         let status = if avg_ms > 100.0 { " [OVER 100ms]" } else { "" };
         println!("  {:<28} | 平均 {:>7.0}μs ({:>5.1}ms) | {} 帧{}",
             self.name, avg_us, avg_ms, self.frame_count, status);
+    }
+
+    fn stats(&self) -> BenchStats {
+        BenchStats {
+            name: self.name.clone(),
+            frame_count: self.frame_count,
+            total_ms: self.total_us as f64 / 1000.0,
+            frame_times: self.frame_times.clone(),
+        }
     }
 }
 

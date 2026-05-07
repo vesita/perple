@@ -1,6 +1,10 @@
 use std::time::Duration;
+use serde::Serialize;
 use super::recorder::BenchRecorder;
 use crate::cloud::ground::{GroundPickStrategy, create_ground_strategy};
+use crate::cloud::wall::WallPickStrategy;
+use crate::cloud::ground::PeakScan;
+use crate::cloud::wall::TopDownCluster;
 
 // ── 预处理结果 ──────────────────────────────────────────
 
@@ -14,6 +18,11 @@ pub enum Preprocessed {
     /// 地面提取完成，非地面点可用。
     Ground {
         non_ground: Vec<[f32; 3]>,
+    },
+    /// 地面+墙面提取完成，非地面和非墙面点均可用。
+    Wall {
+        non_ground: Vec<[f32; 3]>,
+        non_wall: Vec<[f32; 3]>,
     },
 }
 
@@ -61,6 +70,37 @@ impl Preprocessor for GroundPreprocessor {
     }
 }
 
+/// 地面+墙面提取预处理器，wall_bench 使用。
+pub struct WallPreprocessor {
+    ground: Box<dyn GroundPickStrategy>,
+    wall: Box<dyn WallPickStrategy>,
+}
+
+impl WallPreprocessor {
+    pub fn new(ground: Box<dyn GroundPickStrategy>, wall: Box<dyn WallPickStrategy>) -> Self {
+        Self { ground, wall }
+    }
+
+    pub fn default() -> Self {
+        Self::new(Box::new(PeakScan::new()), Box::new(TopDownCluster::new()))
+    }
+}
+
+impl Preprocessor for WallPreprocessor {
+    fn name(&self) -> &str { "ground+wall" }
+    fn preprocess(&mut self, cloud: &[[f32; 3]]) -> Preprocessed {
+        let mut buf = cloud.to_vec();
+        let (n_ground, _, _) = self.ground.pick(&mut buf);
+        let non_ground = buf[n_ground..].to_vec();
+
+        let mut wall_buf = non_ground.clone();
+        let (n_wall, _) = self.wall.pick(&mut wall_buf);
+        let non_wall = wall_buf[n_wall..].to_vec();
+
+        Preprocessed::Wall { non_ground, non_wall }
+    }
+}
+
 // ── 帧数据 ──────────────────────────────────────────────
 
 /// 单帧数据，由 BenchHarness 在预处理后构建。
@@ -77,13 +117,36 @@ impl<'a> FrameData<'a> {
     /// 获取非地面点。
     ///
     /// - `Preprocessed::Ground` 时返回预处理产出的非地面点
+    /// - `Preprocessed::Wall` 时返回非地面点
     /// - `Preprocessed::Passthrough` 时返回原始点云
     pub fn non_ground(&self) -> &'a [[f32; 3]] {
         match self.preprocessed {
-            Preprocessed::Ground { non_ground } => non_ground,
+            Preprocessed::Ground { non_ground } | Preprocessed::Wall { non_ground, .. } => non_ground,
             Preprocessed::Passthrough => self.cloud,
         }
     }
+
+    /// 获取非墙面点（去除地面+墙面后的剩余点）。
+    ///
+    /// - `Preprocessed::Wall` 时返回非墙面点
+    /// - 其他情况 fallback 到 `non_ground()`
+    pub fn non_wall(&self) -> &'a [[f32; 3]] {
+        match self.preprocessed {
+            Preprocessed::Wall { non_wall, .. } => non_wall,
+            _ => self.non_ground(),
+        }
+    }
+}
+
+// ── 策略统计 ──────────────────────────────────────────────
+
+/// 策略运行统计，由 BenchHarness 收集后导出 JSON。
+#[derive(Serialize)]
+pub struct BenchStats {
+    pub name: String,
+    pub frame_count: usize,
+    pub total_ms: f64,
+    pub frame_times: Vec<f64>,
 }
 
 // ── 候选策略 trait ──────────────────────────────────────
@@ -104,4 +167,7 @@ pub trait BenchStrategy {
 
     /// 输出汇总统计表。
     fn summarize(&self);
+
+    /// 返回运行统计（用于 JSON 导出）。
+    fn stats(&self) -> BenchStats;
 }

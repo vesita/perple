@@ -44,15 +44,9 @@ impl Claster {
     }
 
     /// 从聚类索引同时计算 Box3D 和质心
-    fn cluster_box_and_centroid(&self, indices: &[usize], alpha: f32, use_pca: bool) -> (Box3D, [f32; 3]) {
+    fn cluster_box_and_centroid(&self, indices: &[usize], alpha: f32) -> (Box3D, [f32; 3]) {
         let pts: Vec<[f32; 3]> = indices.iter().map(|&idx| self.all_points[idx]).collect();
-        let box3d = if use_pca {
-            Box3D::from_points_pca(&pts)
-        } else {
-            let mut b = Box3D::empty_box();
-            b.cloud2box(&pts);
-            b
-        };
+        let box3d = Box3D::from_cloud_aabb(&pts, 0.0);
 
         let centroid = if alpha > 0.0 {
             // 密度感知加权：LiDAR 近密远疏，用 1/r^α 补偿质心被拉向传感器的系统偏差
@@ -89,13 +83,12 @@ impl Claster {
     pub fn to_cldbuds(&self) -> Vec<CldBud> {
         let cfg = crate::config::fixif().claster.clone();
         let alpha = cfg.density_weight_alpha;
-        let use_pca = cfg.use_pca_obb;
         self.objects
             .iter()
             .filter(|cluster| !cluster.is_empty())
             .enumerate()
             .filter_map(|(idx, cluster)| {
-                let (box3d, centroid) = self.cluster_box_and_centroid(cluster, alpha, use_pca);
+                let (box3d, centroid) = self.cluster_box_and_centroid(cluster, alpha);
                 let w = box3d.length.max(box3d.width);
                 let h = box3d.height;
                 if w <= 0.25 || h <= 0.5 {
