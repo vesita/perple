@@ -12,6 +12,8 @@ use crate::cloud::wall::{WallPickStrategy, XYRansacWall, XYGrid, cluster_obstacl
 /// 4. 对 12m 内的点下采样 + DBSCAN 精化聚类
 pub struct WallClusterStrategy {
     wall: Box<dyn WallPickStrategy>,
+    // 上游已提取墙体时跳过内部墙提
+    skip_wall: bool,
     // cluster_obstacles 参数
     cell_size: f32,
     min_pts: usize,
@@ -26,7 +28,8 @@ pub struct WallClusterStrategy {
 impl WallClusterStrategy {
     pub fn new() -> Self {
         Self {
-            wall: Box::new(XYRansacWall::with_params(0.05, 50, 30)),
+            wall: Box::new(XYRansacWall::with_params(0.05, 50, 30).with_seed(42)),
+            skip_wall: false,
             cell_size: 0.30,
             min_pts: 3,
             min_edge: 0.05,
@@ -47,6 +50,7 @@ impl WallClusterStrategy {
     ) -> Self {
         Self {
             wall,
+            skip_wall: false,
             cell_size,
             min_pts,
             min_edge: 0.05,
@@ -55,6 +59,12 @@ impl WallClusterStrategy {
             dbscan_min_pts,
             max_target_pts: 4000,
         }
+    }
+
+    /// 上游已提取墙体，跳过内部墙提直接做 box+DBSCAN。
+    pub fn with_pre_extracted_wall(mut self) -> Self {
+        self.skip_wall = true;
+        self
     }
 
     pub fn with_max_pts(mut self, n: usize) -> Self {
@@ -117,25 +127,30 @@ impl ClusteringStrategy for WallClusterStrategy {
         let n = non_ground.len();
         if n == 0 { return (Vec::new(), Vec::new()); }
 
-        // 1. 墙面提取
-        let mut wall_buf = non_ground.to_vec();
-        let (n_wall, _planes) = self.wall.pick(&mut wall_buf);
-        let remaining = &wall_buf[n_wall..];
+        // 1. 墙面提取（上游已提取时可跳过）
+        let owned: Vec<[f32; 3]> = if self.skip_wall {
+            non_ground.to_vec()
+        } else {
+            let mut wall_buf = non_ground.to_vec();
+            let (n_wall, _planes) = self.wall.pick(&mut wall_buf);
+            if n_wall >= n { return (non_ground.to_vec(), Vec::new()); }
+            wall_buf[n_wall..].to_vec()
+        };
 
-        if remaining.is_empty() {
+        if owned.is_empty() {
             return (non_ground.to_vec(), Vec::new());
         }
 
         // 2. 网格连通域聚类 → box + 点索引
-        let (boxes, box_indices) = cluster_obstacles_with_indices(
-            remaining, self.cell_size, self.min_pts, self.min_edge, self.max_range,
+        let (_boxes, box_indices) = cluster_obstacles_with_indices(
+            &owned, self.cell_size, self.min_pts, self.min_edge, self.max_range,
         );
 
         // 3. 收集 12m 内 box 对应的所有点
         let mut in_range_pts: Vec<[f32; 3]> = Vec::new();
-        for (indices, _box) in box_indices.iter().zip(boxes.iter()) {
+        for indices in &box_indices {
             for &idx in indices {
-                in_range_pts.push(remaining[idx]);
+                in_range_pts.push(owned[idx]);
             }
         }
 

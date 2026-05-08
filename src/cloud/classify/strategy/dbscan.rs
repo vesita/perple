@@ -42,6 +42,19 @@ impl DbscanStrategy {
         }
     }
 
+    /// 轻量构造器：跳过内部下采样，直接对输入做 DBSCAN。
+    ///
+    /// 适用于上游已做完墙体提取+LV-DOT过滤的管线场景。
+    pub fn new_light() -> Self {
+        Self { voxel_size: 0.0, downsample_method: "none".to_string(), ..Self::new() }
+    }
+
+    /// 跳过内部下采样（用于管线已预处理过的场景）
+    pub fn with_no_downsample(mut self) -> Self {
+        self.voxel_size = 0.0;
+        self
+    }
+
     /// 带参数的构造器，用于 benchmark 直接测试不同参数组合
     pub fn with_params(
         patience: f32,

@@ -23,7 +23,7 @@ has_ceiling = false        # 是否有天花板（配合 [claster].ceiling_filte
 # 点云聚类参数
 [claster]
 # 聚类策略: "dbscan"（固定eps）, "dbscan_adaptive"（eps随距离线性增长）, "range_image"
-strategy = "dbscan_adaptive"
+strategy = "wall_cluster"
 # 基础邻域半径 eps（米），自适应模式下为 eps 截距；eps(p) = merge_patience + eps_slope * range(p)
 merge_patience = 0.10
 # 体素下采样格子大小（米），0 表示不下采样

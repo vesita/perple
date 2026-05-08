@@ -1,10 +1,12 @@
 mod dbscan;
 mod range_image;
 mod wall_cluster;
+mod lvdot_cluster;
 
 pub use dbscan::DbscanStrategy;
 pub use range_image::RangeImageStrategy;
 pub use wall_cluster::WallClusterStrategy;
+pub use lvdot_cluster::LvdotClusterStrategy;
 
 use crate::config::fixif;
 
@@ -31,13 +33,21 @@ pub fn create_strategy() -> Box<dyn ClusteringStrategy> {
             log::info!("聚类策略: wall_cluster");
             Box::new(WallClusterStrategy::new())
         }
+        "lvdot" => {
+            log::info!("聚类策略: lvdot (体素{:.2}m 占用>={})", cfg.claster.voxel_size, 3);
+            Box::new(LvdotClusterStrategy::new())
+        }
+        "dbscan_light" => {
+            log::info!("聚类策略: dbscan_light (无内部下采样)");
+            Box::new(DbscanStrategy::new_light())
+        }
         "dbscan" | "dbscan_adaptive" => {
             log::info!("聚类策略: dbscan (eps_slope={})", cfg.claster.eps_slope);
             Box::new(DbscanStrategy::new())
         }
         _ => {
-            log::warn!("未知聚类策略 '{}'，使用默认 dbscan", cfg.claster.strategy);
-            Box::new(DbscanStrategy::new())
+            log::warn!("未知聚类策略 '{}'，使用默认 dbscan_light", cfg.claster.strategy);
+            Box::new(DbscanStrategy::new_light())
         }
     }
 }

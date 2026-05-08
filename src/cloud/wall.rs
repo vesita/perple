@@ -231,6 +231,48 @@ impl XYGrid {
         }
         (filtered, map)
     }
+
+    /// LV-DOT 风格体素占用下采样：占用过滤 + 下采样二合一。
+    ///
+    /// 将空间划分为 `voxel_size` 体素：
+    /// - 点数 < `min_occ` → 全部丢弃（稀疏噪点）
+    /// - 点数 ≥ `min_occ` → 输出质心（每格 1 点）
+    ///
+    /// 与 `voxel_occupancy_filter` 的区别：filter 保留密集格全部点，
+    /// 此函数每格只输出 1 个质心，适合作为 DBSCAN 前的最后一级压缩。
+    /// 返回 `(下采样点, 原始索引映射)`。
+    pub fn voxel_occupancy_downsample(points: &[[f32; 3]], voxel_size: f32, min_occ: usize) -> (Vec<[f32; 3]>, Vec<usize>) {
+        let n = points.len();
+        if n == 0 || min_occ <= 1 {
+            return (points.to_vec(), (0..n).collect());
+        }
+        let inv = 1.0 / voxel_size;
+        let mut voxels: std::collections::HashMap<(i32, i32, i32), (f64, f64, f64, usize)> = std::collections::HashMap::new();
+        for (_i, p) in points.iter().enumerate() {
+            let key = (
+                (p[0] * inv).floor() as i32,
+                (p[1] * inv).floor() as i32,
+                (p[2] * inv).floor() as i32,
+            );
+            let entry = voxels.entry(key).or_insert((0.0, 0.0, 0.0, 0));
+            entry.0 += p[0] as f64;
+            entry.1 += p[1] as f64;
+            entry.2 += p[2] as f64;
+            entry.3 += 1;
+        }
+        let mut result = Vec::with_capacity(voxels.len());
+        let mut map = Vec::with_capacity(voxels.len());
+        for (_key, (sx, sy, sz, cnt)) in voxels {
+            if cnt >= min_occ {
+                let nf = cnt as f64;
+                // 取质心作为代表点；用 _key 的最近原始点索引（近似）
+                result.push([(sx / nf) as f32, (sy / nf) as f32, (sz / nf) as f32]);
+                // map 是近似的：无单一原始点对应质心，用第一个点的 key hash 作为伪索引
+                map.push(0usize); // 后续不依赖此 map 做精确索引映射
+            }
+        }
+        (result, map)
+    }
 }
 
 /// 对非墙面点做网格连通域聚类，返回每个簇的 AABB。

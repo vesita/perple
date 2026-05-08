@@ -108,23 +108,26 @@ impl Classify {
             let _ = cf.write(filtered_pts.clone());
         }
 
-        // ─── 5. 天花板过滤 + 距离过滤 ─────────────────────────────────────
+        // ─── 5. 聚类输入 ────────────────────────────────────────────────────
         let config = crate::config::fixif();
-        let mut cluster_input = filtered_pts;
-
-        if config.claster.ceiling_filter && config.claster.ceiling_height > 0.0 {
-            let h = config.claster.ceiling_height;
-            let before = cluster_input.len();
-            cluster_input.retain(|p| p[2] <= h);
-            if before != cluster_input.len() {
-                println!("天花板过滤：{} → {} 点（≤ {:.1}m）", before, cluster_input.len(), h);
+        let cluster_input = match config.claster.strategy.as_str() {
+            "wall_cluster" | "lvdot" => {
+                // 全管线策略传入全部非地面点（策略内部处理墙体+过滤）
+                target[n_ground..].to_vec()
             }
-        }
-
-        if config.claster.max_range > 0.0 {
-            let max_d2 = config.claster.max_range * config.claster.max_range;
-            cluster_input.retain(|p| p[0] * p[0] + p[1] * p[1] + p[2] * p[2] <= max_d2);
-        }
+            _ => {
+                let mut pts = filtered_pts;
+                if config.claster.ceiling_filter && config.claster.ceiling_height > 0.0 {
+                    let h = config.claster.ceiling_height;
+                    pts.retain(|p| p[2] <= h);
+                }
+                if config.claster.max_range > 0.0 {
+                    let max_d2 = config.claster.max_range * config.claster.max_range;
+                    pts.retain(|p| p[0] * p[0] + p[1] * p[1] + p[2] * p[2] <= max_d2);
+                }
+                pts
+            }
+        };
 
         // ─── 6. 聚类 ──────────────────────────────────────────────────────
         let _ = self.claster.claster(&cluster_input);

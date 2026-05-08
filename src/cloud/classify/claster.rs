@@ -33,6 +33,11 @@ impl Claster {
         &self.objects
     }
 
+    /// 替换聚类策略（管线已预处理时使用）
+    pub fn set_strategy(&mut self, strategy: Box<dyn ClusteringStrategy>) {
+        self.strategy = strategy;
+    }
+
     /// 主入口：对一帧点云执行聚类
     pub fn claster(&mut self, lifra: &[[f32; 3]]) {
         println!("开始聚类，共 {} 个点", lifra.len());
