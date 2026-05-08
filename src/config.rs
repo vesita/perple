@@ -84,6 +84,14 @@ pub struct TrackerConfig {
     pub floating_to_static_frames: usize,
     pub moving_speed_threshold: f32,
     pub voting_consistency_frames: usize,
+    // ─── 帧间平滑参数 ────────────────────────────────────────────────────
+    pub use_centroid_smoothing: bool,
+    pub centroid_fc_min: f64,
+    pub centroid_beta: f64,
+    pub use_box_smoothing: bool,
+    pub box_smoothing_alpha: f32,
+    pub vel_smoothing_alpha: f32,
+    pub class_cooldown_frames: u32,
 }
 
 
@@ -207,6 +215,13 @@ impl Config {
             update_tracker!(floating_to_static_frames);
             update_tracker!(moving_speed_threshold);
             update_tracker!(voting_consistency_frames);
+            update_tracker!(use_centroid_smoothing);
+            update_tracker!(centroid_fc_min);
+            update_tracker!(centroid_beta);
+            update_tracker!(use_box_smoothing);
+            update_tracker!(box_smoothing_alpha);
+            update_tracker!(vel_smoothing_alpha);
+            update_tracker!(class_cooldown_frames);
         }
 
         Ok(())
@@ -274,6 +289,13 @@ struct PartialTrackerConfig {
     pub floating_to_static_frames: Option<usize>,
     pub moving_speed_threshold: Option<f32>,
     pub voting_consistency_frames: Option<usize>,
+    pub use_centroid_smoothing: Option<bool>,
+    pub centroid_fc_min: Option<f64>,
+    pub centroid_beta: Option<f64>,
+    pub use_box_smoothing: Option<bool>,
+    pub box_smoothing_alpha: Option<f32>,
+    pub vel_smoothing_alpha: Option<f32>,
+    pub class_cooldown_frames: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

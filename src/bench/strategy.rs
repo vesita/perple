@@ -4,7 +4,7 @@ use super::recorder::BenchRecorder;
 use crate::cloud::ground::{GroundPickStrategy, create_ground_strategy};
 use crate::cloud::wall::WallPickStrategy;
 use crate::cloud::ground::PeakScan;
-use crate::cloud::wall::TopDownCluster;
+use crate::cloud::wall::XYRansacWall;
 
 // ── 预处理结果 ──────────────────────────────────────────
 
@@ -82,7 +82,7 @@ impl WallPreprocessor {
     }
 
     pub fn default() -> Self {
-        Self::new(Box::new(PeakScan::new()), Box::new(TopDownCluster::new()))
+        Self::new(Box::new(PeakScan::new()), Box::new(XYRansacWall::with_params(0.05, 50, 30)))
     }
 }
 

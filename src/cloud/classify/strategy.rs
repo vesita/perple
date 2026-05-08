@@ -1,8 +1,10 @@
 mod dbscan;
 mod range_image;
+mod wall_cluster;
 
 pub use dbscan::DbscanStrategy;
 pub use range_image::RangeImageStrategy;
+pub use wall_cluster::WallClusterStrategy;
 
 use crate::config::fixif;
 
@@ -24,6 +26,10 @@ pub fn create_strategy() -> Box<dyn ClusteringStrategy> {
         "range_image" => {
             log::info!("聚类策略: range_image");
             Box::new(RangeImageStrategy::new())
+        }
+        "wall_cluster" => {
+            log::info!("聚类策略: wall_cluster");
+            Box::new(WallClusterStrategy::new())
         }
         "dbscan" | "dbscan_adaptive" => {
             log::info!("聚类策略: dbscan (eps_slope={})", cfg.claster.eps_slope);

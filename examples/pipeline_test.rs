@@ -1,6 +1,7 @@
 //! 全流程测试 example
 //!
 //! 运行完整的 Perple 检测跟踪管线，逐帧输出统计信息并保存为 .rdra 文件。
+//! 输出包含语义标签（ground / wall / person / obstacle）和运动标签（moving/static/movable/floating）。
 //!
 //! 用法：
 //!   cargo run --example pipeline_test
@@ -20,33 +21,57 @@ use perple::utils::rdra::FrameWriter;
 
 use log::info;
 
+const MAT_GROUND: &str = "ground";
+const MAT_WALL: &str = "wall";
+const MAT_PERSON: &str = "person";
+const MAT_OBSTACLE: &str = "disabled";
+
 // ─── .rdra 输出 ───────────────────────────────────────────────────────────
-fn write_targets(writer: &mut FrameWriter, targets: &[Target]) {
-    for target in targets.iter() {
-        let tag = format!("{} | {} | {:.1}m/s", target.id, target.classification, target.speed);
-        writer.write_box(&target.the_box, "disabled", &tag);
+fn write_targets(writer: &mut FrameWriter, buds: &[CldBud]) {
+    // 目标输出：用 class_name 作语义标签
+    for bud in buds.iter() {
+        let mat = match bud.class_name.as_str() {
+            "ground" => MAT_GROUND,
+            "wall" => MAT_WALL,
+            "person" => MAT_PERSON,
+            _ => MAT_OBSTACLE,
+        };
+        let tag = format!("{} | {:.2}", bud.class_name, bud.confidence);
+        writer.write_box(&bud.the_box, mat, &tag);
     }
 }
 
-fn write_cldbuds(writer: &mut FrameWriter, buds: &[CldBud]) {
+fn write_tracker_targets(writer: &mut FrameWriter, targets: &[Target]) {
+    for target in targets.iter() {
+        let tag = format!("{} | {} | {} | {:.1}m/s", target.id, target.classification, target.class_type, target.speed);
+        let mat = match target.class_type.as_str() {
+            "person" => MAT_PERSON,
+            _ => MAT_OBSTACLE,
+        };
+        writer.write_box(&target.the_box, mat, &tag);
+    }
+}
+
+fn write_semantic_buds(writer: &mut FrameWriter, buds: &[CldBud], mat: &str) {
     for bud in buds.iter() {
         let tag = format!("{} | {:.2}", bud.class_name, bud.confidence);
-        writer.write_box(&bud.the_box, "point_cloud", &tag);
+        writer.write_box(&bud.the_box, mat, &tag);
     }
 }
 
 // ─── 统计信息 ──────────────────────────────────────────────────────────────
 fn print_stats(frame: usize, total: usize, elapsed_ms: f64,
-               n_ground: usize, n_cloud: usize, n_clusters: usize,
+               n_cloud: usize, n_clusters: usize,
                n_targets: usize, targets: &[Target]) {
     println!("━━━ 帧 {:3}/{} ━━━ 耗时 {:5.0}ms ━━━", frame + 1, total, elapsed_ms);
-    println!("  地面: {:5}点 | 非地面: {:5}点 | 聚类: {:3}个", n_ground, n_cloud, n_clusters);
+    println!("  非地面点: {:5} | 聚类: {:3}个", n_cloud, n_clusters);
     println!("  跟踪目标: {} 个", n_targets);
 
     let mut n_moving = 0usize;
     let mut n_static = 0usize;
     let mut n_movable = 0usize;
     let mut n_floating = 0usize;
+    let mut n_person = 0usize;
     let mut total_speed = 0.0f32;
 
     for t in targets {
@@ -57,14 +82,15 @@ fn print_stats(frame: usize, total: usize, elapsed_ms: f64,
             "floating" => n_floating += 1,
             _ => {}
         }
+        if t.class_type == "person" { n_person += 1; }
         total_speed += t.speed;
         println!("    id={:3} | {:8} | {:>8} | {:.2}m/s",
             t.id, t.classification, t.class_type, t.speed);
     }
 
     let avg_speed = if targets.is_empty() { 0.0 } else { total_speed / targets.len() as f32 };
-    println!("  分类: {} 运动中 / {} 静态 / {} 可运动 / {} 待定 | 平均速度 {:.2}m/s",
-        n_moving, n_static, n_movable, n_floating, avg_speed);
+    println!("  {}运动中/{}静态/{}可运动/{}待定 | 行人:{} | 均速{:.2}m/s",
+        n_moving, n_static, n_movable, n_floating, n_person, avg_speed);
 }
 
 #[tokio::main]
@@ -103,8 +129,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut camera = Camera::new();
     let mut fuse = Fuse::new();
     let mut tracker = Tracker::new();
-    let mut writer = FrameWriter::new();
-    let mut cluster_writer = FrameWriter::new();
+
+    // 四个独立输出流
+    let mut writer_ground = FrameWriter::new();
+    let mut writer_wall = FrameWriter::new();
+    let mut writer_cluster = FrameWriter::new();
+    let mut writer_tracker = FrameWriter::new();
 
     // ─── 两级流水 ────────────────────────────────────────────────────────
     let total_start = Instant::now();
@@ -139,16 +169,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         fuse.act().await;
         let t2 = frame_start.elapsed().as_secs_f64() * 1000.0;
 
-        // ─── 聚类输出（跟踪前） ──────────────────────────────────────────
-        {
-            let swapl = global_swapl();
-            let buds_guard = swapl.cld_buds_raw.lock().await;
-            if let Some(buds) = buds_guard.peek_latest() {
-                cluster_writer.begin_frame(i);
-                write_cldbuds(&mut cluster_writer, &buds);
-            }
-        }
-        cluster_writer.end_frame();
+        // ─── 读取各语义流 ────────────────────────────────────────────────
+        let swapl = global_swapl();
+
+        let ground_buds: Vec<CldBud> = {
+            let gb = swapl.ground_buds.lock().await;
+            gb.peek_latest().unwrap_or_default()
+        };
+        let wall_buds: Vec<CldBud> = {
+            let wb = swapl.wall_buds.lock().await;
+            wb.peek_latest().unwrap_or_default()
+        };
+        let cluster_buds: Vec<CldBud> = {
+            let cb = swapl.cld_buds_raw.lock().await;
+            cb.peek_latest().unwrap_or_default()
+        };
+
+        // ─── 写入 .rdra ──────────────────────────────────────────────────
+        writer_ground.begin_frame(i);
+        write_semantic_buds(&mut writer_ground, &ground_buds, MAT_GROUND);
+        writer_ground.end_frame();
+
+        writer_wall.begin_frame(i);
+        write_semantic_buds(&mut writer_wall, &wall_buds, MAT_WALL);
+        writer_wall.end_frame();
+
+        writer_cluster.begin_frame(i);
+        write_targets(&mut writer_cluster, &cluster_buds);
+        writer_cluster.end_frame();
 
         if i + 2 < n_frames {
             data_loader.load_next().await?;
@@ -168,16 +216,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let _ = tracker.run().await;
         let t3 = frame_start.elapsed().as_secs_f64() * 1000.0;
 
-        // ─── 读取输出 ────────────────────────────────────────────────────
-        let swapl = global_swapl();
-        let (n_ground_pts, n_filtered_pts, n_cld_buds) = {
-            let cloud = swapl.clouds_out.lock().await;
-            let n_raw = cloud.peek_latest().as_ref().map(|c| c.len()).unwrap_or(0);
+        // ─── 读取跟踪输出 ────────────────────────────────────────────────
+        let n_filtered_pts = {
             let filtered = swapl.clouds_filtered.lock().await;
-            let n_filt = filtered.peek_latest().as_ref().map(|c| c.len()).unwrap_or(0);
-            let buds = swapl.cld_buds_raw.lock().await;
-            let n_buds = buds.peek_latest().as_ref().map(|c| c.len()).unwrap_or(0);
-            (n_raw.saturating_sub(n_filt), n_filt, n_buds)
+            filtered.peek_latest().as_ref().map(|c| c.len()).unwrap_or(0)
         };
 
         let targets: Vec<Target> = {
@@ -191,13 +233,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 t2, t3 - t2, t4 - t3, t4);
         }
 
-        print_stats(i, n_frames, t4, n_ground_pts, n_filtered_pts, n_cld_buds,
+        print_stats(i, n_frames, t4, n_filtered_pts, cluster_buds.len(),
                     targets.len(), &targets);
 
-        // ─── 写入 .rdra ──────────────────────────────────────────────────
-        writer.begin_frame(i);
-        write_targets(&mut writer, &targets);
-        writer.end_frame();
+        writer_tracker.begin_frame(i);
+        write_tracker_targets(&mut writer_tracker, &targets);
+        writer_tracker.end_frame();
     }
 
     let total_elapsed = total_start.elapsed().as_secs_f64();
@@ -208,8 +249,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("══════════════════════════════════════════");
 
     // ─── 保存 .rdra 文件 ──────────────────────────────────────────────────
-    cluster_writer.save("output/cluster_result.rdra")?;
-    writer.save("output/tracker_result.rdra")?;
+    writer_ground.save("output/ground_result.rdra")?;
+    writer_wall.save("output/wall_result.rdra")?;
+    writer_cluster.save("output/cluster_result.rdra")?;
+    writer_tracker.save("output/tracker_result.rdra")?;
+    println!("输出保存至 output/ 目录：ground / wall / cluster / tracker");
 
     Ok(())
 }

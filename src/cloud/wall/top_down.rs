@@ -1,4 +1,4 @@
-use super::WallPickStrategy;
+use super::{WallPickStrategy, XYGrid, CellKey};
 
 /// 俯视聚类墙体提取。
 ///
@@ -41,36 +41,6 @@ impl TopDownCluster {
     }
 }
 
-type CellKey = (i32, i32);
-
-struct XYGrid {
-    _cell_size: f32,
-    cells: std::collections::HashMap<CellKey, Vec<usize>>,
-}
-
-impl XYGrid {
-    fn new(points: &[[f32; 3]], cell_size: f32) -> Self {
-        let mut cells: std::collections::HashMap<CellKey, Vec<usize>> =
-            std::collections::HashMap::new();
-        for (i, p) in points.iter().enumerate() {
-            let key = (
-                (p[0] / cell_size).floor() as i32,
-                (p[1] / cell_size).floor() as i32,
-            );
-            cells.entry(key).or_default().push(i);
-        }
-        Self { _cell_size: cell_size, cells }
-    }
-
-    /// 返回密集格（点数 >= min_density）
-    fn dense_cells(&self, min_density: usize) -> Vec<CellKey> {
-        self.cells.iter()
-            .filter(|(_, indices)| indices.len() >= min_density)
-            .map(|(&key, _)| key)
-            .collect()
-    }
-}
-
 /// BFS 合并相邻密集格
 fn merge_adjacent_dense(
     dense: &std::collections::HashSet<CellKey>,
@@ -110,10 +80,10 @@ fn merge_adjacent_dense(
 /// 2D 法线校验：XY 平面 PCA 检查细长程度。
 ///
 /// 墙面在 XY 投影中应呈细长条状（λ_min ≪ λ_max），而非圆胖块状。
-/// 返回 (is_wall, [nx, ny])：是否墙面 + XY 平面法线方向。
-fn check_xy_normal(points: &[[f32; 3]], max_width_ratio: f32) -> (bool, [f32; 2]) {
+/// 返回 (is_wall, [nx, ny], ratio)。
+fn check_xy_normal(points: &[[f32; 3]], max_width_ratio: f32) -> (bool, [f32; 2], f32) {
     let n = points.len();
-    if n < 3 { return (false, [0.0, 0.0]); }
+    if n < 3 { return (false, [0.0, 0.0], 0.0); }
 
     let nf = n as f32;
     let cx: f32 = points.iter().map(|p| p[0]).sum::<f32>() / nf;
@@ -141,10 +111,10 @@ fn check_xy_normal(points: &[[f32; 3]], max_width_ratio: f32) -> (bool, [f32; 2]
     let normal = if len > 1e-8 { [nx / len, ny / len] } else { [1.0, 0.0] };
 
     // 细长程度检查：λ_min / λ_max < threshold → 细长 → 墙面
-    if lambda_max < 1e-8 { return (false, normal); }
+    if lambda_max < 1e-8 { return (false, normal, 0.0); }
     let ratio = lambda_min / lambda_max;
 
-    (ratio < max_width_ratio, normal)
+    (ratio < max_width_ratio, normal, ratio)
 }
 
 impl WallPickStrategy for TopDownCluster {
@@ -167,7 +137,7 @@ impl WallPickStrategy for TopDownCluster {
         // 3. 展开为原始点 + 竖直性验证
         let mut walls: Vec<(Vec<usize>, [f32; 4])> = Vec::new();
 
-        for cell_cluster in &cell_clusters {
+        for (ci, cell_cluster) in cell_clusters.iter().enumerate() {
             let mut all_indices = Vec::new();
             for key in cell_cluster {
                 if let Some(indices) = grid.cells.get(key) {
@@ -175,22 +145,37 @@ impl WallPickStrategy for TopDownCluster {
                 }
             }
 
-            if all_indices.len() < self.min_wall_pts { continue; }
+            if all_indices.len() < self.min_wall_pts {
+                if all_indices.len() >= 10 {
+                    log::debug!("td cluster {} REJECT: pts={} < min_wall_pts={}", ci, all_indices.len(), self.min_wall_pts);
+                }
+                continue;
+            }
 
             // 2D 法线校验：XY 投影应呈细长条状
             let pts: Vec<[f32; 3]> = all_indices.iter().map(|&i| cloud[i]).collect();
-            let (is_wall, _xy_normal) = check_xy_normal(&pts, self.max_width_ratio);
-            if !is_wall { continue; }
+            let (is_wall, _xy_normal, ratio) = check_xy_normal(&pts, self.max_width_ratio);
+            if !is_wall {
+                log::debug!("td cluster {} REJECT: pts={} ratio={:.4} >= max_width_ratio={:.2} cells={}", ci, all_indices.len(), ratio, self.max_width_ratio, cell_cluster.len());
+                continue;
+            }
 
             // PCA 拟合平面（在 3D 上）
             let plane = fit_plane_3d(&pts);
             let (normal, d) = match plane {
                 Some(v) => v,
-                None => continue,
+                None => {
+                    log::debug!("td cluster {} REJECT: pts={} fit_plane_3d failed", ci, all_indices.len());
+                    continue;
+                }
             };
 
             // 竖直性：|nz| 小 → 墙
-            if normal[2].abs() > 0.3 { continue; }
+            if normal[2].abs() > 0.3 {
+                log::debug!("td cluster {} REJECT: pts={} nz={:.2} > 0.3", ci, all_indices.len(), normal[2]);
+                continue;
+            }
+            log::debug!("td cluster {} ACCEPT: pts={} ratio={:.4} nz={:.2} cells={}", ci, all_indices.len(), ratio, normal[2], cell_cluster.len());
 
             walls.push((all_indices, [normal[0], normal[1], normal[2], d]));
         }

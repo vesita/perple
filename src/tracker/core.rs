@@ -96,6 +96,16 @@ struct TrackedObject {
     position_history: VecDeque<[f64; 3]>,
     /// k 帧速度观测平均帧数
     kf_avg_frames: usize,
+    /// 1€ Filter 低通滤波质心（Option = 未初始化）
+    centroid_lpf: Option<[f64; 3]>,
+    /// 上一帧速度大小（用于自适应截止频率）
+    centroid_prev_vel_mag: f64,
+    /// EMA 平滑后的箱体（替代 fix_size 硬锁定）
+    smoothed_box: Option<Box3D>,
+    /// 分类转换冷却计数器（Moving↔Movable 迟滞）
+    class_cooldown: u32,
+    /// 速度 EMA 系数（0=自适应置信度）
+    vel_smoothing_alpha: f32,
 }
 
 impl TrackedObject {
@@ -106,6 +116,7 @@ impl TrackedObject {
         confidence: f32,
         centroid: [f32; 3],
         kf_avg_frames: usize,
+        vel_smoothing_alpha: f32,
     ) -> Result<Self, adskalman::Error> {
         let mut kalman_filter = KalmanFilterWrapper::new(KalmanConfig::default())?;
         // 初始状态：[x, y, z, 0, 0, 0]
@@ -131,6 +142,11 @@ impl TrackedObject {
             point_cloud_history: VecDeque::with_capacity(16),
             position_history: VecDeque::with_capacity(kf_avg_frames + 2),
             kf_avg_frames,
+            centroid_lpf: None,
+            centroid_prev_vel_mag: 0.0,
+            smoothed_box: None,
+            class_cooldown: 0,
+            vel_smoothing_alpha,
         })
     }
 
@@ -214,17 +230,53 @@ impl TrackedObject {
         self.disappeared_count += 1;
     }
 
+    /// 1€ Filter 质心低通滤波
+    ///
+    /// 静止时 fc=fc_min → 强平滑；运动时 fc↑ → 低延迟。
+    /// 用 KF 速度大小自适应截止频率。
+    fn apply_centroid_lpf(&mut self, centroid: &mut [f32; 3], fc_min: f64, beta: f64) {
+        let now = SystemTime::now();
+        let dt = now.duration_since(self.last_seen)
+            .unwrap_or_default().as_secs_f64().clamp(0.001, 1.0);
+
+        let vel_mag = self.kalman_filter.get_velocity().norm() as f64;
+        let fc = (fc_min + beta * vel_mag).min(5.0); // fc_max = 5Hz
+        let tau = 1.0 / (2.0 * std::f64::consts::PI * fc);
+        let alpha = 1.0 / (1.0 + tau / dt);
+
+        if let Some(prev) = self.centroid_lpf {
+            centroid[0] = (alpha * centroid[0] as f64 + (1.0 - alpha) * prev[0]) as f32;
+            centroid[1] = (alpha * centroid[1] as f64 + (1.0 - alpha) * prev[1]) as f32;
+            centroid[2] = (alpha * centroid[2] as f64 + (1.0 - alpha) * prev[2]) as f32;
+        }
+        self.centroid_lpf = Some([centroid[0] as f64, centroid[1] as f64, centroid[2] as f64]);
+        self.centroid_prev_vel_mag = vel_mag;
+    }
+
     fn is_permanently_lost(&self, max_disappeared: u32) -> bool {
         self.disappeared_count >= max_disappeared
     }
 
-    /// 获取 Kalman 估计速度（取最近几帧平滑值）
+    /// 获取 Kalman 估计速度（自适应 EMA 平滑）
+    ///
+    /// alpha 按置信度自适应：高置信度快速跟踪，低置信度强平滑。
+    /// 可通过 `vel_smoothing_alpha` 固定覆盖。
     fn smoothed_velocity(&self) -> [f32; 3] {
         let v = self.kalman_filter.get_velocity();
+        // 自适应 alpha：固定值 > 0 则使用固定值，否则按置信度调整
+        let alpha = if self.vel_smoothing_alpha > 0.0 {
+            self.vel_smoothing_alpha
+        } else {
+            match self.confidence {
+                c if c > 0.9 => 0.4,
+                c if c > 0.7 => 0.25,
+                _ => 0.15,
+            }
+        };
         if self.velocity_history.is_empty() {
             return [v.x as f32, v.y as f32, v.z as f32];
         }
-        // 历史均值与当前 Kalman 速度混合（50/50）
+        // 历史均值
         let mut avg = [0.0f32; 3];
         for hv in &self.velocity_history {
             avg[0] += hv[0];
@@ -232,16 +284,48 @@ impl TrackedObject {
             avg[2] += hv[2];
         }
         let n = self.velocity_history.len() as f32;
+        let hist_avg = [avg[0] / n, avg[1] / n, avg[2] / n];
+        // EMA: alpha * KF 速度 + (1-alpha) * 历史均值
         [
-            0.5 * (v.x as f32) + 0.5 * avg[0] / n,
-            0.5 * (v.y as f32) + 0.5 * avg[1] / n,
-            0.5 * (v.z as f32) + 0.5 * avg[2] / n,
+            alpha * (v.x as f32) + (1.0 - alpha) * hist_avg[0],
+            alpha * (v.y as f32) + (1.0 - alpha) * hist_avg[1],
+            alpha * (v.z as f32) + (1.0 - alpha) * hist_avg[2],
         ]
     }
 
     fn speed(&self) -> f32 {
         let v = self.smoothed_velocity();
         (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
+    }
+
+    /// 箱体尺寸 EMA 平滑（替代 fix_size 硬锁定）
+    ///
+    /// alpha 按置信度自适应：高置信度快速跟踪，低置信度强平滑。
+    fn apply_box_smoothing(&mut self, base_alpha: f32) {
+        let current = match self.last_box {
+            Some(ref b) => b.clone(),
+            None => return,
+        };
+        // 置信度自适应 alpha
+        let alpha = if self.confidence > 0.9 {
+            base_alpha.max(0.4).min(0.5)
+        } else if self.confidence > 0.7 {
+            base_alpha.max(0.15).min(0.5)
+        } else {
+            base_alpha.max(0.05).min(0.3)
+        };
+        let smoothed = match self.smoothed_box {
+            Some(ref prev) => {
+                let mut b = current.clone();
+                b.length = alpha * current.length + (1.0 - alpha) * prev.length;
+                b.width  = alpha * current.width  + (1.0 - alpha) * prev.width;
+                b.height = alpha * current.height + (1.0 - alpha) * prev.height;
+                b
+            }
+            None => current.clone(),
+        };
+        self.smoothed_box = Some(smoothed.clone());
+        self.last_box = Some(smoothed);
     }
 
     /// 箱体尺寸锁定：跟踪稳定后如果尺寸变化小则冻结
@@ -310,6 +394,14 @@ pub struct Tracker {
     floating_to_static_frames: usize,
     moving_speed_threshold: f32,
     voting_consistency_frames: usize,
+    // ─── 帧间平滑配置 ────────────────────────────────────────────────────
+    use_centroid_smoothing: bool,
+    centroid_fc_min: f64,
+    centroid_beta: f64,
+    use_box_smoothing: bool,
+    box_smoothing_alpha: f32,
+    vel_smoothing_alpha: f32,
+    class_cooldown_frames: u32,
     /// 自运动补偿
     ego_motion: EgoMotion,
     /// 匈牙利算法代价矩阵缓冲区（避免每帧堆分配）
@@ -343,6 +435,14 @@ impl Tracker {
             floating_to_static_frames: cfg.floating_to_static_frames,
             moving_speed_threshold: cfg.moving_speed_threshold,
             voting_consistency_frames: cfg.voting_consistency_frames,
+            // ─── 帧间平滑 ────────────────────────────────────────────────
+            use_centroid_smoothing: cfg.use_centroid_smoothing,
+            centroid_fc_min: cfg.centroid_fc_min,
+            centroid_beta: cfg.centroid_beta,
+            use_box_smoothing: cfg.use_box_smoothing,
+            box_smoothing_alpha: cfg.box_smoothing_alpha,
+            vel_smoothing_alpha: cfg.vel_smoothing_alpha,
+            class_cooldown_frames: cfg.class_cooldown_frames,
             ego_motion: EgoMotion::new(),
             cost_buf: Vec::new(),
             sq_buf: Vec::new(),
@@ -596,6 +696,7 @@ impl Tracker {
         moving_speed_threshold: f32,
         floating_to_static_frames: usize,
         voting_consistency_frames: usize,
+        class_cooldown_frames: u32,
     ) {
         match obj.classification {
             TargetClass::Static => {
@@ -631,11 +732,20 @@ impl Tracker {
             }
             TargetClass::Moving | TargetClass::Movable => {
                 obj.confirmed_moving = true;
-                // Moving ↔ Movable：同层往返
-                if speed > moving_speed_threshold {
-                    obj.classification = TargetClass::Moving;
+                // Moving ↔ Movable：带冷却的迟滞转换
+                let want_move = speed > moving_speed_threshold;
+                let is_move = obj.classification == TargetClass::Moving;
+
+                if want_move == is_move {
+                    // 已在目标状态，重置冷却
+                    obj.class_cooldown = 0;
                 } else {
-                    obj.classification = TargetClass::Movable;
+                    // 需要切换状态，累积冷却
+                    obj.class_cooldown += 1;
+                    if obj.class_cooldown >= class_cooldown_frames {
+                        obj.classification = if want_move { TargetClass::Moving } else { TargetClass::Movable };
+                        obj.class_cooldown = 0;
+                    }
                 }
             }
         }
@@ -660,7 +770,7 @@ impl Tracker {
             let mut tar3d_guard = self.tar3d.lock().await;
             match tar3d_guard.read() {
                 Some(data) => data.into_iter()
-                    .filter(|d| d.confidence >= self.min_confidence)
+                    .filter(|d| d.confidence >= self.min_confidence && d.class_name != "ground" && d.class_name != "wall")
                     .collect::<Vec<_>>(),
                 None => Vec::new(),
             }
@@ -702,16 +812,21 @@ impl Tracker {
             let obj_id: usize = self.tracked_objects.keys().nth(*obj_idx).copied().unwrap();
             let detection = &current_detections[*det_idx];
             if let Some(obj) = self.tracked_objects.get_mut(&obj_id) {
+                // 1€ 质心低通滤波（静止强平滑，运动低延迟）
+                let mut centroid = detection.centroid;
+                if self.use_centroid_smoothing {
+                    obj.apply_centroid_lpf(&mut centroid, self.centroid_fc_min, self.centroid_beta);
+                }
                 obj.correct(
                     &detection.the_box,
                     detection.class_name.clone(),
                     detection.confidence,
-                    detection.centroid,
+                    centroid,
                 )?;
                 // 距离自适应 KF 噪声：远距离点云稀疏 → 质心不可靠 → 增大测量噪声
-                let dist = (detection.centroid[0] as f64).powi(2)
-                    + (detection.centroid[1] as f64).powi(2)
-                    + (detection.centroid[2] as f64).powi(2);
+                let dist = (centroid[0] as f64).powi(2)
+                    + (centroid[1] as f64).powi(2)
+                    + (centroid[2] as f64).powi(2);
                 obj.kalman_filter.adjust_noise_for_distance(dist.sqrt());
                 updated_ids.push(obj_id);
             }
@@ -729,6 +844,7 @@ impl Tracker {
                 detection.confidence,
                 detection.centroid,
                 self.kf_avg_frames,
+                self.vel_smoothing_alpha,
             ) {
                 Ok(obj) => {
                     self.tracked_objects.insert(new_id, obj);
@@ -824,6 +940,7 @@ impl Tracker {
                 self.moving_speed_threshold,
                 self.floating_to_static_frames,
                 self.voting_consistency_frames,
+                self.class_cooldown_frames,
             );
         }
 
@@ -836,9 +953,16 @@ impl Tracker {
             }
         }
 
-        // 步骤 10: 箱体尺寸锁定 fix_size
+        // 步骤 10: 箱体尺寸平滑
         let _t_fix = Instant::now();
-        if self.use_fix_size {
+        if self.use_box_smoothing {
+            for obj in self.tracked_objects.values_mut() {
+                // 短暂丢失时不更新箱体（保留最后已知尺寸）
+                if obj.disappeared_count == 0 {
+                    obj.apply_box_smoothing(self.box_smoothing_alpha);
+                }
+            }
+        } else if self.use_fix_size {
             for obj in self.tracked_objects.values_mut() {
                 obj.apply_fix_size(self.fix_size_frames, self.fix_size_dim_thresh);
             }
@@ -856,7 +980,15 @@ impl Tracker {
                 let vel = obj.smoothed_velocity();
                 let spd = obj.speed();
 
-                let ref_box = obj.last_box.as_ref().cloned().unwrap_or_else(Box3D::empty_box);
+                // 短暂丢失时优先用平滑箱体（更稳定）
+                let ref_box = if obj.disappeared_count > 0 {
+                    obj.smoothed_box.as_ref()
+                        .or(obj.last_box.as_ref())
+                        .cloned()
+                        .unwrap_or_else(Box3D::empty_box)
+                } else {
+                    obj.last_box.as_ref().cloned().unwrap_or_else(Box3D::empty_box)
+                };
                 let mut predicted_box = Box3D::from_position_and_angles(
                     pos.x as f32,
                     pos.y as f32,

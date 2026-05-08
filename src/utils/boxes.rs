@@ -82,6 +82,19 @@ impl Box3D {
         }
     }
 
+    /// 到目标点的 XY 平面距离（忽略 Z）
+    pub fn xy_distance_to(&self, target: [f32; 3]) -> f32 {
+        let c = self.center();
+        let dx = c.x - target[0];
+        let dy = c.y - target[1];
+        (dx * dx + dy * dy).sqrt()
+    }
+
+    /// 中心是否在以 origin 为圆心、max_range 为半径的 XY 圆内
+    pub fn is_in_xy_range(&self, origin: [f32; 3], max_range: f32) -> bool {
+        self.xy_distance_to(origin) <= max_range
+    }
+
     /// 从平移和欧拉角创建Tag3D
     ///
     /// # 参数

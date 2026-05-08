@@ -23,6 +23,8 @@ pub struct QuadtreeWall {
     min_z_span: f32,
     /// XY PCA 细长比阈值：λ_min / λ_max < threshold → 墙面
     max_width_ratio: f32,
+    /// 合并相邻格的连通距离（格数），防止稀疏墙面断裂
+    merge_dist: usize,
 }
 
 type CellKey = (i32, i32);
@@ -42,6 +44,7 @@ impl QuadtreeWall {
             max_walls: 8,
             min_z_span: 1.5,
             max_width_ratio: 0.20,
+            merge_dist: 2,
         }
     }
 
@@ -51,6 +54,11 @@ impl QuadtreeWall {
 
     pub fn with_width_ratio(mut self, ratio: f32) -> Self {
         self.max_width_ratio = ratio;
+        self
+    }
+
+    pub fn with_merge_dist(mut self, merge_dist: usize) -> Self {
+        self.merge_dist = merge_dist;
         self
     }
 }
@@ -83,7 +91,8 @@ impl WallPickStrategy for QuadtreeWall {
             .map(|(&k, _)| k)
             .collect();
 
-        // ── 3. BFS 连通域提取（8 邻域） ──
+        // ── 3. BFS 连通域提取（merge_dist 邻域） ──
+        let md = self.merge_dist as i32;
         let mut visited = HashSet::new();
         let mut clusters: Vec<Vec<CellKey>> = Vec::new();
 
@@ -96,8 +105,8 @@ impl WallPickStrategy for QuadtreeWall {
 
             while let Some(cur) = queue.pop_front() {
                 component.push(cur);
-                for dx in -1i32..=1 {
-                    for dy in -1i32..=1 {
+                for dx in -md..=md {
+                    for dy in -md..=md {
                         if dx == 0 && dy == 0 { continue; }
                         let nbr = (cur.0 + dx, cur.1 + dy);
                         if valid.contains(&nbr) && !visited.contains(&nbr) {
@@ -113,7 +122,7 @@ impl WallPickStrategy for QuadtreeWall {
         // ── 4. 每个连通域：2D PCA + Z 跨度 → 墙/障碍物分类 ──
         let mut walls: Vec<(Vec<usize>, [f32; 4])> = Vec::new();
 
-        for component in &clusters {
+        for (ci, component) in clusters.iter().enumerate() {
             let mut all_indices = Vec::new();
             let mut z_min = f32::MAX;
             let mut z_max = f32::MIN;
@@ -125,8 +134,16 @@ impl WallPickStrategy for QuadtreeWall {
                 }
             }
 
-            if all_indices.len() < self.min_wall_pts { continue; }
-            if z_max - z_min < self.min_z_span { continue; }
+            if all_indices.len() < self.min_wall_pts {
+                if all_indices.len() >= 10 {
+                    log::debug!("cluster {} REJECT: pts={} < min_wall_pts={}", ci, all_indices.len(), self.min_wall_pts);
+                }
+                continue;
+            }
+            if z_max - z_min < self.min_z_span {
+                log::debug!("cluster {} REJECT: pts={} z_span={:.2} < min_z_span={:.2}", ci, all_indices.len(), z_max - z_min, self.min_z_span);
+                continue;
+            }
 
             // XY 中心
             let nf = all_indices.len() as f32;
@@ -154,8 +171,16 @@ impl WallPickStrategy for QuadtreeWall {
             let lambda_max = (trace + disc) * 0.5;
             let lambda_min = (trace - disc) * 0.5;
 
-            if lambda_max < 1e-8 { continue; }
-            if lambda_min / lambda_max >= self.max_width_ratio { continue; }
+            if lambda_max < 1e-8 {
+                log::debug!("cluster {} REJECT: pts={} lambda_max≈0", ci, all_indices.len());
+                continue;
+            }
+            let ratio = lambda_min / lambda_max;
+            if ratio >= self.max_width_ratio {
+                log::debug!("cluster {} REJECT: pts={} ratio={:.4} >= max_width_ratio={:.2}", ci, all_indices.len(), ratio, self.max_width_ratio);
+                continue;
+            }
+            log::debug!("cluster {} ACCEPT: pts={} ratio={:.4} z_span={:.2} cells={}", ci, all_indices.len(), ratio, z_max - z_min, component.len());
 
             // 2D 法线（最小特征值方向的垂直方向）
             let nx = cxy;

@@ -85,6 +85,21 @@ moving_speed_threshold = 0.35
 # 点云投票连续确认帧数：连续 N 帧投票通过才触发 Floating → Moving 转换
 voting_consistency_frames = 5
 
+# 帧间平滑：质心 1€ 低通滤波（静止强平滑，运动低延迟）
+use_centroid_smoothing = true
+# 最小截止频率（Hz），越低平滑越强
+centroid_fc_min = 0.5
+# 速度自适应系数，越大运动时延迟越低
+centroid_beta = 1.0
+# 箱体尺寸 EMA 平滑（替代 fix_size 硬锁定）
+use_box_smoothing = true
+# EMA 系数（0-1），越大跟踪越快；0=自适应置信度
+box_smoothing_alpha = 0.25
+# 速度 EMA 系数（0-1）；0=自适应置信度
+vel_smoothing_alpha = 0.25
+# 分类转换冷却帧数（Moving↔Movable 迟滞）
+class_cooldown_frames = 3
+
 [camera]
 intrinsic = [
   [ 641.0308344961991,    0.0,                343.4226052091193 ],

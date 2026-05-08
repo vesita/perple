@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use perple::bench::{BenchStrategy, BenchStats, BenchHarness, BenchRecorder, FrameData, GroundPreprocessor};
-use perple::cloud::classify::strategy::{ClusteringStrategy, DbscanStrategy, RangeImageStrategy};
+use perple::cloud::classify::strategy::{ClusteringStrategy, DbscanStrategy, RangeImageStrategy, WallClusterStrategy};
 use perple::utils::boxes::Box3D;
 
 // redra 语义材质短名
@@ -178,7 +178,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // 策略 4: Range Image
+    // 策略 4: Wall → Box 过滤 → DBSCAN
+    for &cell_size in &[0.20f32, 0.30] {
+        for &dbscan_eps in &[0.20f32, 0.30, 0.50] {
+            for &dbscan_min in &[3usize, 5, 8] {
+                let name = format!("wall_c{:.2}_e{:.2}_m{}", cell_size, dbscan_eps, dbscan_min);
+                strategies.push(Box::new(ClusterBenchCase::new(
+                    &name,
+                    Box::new(WallClusterStrategy::with_params(
+                        Box::new(perple::cloud::wall::XYRansacWall::with_params(0.05, 50, 30)),
+                        cell_size, 3, 12.0, dbscan_eps, dbscan_min,
+                    )),
+                )));
+            }
+        }
+    }
+
+    // 策略 5: Range Image
     // 剔除 0.5° 分辨率：网格过密（720×360 像素），实测超时
     for &(az, el, thresh, min_pts, label) in &[
         (1.0, 1.0, 0.5, 3, "range_image_1.0deg_t0.5_m3"),

@@ -32,6 +32,10 @@ pub struct Swapl {
     pub cld_buds_raw: Eap<Stream<Vec<CldBud>>>,
     /// 点云检测结果输出流（经 Fuse 融合后）
     pub cld_objs: Eap<Stream<Vec<CldBud>>>,
+    /// 地面 Bud 独立流（含 box + 点云）
+    pub ground_buds: Eap<Stream<Vec<CldBud>>>,
+    /// 墙体 Bud 独立流（含 box + 点云）
+    pub wall_buds: Eap<Stream<Vec<CldBud>>>,
     /// 图像数据输入流
     pub colors: Eap<Stream<DynamicImage>>,
     /// 图像检测结果输出流
@@ -53,6 +57,8 @@ impl Swapl {
             clouds_filtered: new_eap(Stream::new()),
             cld_buds_raw: new_eap(Stream::new()),
             cld_objs: new_eap(Stream::new()),
+            ground_buds: new_eap(Stream::new()),
+            wall_buds: new_eap(Stream::new()),
             colors: new_eap(Stream::new()),
             clr_objs: new_eap(Stream::new()),
             sights: new_eap(Stream::new()),
