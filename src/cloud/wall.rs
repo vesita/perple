@@ -1,12 +1,10 @@
-mod seq_fit;
 mod top_down;
+mod quad_wall;
 mod xy_ransac;
-mod xy_dbscan;
 
-pub use seq_fit::SequentialFit;
 pub use top_down::TopDownCluster;
+pub use quad_wall::QuadtreeWall;
 pub use xy_ransac::XYRansacWall;
-pub use xy_dbscan::XYDBSCANWall;
 
 /// 墙体提取策略 trait
 ///

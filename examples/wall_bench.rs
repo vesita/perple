@@ -2,8 +2,7 @@ use std::time::{Duration, Instant};
 
 use perple::bench::{BenchStrategy, BenchStats, BenchHarness, BenchRecorder, FrameData, WallPreprocessor};
 use perple::cloud::wall::{
-    WallPickStrategy, SequentialFit, TopDownCluster,
-    XYRansacWall, XYDBSCANWall,
+    WallPickStrategy, TopDownCluster, QuadtreeWall, XYRansacWall,
 };
 use perple::utils::boxes::Box3D;
 
@@ -156,17 +155,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut strategies: Vec<Box<dyn BenchStrategy>> = Vec::new();
 
-    // ─── Sequential Fit ───
-    for &distance in &[0.10, 0.15, 0.20] {
-        for &normal_thresh in &[0.2, 0.3] {
-            let name = format!("seqfit_d{:.2}_n{:.1}", distance, normal_thresh);
-            strategies.push(Box::new(WallBenchCase::new(
-                &name,
-                Box::new(SequentialFit::with_params(distance, normal_thresh, 5)),
-            )));
-        }
-    }
-
     // ─── Top-Down Cluster ───
     for &cell_size in &[0.05, 0.10, 0.15] {
         for &min_density in &[3, 5, 8] {
@@ -190,6 +178,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )));
     }
 
+    // ─── Quadtree 连通域 + 2D PCA ───
+    for &cell_size in &[0.05, 0.10, 0.15] {
+        for &min_pts in &[3, 5] {
+            for &z_span in &[1.0, 1.5, 2.0] {
+                let name = format!("qt_c{:.2}_p{}_z{:.1}", cell_size, min_pts, z_span);
+                strategies.push(Box::new(WallBenchCase::new(
+                    &name,
+                    Box::new(QuadtreeWall::with_params(cell_size, min_pts, z_span)),
+                )));
+            }
+        }
+    }
+
+    // ─── Quadtree + width_ratio 变体 ───
+    for &ratio in &[0.15, 0.20, 0.30, 0.50] {
+        let name = format!("qt_c0.10_p3_z1.5_w{:.2}", ratio);
+        strategies.push(Box::new(WallBenchCase::new(
+            &name,
+            Box::new(QuadtreeWall::with_params(0.10, 3, 1.5).with_width_ratio(ratio)),
+        )));
+    }
+
     // ─── XY RANSAC 线检测 ───
     for &distance in &[0.05, 0.08, 0.10, 0.15] {
         for &iterations in &[50, 100] {
@@ -198,19 +208,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &name,
                 Box::new(XYRansacWall::with_params(distance, iterations, 30)),
             )));
-        }
-    }
-
-    // ─── XY DBSCAN 聚类 ───
-    for &eps in &[0.10, 0.15, 0.20] {
-        for &min_pts in &[3, 5, 8] {
-            for &z_span in &[1.0, 1.5, 2.0] {
-                let name = format!("xy_dbscan_e{:.2}_p{}_z{:.1}", eps, min_pts, z_span);
-                strategies.push(Box::new(WallBenchCase::new(
-                    &name,
-                    Box::new(XYDBSCANWall::with_params(eps, min_pts, z_span)),
-                )));
-            }
         }
     }
 

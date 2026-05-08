@@ -1,5 +1,14 @@
 use std::vec::Vec;
 
+/// 四叉树叶节点信息（collect_leaves 产出）
+pub struct QuadLeaf {
+    pub x_min: f32,
+    pub x_max: f32,
+    pub y_min: f32,
+    pub y_max: f32,
+    pub points: Vec<usize>,
+}
+
 /// 四叉树节点定义
 pub struct QuadTreeNode {
     x_min: f32,
@@ -185,6 +194,29 @@ impl QuadTreeNode {
                         depth + 1,
                     );
                 }
+            }
+        }
+    }
+
+    /// 收集所有叶节点的边界与点索引。
+    pub fn collect_leaves(&self) -> Vec<QuadLeaf> {
+        let mut leaves = Vec::new();
+        self.collect_leaves_rec(&mut leaves);
+        leaves
+    }
+
+    fn collect_leaves_rec(&self, out: &mut Vec<QuadLeaf>) {
+        if self.is_leaf {
+            out.push(QuadLeaf {
+                x_min: self.x_min,
+                x_max: self.x_max,
+                y_min: self.y_min,
+                y_max: self.y_max,
+                points: self.points.clone(),
+            });
+        } else if let Some(children) = &self.children {
+            for child in children.iter() {
+                child.collect_leaves_rec(out);
             }
         }
     }

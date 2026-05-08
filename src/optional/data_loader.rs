@@ -235,6 +235,15 @@ impl DataLoader {
         let lidar_path = format!("{}/lidar", self.target_path);
         let camera_path = format!("{}/camera", self.target_path);
 
+        if !std::path::Path::new(&camera_path).is_dir() {
+            log::warn!("camera 目录不存在: {}，跳过数据加载", camera_path);
+            return Ok(Vec::new());
+        }
+        if !std::path::Path::new(&lidar_path).is_dir() {
+            log::warn!("lidar 目录不存在: {}，跳过数据加载", lidar_path);
+            return Ok(Vec::new());
+        }
+
         // 读取 camera 目录中的所有文件，构建文件干名到完整文件名的映射
         let clr_files: HashMap<String, String> = fs::read_dir(&camera_path)?
             .filter_map(|entry| {
@@ -303,6 +312,15 @@ impl DataLoader {
 
     /// 列出独立路径中的文件（独立路径模式）
     fn list_files_independent(&self, image_path: &str, pcd_path: &str) -> io::Result<Vec<Vec<String>>> {
+        if !std::path::Path::new(image_path).is_dir() {
+            log::warn!("image 目录不存在: {}，跳过数据加载", image_path);
+            return Ok(Vec::new());
+        }
+        if !std::path::Path::new(pcd_path).is_dir() {
+            log::warn!("pcd 目录不存在: {}，跳过数据加载", pcd_path);
+            return Ok(Vec::new());
+        }
+
         // 读取图像目录中的所有文件
         let image_files: Vec<String> = fs::read_dir(image_path)?
             .filter_map(|entry| {

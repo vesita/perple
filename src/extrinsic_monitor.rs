@@ -17,6 +17,7 @@ use crate::swapl::global_swapl;
 use crate::utils::boxes::Box2D;
 
 /// 单帧匹配记录的投影残差
+#[allow(dead_code)]
 struct MatchResidual {
     class_name: String,
     iou: f32,
