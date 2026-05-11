@@ -4,7 +4,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::color::{ClrBud, image::ScaleMessage, look::Look};
+use crate::color::{ClrBud, image::ScaleMessage, look::Look, UndistortMap};
 use crate::color::{YoloDetector, fill_input_image};
 use crate::config::fixif;
 use crate::swapl::global_swapl;
@@ -64,6 +64,8 @@ pub struct Color {
     tensor_value: Value<TensorValueType<f32>>,
     /// 本地推理缓冲区（避免推理时持有输出锁）
     local_bounds: Vec<ClrBud>,
+    /// 去畸变映射（预计算，复用）
+    undistort_map: Option<UndistortMap>,
 }
 
 pub struct Camera {
@@ -111,9 +113,13 @@ impl Color {
                 o_height: 0,
                 s_width: input_width as u32,
                 s_height: input_height as u32,
+                pad_x: 0.0,
+                pad_y: 0.0,
+                scale: 1.0,
             },
             tensor_value,
             local_bounds: Vec::new(),
+            undistort_map: None,
         }
     }
 
@@ -126,7 +132,7 @@ impl Color {
     /// 4. 将结果写入输出流
     pub async fn act(&mut self) -> Result<(), ColorError> {
         // 从输入流中读取图像
-        let input = {
+        let mut input = {
             let mut stream = self.cream.in_stream.lock().await;
             match stream.read() {
                 Some(img) => img,
@@ -134,9 +140,38 @@ impl Color {
             }
         };
 
+        // 去畸变（如果配置了 dist_coeffs）
+        if let Some(ref dist) = fixif().camera.dist_coeffs {
+            if self.undistort_map.is_none() {
+                self.undistort_map = Some(UndistortMap::new(
+                    &fixif().camera.intrinsic,
+                    dist,
+                    input.width(),
+                    input.height(),
+                ));
+            }
+            if let Some(ref map) = self.undistort_map {
+                let t = Instant::now();
+                input = map.apply(&input);
+                log::debug!("去畸变耗时: {:?}", t.elapsed());
+            }
+        }
+
         // 处理图像
         self.message.o_width = input.width();
         self.message.o_height = input.height();
+
+        // Letterbox: 计算保持宽高比的缩放和填充偏移
+        let target_w = self.message.s_width as f32;
+        let target_h = self.message.s_height as f32;
+        let src_w = input.width() as f32;
+        let src_h = input.height() as f32;
+        let scale = (target_w / src_w).min(target_h / src_h);
+        let new_w = (src_w * scale).round();
+        let new_h = (src_h * scale).round();
+        self.message.pad_x = (target_w - new_w) / 2.0;
+        self.message.pad_y = (target_h - new_h) / 2.0;
+        self.message.scale = scale;
 
         // 填充 tensor value，避免拷贝
         fill_input_image(

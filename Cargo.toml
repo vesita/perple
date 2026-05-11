@@ -8,7 +8,6 @@ rand = "0.10.1"
 ort = "=2.0.0-rc.10"
 image = { version = "0.25" }
 ndarray = { version = "0.17", features = ["rayon"] }
-raqote = "0.8"
 pcd-rs = "0.13.0"
 nalgebra = { version = "0.34", features = ["std"] }
 toml = "1.1"

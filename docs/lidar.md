@@ -23,7 +23,7 @@ Cloud 模块是 Perple 项目中负责处理 LiDAR(Light Detection and Ranging) 
 cloud 模块
 ├── core.rs           # 点云数据核心处理
 ├── classify/         # 点云分类子模块
-│   ├── claster.rs    # 聚类算法实现
+│   ├── cluster.rs    # 聚类算法实现
 │   ├── core.rs       # 分类核心逻辑
 │   ├── environment.rs# 环境分析
 │   ├── kdtree.rs     # KD-Tree 空间索引

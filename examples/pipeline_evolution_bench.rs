@@ -163,7 +163,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut recorders: Vec<BenchRecorder> = (0..strategies.len())
         .map(|i| BenchRecorder::new(tmp.join(format!("{}.db", i))).expect("创建 recorder 失败"))
         .collect();
-    let harness = BenchHarness::new("./data/test", frame_limit);
+    let harness = BenchHarness::new("./data/cloud", frame_limit);
     let mut preprocessor = WallPreprocessor::default();
     harness.run(&mut preprocessor, &mut strategies, &mut recorders).await?;
 

@@ -26,7 +26,7 @@
 
 ## 核心问题分析
 
-你当前系统 (`claster.rs:47-86`) 的密度加权质心:
+你当前系统 (`cluster.rs:47-86`) 的密度加权质心:
 
 ```
 w_i = 1 / ||p_i||^alpha
@@ -44,7 +44,7 @@ C = Σ(w_i * p_i) / Σ(w_i)
 **你已有基础设施**: `Box3D::from_points_pca()` 已实现。
 
 **改动点**:
-- `claster.rs`: `cluster_box_and_centroid()` 中，当 `use_pca_obb=true` 时，centroid 直接取 OBB 的 pose translation，不再单独算加权质心
+- `cluster.rs`: `cluster_box_and_centroid()` 中，当 `use_pca_obb=true` 时，centroid 直接取 OBB 的 pose translation，不再单独算加权质心
 - 或者新增一个 `center_source` 配置项：`centroid` / `obb_center` / `bbox_center`
 
 **风险**: 点数过少时 PCA 不稳定 → 可加最小点数阈值，低于阈值回退到 AABB 中心。

@@ -178,7 +178,7 @@ impl BenchStrategy for ClusterBenchCase {
 
 fn build_cluster_strategy(cli: &CliArgs) -> Box<dyn ClusteringStrategy> {
     let cfg = fixif();
-    let strat = cli.strategy().unwrap_or(cfg.claster.strategy.clone());
+    let strat = cli.strategy().unwrap_or(cfg.cluster.strategy.clone());
     let eps = cli.get("eps", 0.20f32);
     let min_pts = cli.get("min-pts", 5usize);
     let voxel_size = cli.get("voxel-size", 0.0f32);
@@ -252,7 +252,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let rec = BenchRecorder::new(&format!("{}/{}.db", out, db_name))
                 .map_err(|e| format!("创建 recorder 失败: {}", e))?;
             let mut recs = vec![rec];
-            let harness = BenchHarness::new("./data/test", frame_limit);
+            let harness = BenchHarness::new("./data/cloud", frame_limit);
             let wall_pp = WallPreprocessor::new(
                 Box::new(perple::cloud::ground::PeakScan::new()),
                 Box::new(RadiusOutlierRemoval::new(0.30, 3)),
@@ -271,7 +271,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 WallPreprocessor::default(),
                 Box::new(RadiusOutlierRemoval::new(0.20, 3)),
             );
-            run_toml_bench("cluster", "./data/test", mode, &mut pp, &ClusterBuilder).await?;
+            run_toml_bench("cluster", "./data/cloud", mode, &mut pp, &ClusterBuilder).await?;
         }
     }
     Ok(())

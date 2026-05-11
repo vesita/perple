@@ -115,11 +115,11 @@ impl BenchStrategy for PipelineBenchCase {
         // 3. 天花板 + 范围过滤
         let config = fixif();
         let mut cluster_input = after_voxel;
-        if config.claster.ceiling_filter && config.claster.ceiling_height > 0.0 {
-            cluster_input.retain(|p| p[2] <= config.claster.ceiling_height);
+        if config.cluster.ceiling_filter && config.cluster.ceiling_height > 0.0 {
+            cluster_input.retain(|p| p[2] <= config.cluster.ceiling_height);
         }
-        if config.claster.max_range > 0.0 {
-            let max_d2 = config.claster.max_range * config.claster.max_range;
+        if config.cluster.max_range > 0.0 {
+            let max_d2 = config.cluster.max_range * config.cluster.max_range;
             cluster_input.retain(|p| p[0] * p[0] + p[1] * p[1] + p[2] * p[2] <= max_d2);
         }
 
@@ -289,7 +289,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut recorders: Vec<BenchRecorder> = (0..strategies.len())
         .map(|i| BenchRecorder::new(tmp_dir.join(format!("{}.db", i))).expect("创建 recorder 失败"))
         .collect();
-    let harness = BenchHarness::new("./data/test", frame_limit);
+    let harness = BenchHarness::new("./data/cloud", frame_limit);
     let mut preprocessor = GroundPreprocessor::default();
     harness.run(&mut preprocessor, &mut strategies, &mut recorders).await?;
 

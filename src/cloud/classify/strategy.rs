@@ -24,7 +24,7 @@ pub trait ClusteringStrategy: Send {
 /// 策略工厂 — 根据配置创建对应的策略实例
 pub fn create_strategy() -> Box<dyn ClusteringStrategy> {
     let cfg = fixif();
-    match cfg.claster.strategy.as_str() {
+    match cfg.cluster.strategy.as_str() {
         "range_image" => {
             log::info!("聚类策略: range_image");
             Box::new(RangeImageStrategy::new())
@@ -34,7 +34,7 @@ pub fn create_strategy() -> Box<dyn ClusteringStrategy> {
             Box::new(XYGridDBSCAN::new())
         }
         "lvdot" => {
-            log::info!("聚类策略: lvdot (体素{:.2}m 占用>={})", cfg.claster.voxel_size, 3);
+            log::info!("聚类策略: lvdot (体素{:.2}m 占用>={})", cfg.cluster.voxel_size, 3);
             Box::new(LvdotClusterStrategy::new())
         }
         "dbscan_light" => {
@@ -42,11 +42,11 @@ pub fn create_strategy() -> Box<dyn ClusteringStrategy> {
             Box::new(DbscanStrategy::new_light())
         }
         "dbscan" | "dbscan_adaptive" => {
-            log::info!("聚类策略: dbscan (eps_slope={})", cfg.claster.eps_slope);
+            log::info!("聚类策略: dbscan (eps_slope={})", cfg.cluster.eps_slope);
             Box::new(DbscanStrategy::new())
         }
         _ => {
-            log::warn!("未知聚类策略 '{}'，使用默认 dbscan_light", cfg.claster.strategy);
+            log::warn!("未知聚类策略 '{}'，使用默认 dbscan_light", cfg.cluster.strategy);
             Box::new(DbscanStrategy::new_light())
         }
     }

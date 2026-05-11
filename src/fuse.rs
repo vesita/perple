@@ -99,7 +99,7 @@ impl Fuse {
                 continue;
             }
 
-            let mut best_iou = 0.2;
+            let mut best_iou = 0.05;
             let mut best_idx = usize::MAX;
             for (ci, clr) in clr_buds.iter().enumerate() {
                 let iou = proj_box.iou(&clr.the_box);
@@ -108,7 +108,6 @@ impl Fuse {
                     best_idx = ci;
                 }
             }
-
             if best_idx != usize::MAX {
                 proj.push(Some(ProjMatch { clr_idx: best_idx }));
             } else {

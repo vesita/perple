@@ -19,10 +19,10 @@ impl RangeImageStrategy {
     pub fn new() -> Self {
         let cfg = fixif();
         Self {
-            az_res: cfg.claster.azimuth_resolution * std::f32::consts::PI / 180.0,
-            el_res: cfg.claster.elevation_resolution * std::f32::consts::PI / 180.0,
-            threshold: cfg.claster.cluster_threshold,
-            min_points: cfg.claster.min_points_per_cluster.unwrap_or(3),
+            az_res: cfg.cluster.azimuth_resolution * std::f32::consts::PI / 180.0,
+            el_res: cfg.cluster.elevation_resolution * std::f32::consts::PI / 180.0,
+            threshold: cfg.cluster.cluster_threshold,
+            min_points: cfg.cluster.min_points_per_cluster.unwrap_or(3),
         }
     }
 

@@ -1,273 +1,104 @@
 #.venv/bin/python3
 """
 YOLO 模型持续训练脚本
-用于实现更好的训练策略，避免反复重启训练
+多次循环训练直到满足精度或达到最大轮次
 """
-
-import os
 from pathlib import Path
 import sys
 import time
-import yaml
 from datetime import datetime
 
 import torch
 from ultralytics import YOLO
+import yaml
 
-from archive import archive_training_results
+project_root = Path(__file__).parent.parent.parent.absolute()
+sys.path.insert(0, str(project_root))
 
-
-def find_latest_model_weights(model_records_path):
-    """
-    查找最新的模型权重文件
-    按修改时间排序，选择最新的目录中的best.pt文件
-    """
-    # 获取所有训练记录目录
-    record_dirs = [d for d in model_records_path.iterdir() if d.is_dir()]
-    
-    if not record_dirs:
-        return None
-    
-    # 按修改时间排序，获取最新的目录
-    latest_dir = max(record_dirs, key=lambda x: x.stat().st_mtime)
-    best_pt_path = latest_dir / "weights" / "best.pt"
-    
-    # 检查best.pt是否存在
-    if best_pt_path.exists():
-        return best_pt_path
-    
-    return None
+from scripts.dev.model_utils import resolve_model_file, build_train_params
+from scripts.dev.post_process import post_process
 
 
-def list_available_models(model_records_path, original_model_path):
-    """
-    列出所有可用的模型供用户选择
-    """
-    models = []
-    
-    # 确保参数是Path对象
-    if isinstance(model_records_path, str):
-        model_records_path = Path(model_records_path)
-    if isinstance(original_model_path, str):
-        original_model_path = Path(original_model_path)
-    
-    # 添加原始模型
-    if original_model_path.exists():
-        models.append(("original", str(original_model_path)))
-    
-    # 添加训练记录中的模型
-    if model_records_path.exists():
-        record_dirs = [d for d in model_records_path.iterdir() if d.is_dir()]
-        # 按修改时间排序，最新的在前面
-        record_dirs.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-        
-        for i, record_dir in enumerate(record_dirs):
-            best_pt_path = record_dir / "weights" / "best.pt"
-            if best_pt_path.exists():
-                models.append((record_dir.name, str(best_pt_path)))
-    
-    return models
-
-
-def select_model_interactive(models):
-    """
-    交互式选择模型
-    """
-    if not models:
-        return None
-    
-    print("\n可用的模型:")
-    print("0. 自动选择 (默认，使用最新的模型)")
-    for i, (name, path) in enumerate(models, 1):
-        print(f"{i}. {name} ({path})")
-    
-    print("\n请选择要使用的模型 (按Enter使用默认选择): ", end="")
+def evaluate_training_progress(results_dir: Path) -> bool:
+    """检查是否应继续训练（True=继续）"""
     try:
-        choice = input().strip()
-        if not choice:  # 按Enter键使用默认选择
-            return None  # 返回None表示使用默认逻辑
-        
-        choice_idx = int(choice)
-        if choice_idx == 0:
-            return None  # 使用默认逻辑
-        elif 1 <= choice_idx <= len(models):
-            return models[choice_idx - 1][1]  # 返回模型路径
-        else:
-            print("无效选择，使用默认逻辑")
-            return None
-    except (ValueError, IndexError):
-        print("输入无效，使用默认逻辑")
-        return None
-
-
-def evaluate_training_progress(results_dir):
-    """
-    评估训练进度，检查是否应该继续训练
-    """
-    try:
-        # 检查results目录是否存在
-        if not results_dir.exists():
-            return True  # 如果没有结果目录，继续训练
-        
-        # 查找results.csv文件
         results_csv = results_dir / "results.csv"
         if not results_csv.exists():
-            return True  # 如果没有结果文件，继续训练
-            
-        # 读取结果文件，检查最近几次的mAP值
-        with open(results_csv, 'r') as f:
-            lines = f.readlines()
-            
-        if len(lines) < 2:  # 至少需要标题行和一行数据
             return True
-            
-        # 解析最后一行数据
-        last_line = lines[-1].strip().split(',')
-        # mAP50通常在特定列，这里简单处理
-        if len(last_line) >= 5:
-            # 假设mAP50在第5列（索引4）
-            try:
-                map50 = float(last_line[7])  # 根据CSV结构调整列索引
-                print(f"当前mAP50值: {map50}")
-                
-                # 如果mAP50还没有达到满意的水平，继续训练
-                if map50 < 0.92:  # 提高阈值以获得更好的性能
-                    return True
-                else:
-                    return False
-            except ValueError:
-                # 如果解析失败，默认继续训练
-                return True
-        
+        lines = results_csv.read_text().strip().splitlines()
+        if len(lines) < 2:
+            return True
+        cols = lines[-1].strip().split(",")
+        if len(cols) >= 8:
+            map50 = float(cols[7])
+            print(f"当前 mAP50: {map50:.4f}")
+            return map50 < 0.92
         return True
     except Exception as e:
-        print(f"评估训练进度时出错: {e}")
-        return True  # 出错时默认继续训练
+        print(f"评估进度异常（默认继续）: {e}")
+        return True
 
 
 def continuous_train(max_cycles=3):
-    """
-    持续训练函数，可以多次循环训练直到满足条件
-    
-    Args:
-        max_cycles: 最大训练循环次数
-    """
     cycle = 0
-    
+    results = None
+
     while cycle < max_cycles:
         cycle += 1
-        print(f"\n开始第 {cycle}/{max_cycles} 轮训练")
-        
-        # 设备选择
+        print(f"\n=== 第 {cycle}/{max_cycles} 轮训练 ===")
+
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        print(f"使用设备: {device}")
-        model_path = "scripts/model"
-        # 配置文件路径
-        data_config = "scripts/hyper/dataset.yaml"
-        hyp_config_path = "scripts/hyper/hyp.yaml"  # 使用统一的超参数配置文件
-        
-        # 加载超参数配置
-        with open(hyp_config_path, "r") as f:
+        print(f"设备: {device}")
+
+        hyp_config_path = Path("scripts/hyper/hyp.yaml")
+        data_config = hyp_config_path.parent / "dataset_new.yaml"
+
+        with open(hyp_config_path, encoding="utf-8") as f:
             hyp_config = yaml.safe_load(f)
-        
-        # 初始化模型 - 优先使用最新的best.pt，备选使用original下的yolo11n.pt
-        model_records_path = Path("scripts/model/records")
-        original_model_path = Path("scripts/model/original/yolo11n.pt")
-        
-        # 获取所有可用模型并让用户选择
-        available_models = list_available_models(model_records_path, original_model_path)
-        selected_model_path = select_model_interactive(available_models)
-        
-        # 根据用户选择或默认逻辑确定模型文件
-        if selected_model_path:
-            model_file = selected_model_path
-            print(f"使用用户选择的模型权重: {model_file}")
-        else:
-            # 尝试查找最新的best.pt
-            latest_model_file = find_latest_model_weights(model_records_path)
-            
-            if latest_model_file and latest_model_file.exists():
-                model_file = latest_model_file
-                print(f"使用最新的模型权重: {model_file}")
-            elif original_model_path.exists():
-                model_file = original_model_path
-                print(f"使用原始模型权重: {model_file}")
-            else:
-                raise FileNotFoundError(f"未找到任何可用的模型文件")
-        
-        # 创建唯一的训练名称，避免覆盖之前的训练结果
+
+        model_file = resolve_model_file(
+            model_records_path=Path("scripts/model/records"),
+            original_model_path=Path("scripts/model/original/yolo11n.pt"),
+        )
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         train_name = f"yolo11n_continuous_{timestamp}"
-        
-        model = YOLO(str(model_file))
-        
-        # 准备数据增强参数
-        augment_params = hyp_config.get("augment", {})
-        
-        # 准备优化器参数
-        optimizer_name = hyp_config["optimizer"]
-        optimizer_params = hyp_config.get(optimizer_name, {})
-        
-        # 合并所有训练参数，避免重复传递
-        train_params = {}
-        # 添加训练参数（除了优化器相关）
-        for key, value in hyp_config.items():
-            if key not in ["optimizer", "Adam", "SGD", "AdamW", "augment"]:
-                train_params[key] = value
-        train_params.update(augment_params)  # 数据增强参数
-        train_params.update(optimizer_params)  # 优化器参数
-        
-        # 执行训练
+
+        model = YOLO(model_file)
+        train_params = build_train_params(hyp_config)
+
         print("开始训练...")
         results = model.train(
             data=str(data_config),
-            optimizer=optimizer_name,  # 传递优化器名称
             device=device,
             pretrained=True,
             name=train_name,
             save=True,
-            **train_params  # 传递合并后的所有参数
+            **train_params,
         )
-        
-        # 检查训练结果目录
-        runs_dir = "runs" / "detect" / train_name
+
+        runs_dir = Path("runs") / "detect" / train_name
+
         if evaluate_training_progress(runs_dir):
-            print("模型还需要继续训练，准备下一轮训练...")
-            
-            # 训练完成后自动归档结果
-            print("正在归档本轮训练结果...")
-            try:
-                if archive_training_results():
-                    print("训练结果归档成功")
-                else:
-                    print("训练结果归档失败")
-            except Exception as e:
-                print(f"归档过程中发生错误: {e}")
-                
+            print("需要继续训练...")
+            post_process(export_onnx_flag=False)
             if cycle < max_cycles:
-                print(f"等待10秒后开始下一轮训练...")
-                time.sleep(10)  # 等待一段时间再开始下一轮训练
+                print("等待 10 秒后下一轮...")
+                time.sleep(10)
         else:
-            print("模型训练已达到满意效果，停止训练")
+            print("精度已达标，停止训练")
             break
-    
-    # 最终归档
-    print("正在进行最终归档...")
-    try:
-        if archive_training_results():
-            print("最终训练结果归档成功")
-        else:
-            print("最终训练结果归档失败")
-    except Exception as e:
-        print(f"归档过程中发生错误: {e}")
-    
+
+    print("最终归档中...")
+    post_process()
+
     return results
 
 
 if __name__ == "__main__":
     try:
-        training_results = continuous_train(max_cycles=3)
+        continuous_train(max_cycles=3)
         print("训练成功完成！")
     except Exception as e:
-        print(f"训练过程中发生错误: {e}")
+        print(f"训练失败: {e}")
         raise

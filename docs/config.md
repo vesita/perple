@@ -189,10 +189,10 @@ ground_sample_test_count = 23
 - `ground_cross_product_patience`: 提高法向量估计精度
 - `ground_sample_test_count`: RANSAC(Random Sample Consensus) 算法的迭代次数
 
-### 点云聚类参数 (Claster)
+### 点云聚类参数 (Cluster)
 
 ```toml
-[claster]
+[cluster]
 # 合并耐心值（距离阈值系数）
 merge_patience = 0.20
 
@@ -309,12 +309,12 @@ extrinsic = [
 - `ground_cross_product_patience`
 - `ground_sample_test_count`
 
-### 点云聚类参数 (claster)
+### 点云聚类参数 (cluster)
 
-- `claster.merge_patience`
-- `claster.merge_threshold`
-- `claster.voxel_size`
-- `claster.use_parallel`
+- `cluster.merge_patience`
+- `cluster.merge_threshold`
+- `cluster.voxel_size`
+- `cluster.use_parallel`
 
 ### 相机参数
 
@@ -356,7 +356,7 @@ ground_cross_product_patience = 3
 ground_sample_test_count = 23
 
 # 点云聚类参数
-[claster]
+[cluster]
 merge_patience = 0.20
 merge_threshold = 0.6
 voxel_size = 0.1

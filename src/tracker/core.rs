@@ -129,7 +129,7 @@ impl TrackedObject {
             class_type,
             last_seen: SystemTime::now(),
             disappeared_count: 0,
-            appearance_count: 0,
+            appearance_count: 1, // 创建即计为第一次出现
             confidence,
             kalman_filter,
             velocity_history: VecDeque::with_capacity(10),

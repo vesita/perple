@@ -10,7 +10,7 @@ Perple 是一个基于 LiDAR + 相机融合的实时 3D 目标检测与跟踪系
 |------|------|----------|
 | `cloud` | 点云处理全流程：地面提取、聚类、融合输出 | `Classify`, `CldBud`, `GroundPickStrategy`, `ClusteringStrategy` |
 | `cloud/ground` | 地面提取策略族（5 种实现） | `HistogramExpand`, `HistoseedPlane`, `RansacGround`, `PeakScan`, `GpfGround` |
-| `cloud/classify` | 聚类策略族 + 分类管线 | `DbscanStrategy`, `RangeImageStrategy`, `Claster` |
+| `cloud/classify` | 聚类策略族 + 分类管线 | `DbscanStrategy`, `RangeImageStrategy`, `Cluster` |
 | `color` | 图像目标检测（YOLO ONNX 推理） | `ClrBud`, `load_model()` |
 | `fuse` | 多模态融合（点云 + 视觉检测结果） | — |
 | `tracker` | 多目标跟踪（Kalman + 状态机） | `Target` |
@@ -90,7 +90,7 @@ pub trait ClusteringStrategy: Send {
 }
 ```
 
-**工厂函数：** `create_strategy()` 读取 `config.claster.strategy` 字段，支持 `"dbscan"`, `"dbscan_adaptive"`, `"range_image"`。
+**工厂函数：** `create_strategy()` 读取 `config.cluster.strategy` 字段，支持 `"dbscan"`, `"dbscan_adaptive"`, `"range_image"`。
 
 ### BenchStrategy（Benchmark）
 
@@ -137,11 +137,9 @@ pub trait Preprocessor {
 | 流容量 | `stream_capacity`, `points_capacity` | Stream 环形缓冲区大小 |
 | 检测 | `default_confidence_threshold`, `default_nms_threshold` | YOLO 推理参数 |
 | 地面 | `ground_strategy`, `ground_expand`, `upside_down` | 地面提取行为 |
-| `[claster]` | `strategy`, `voxel_size`, `eps_slope`, `max_range` | 聚类算法参数 |
+| `[cluster]` | `strategy`, `voxel_size`, `eps_slope`, `max_range` | 聚类算法参数 |
 | `[tracker]` | `max_disappeared`, `moving_speed_threshold` | 跟踪器状态机参数 |
 | `[camera]` | `intrinsic` (3x3), `extrinsic` (4x4) | 相机内外参矩阵 |
-
-**注意：** 字段名 `claster` 是历史拼写（非 cluster），代码中统一使用此拼写。
 
 ## 关键设计决策
 
@@ -158,7 +156,7 @@ pub trait Preprocessor {
 
 三个策略 trait 都配合工厂函数使用：
 - `create_ground_strategy()` — 固定返回默认策略（`HistogramExpand`）
-- `create_strategy()` — 读取配置动态分发（`cfg.claster.strategy`）
+- `create_strategy()` — 读取配置动态分发（`cfg.cluster.strategy`）
 - Bench 中直接构造（`HistogramExpand::with_expand(0.10)`）
 
 工厂函数返回 `Box<dyn Trait>`，实现运行时多态。策略通过 `with_params()` 构造函数接受自定义参数，无参数时使用 `new()` 从 `fixif()` 读取默认值。

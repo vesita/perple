@@ -1,4 +1,4 @@
-path: ./data/color
+path: ./data/yolo
 train: train/images
 val: valid/images
 test: test/images

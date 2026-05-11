@@ -8,7 +8,7 @@ model_path = "./module/color/yolo11s.onnx"
 dbscan_min_points = 5
 
 # 更新点云聚类参数
-[claster]
+[cluster]
 merge_patience = 0.15
 voxel_size = 0.05
 

@@ -263,7 +263,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let rec = BenchRecorder::new(&format!("{}/{}.db", out, db_name))
                 .map_err(|e| format!("创建 recorder 失败: {}", e))?;
             let mut recs = vec![rec];
-            let harness = BenchHarness::new("./data/test", frame_limit);
+            let harness = BenchHarness::new("./data/cloud", frame_limit);
             let mut pp = WallPreprocessor::default();
             harness.run(&mut pp, &mut strategies, &mut recs).await?;
             recs[0].save().map_err(|e| format!("保存失败: {}", e))?;
@@ -271,7 +271,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         BenchMode::Quick | BenchMode::Full => {
             let mut pp = WallPreprocessor::default();
-            run_toml_bench("wall", "./data/test", effective_mode, &mut pp, &WallBuilder).await?;
+            run_toml_bench("wall", "./data/cloud", effective_mode, &mut pp, &WallBuilder).await?;
         }
     }
     Ok(())

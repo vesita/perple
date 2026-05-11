@@ -24,8 +24,8 @@ params = [
   { radius = 0.40, min_pts = 3 },
 ]
 [stats]
-fastest_ms = 3.7986999999999997
-slowest_ms = 11.5165
-avg_ms = 6.213109999999996
-median_ms = 6.1255500000000005
-last_run = "1778474406"
+fastest_ms = 4.6768
+slowest_ms = 556.169
+avg_ms = 133.18323444444442
+median_ms = 11.189599999999999
+last_run = "1778476637"

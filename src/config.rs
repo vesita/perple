@@ -21,7 +21,15 @@ pub struct Config {
     pub default_nms_threshold: f32,
 
     // 点云聚类参数
-    pub claster: ClasterConfig,
+    pub cluster: ClusterConfig,
+
+    // 墙体提取参数
+    pub wall_strategy: String,
+    pub wall_distance: f32,
+    pub wall_iterations: usize,
+    pub wall_eps: f32,
+    pub wall_min_pts: usize,
+    pub wall_min_z_span: f32,
 
     // 地面检测参数
     pub ground_strategy: String,
@@ -41,7 +49,7 @@ pub struct Config {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct ClasterConfig {
+pub struct ClusterConfig {
     pub strategy: String,
     pub merge_patience: f32,
     pub voxel_size: f32,
@@ -141,12 +149,12 @@ impl Config {
             };
         }
 
-        // 添加专门用于claster配置更新的宏
-        macro_rules! update_claster_field {
+        // 添加专门用于cluster配置更新的宏
+        macro_rules! update_cluster_field {
             ($field:ident) => {
-                if let Some(ref claster) = partial_config.claster {
-                    if let Some(ref value) = claster.$field {
-                        self.claster.$field = value.clone();
+                if let Some(ref cluster) = partial_config.cluster {
+                    if let Some(ref value) = cluster.$field {
+                        self.cluster.$field = value.clone();
                     }
                 }
             };
@@ -162,6 +170,13 @@ impl Config {
         update_field!(default_nms_threshold);
         update_field!(model_path);
 
+        update_field!(wall_strategy);
+        update_field!(wall_distance);
+        update_field!(wall_iterations);
+        update_field!(wall_eps);
+        update_field!(wall_min_pts);
+        update_field!(wall_min_z_span);
+
         update_field!(ground_strategy);
         update_field!(ground_expand);
         update_field!(ground_ransac_distance);
@@ -169,20 +184,20 @@ impl Config {
         update_field!(upside_down);
         update_field!(has_ceiling);
 
-        // 使用新的宏来更新claster配置
-        update_claster_field!(merge_patience);
-        update_claster_field!(voxel_size);
-        update_claster_field!(eps_slope);
-        update_claster_field!(strategy);
-        update_claster_field!(azimuth_resolution);
-        update_claster_field!(elevation_resolution);
-        update_claster_field!(cluster_threshold);
-        update_claster_field!(downsample_method);
-        update_claster_field!(gaussian_downsample_rate);
-        update_claster_field!(density_weight_alpha);
-        update_claster_field!(max_range);
-        update_claster_field!(ceiling_filter);
-        update_claster_field!(ceiling_height);
+        // 使用新的宏来更新cluster配置
+        update_cluster_field!(merge_patience);
+        update_cluster_field!(voxel_size);
+        update_cluster_field!(eps_slope);
+        update_cluster_field!(strategy);
+        update_cluster_field!(azimuth_resolution);
+        update_cluster_field!(elevation_resolution);
+        update_cluster_field!(cluster_threshold);
+        update_cluster_field!(downsample_method);
+        update_cluster_field!(gaussian_downsample_rate);
+        update_cluster_field!(density_weight_alpha);
+        update_cluster_field!(max_range);
+        update_cluster_field!(ceiling_filter);
+        update_cluster_field!(ceiling_height);
 
         update_nested_field!(camera, intrinsic);
         update_nested_field!(camera, extrinsic);
@@ -250,7 +265,14 @@ struct PartialConfig {
     pub default_confidence_threshold: Option<f32>,
     pub default_nms_threshold: Option<f32>,
 
-    pub claster: Option<PartialClasterConfig>,
+    pub cluster: Option<PartialClusterConfig>,
+
+    pub wall_strategy: Option<String>,
+    pub wall_distance: Option<f32>,
+    pub wall_iterations: Option<usize>,
+    pub wall_eps: Option<f32>,
+    pub wall_min_pts: Option<usize>,
+    pub wall_min_z_span: Option<f32>,
 
     pub ground_strategy: Option<String>,
     pub ground_expand: Option<f32>,
@@ -299,7 +321,7 @@ struct PartialTrackerConfig {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-struct PartialClasterConfig {
+struct PartialClusterConfig {
     pub strategy: Option<String>,
     pub merge_patience: Option<f32>,
     pub voxel_size: Option<f32>,

@@ -16,7 +16,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
     info!("Perple 检测流程可视化（14 帧）");
 
-    let mut data_loader = DataLoader::new("./data/test".to_string());
+    let mut data_loader = DataLoader::new("./data/cloud".to_string());
     data_loader.set_frame_limit(14);
     info!("开始加载数据...");
     let load_start = std::time::Instant::now();

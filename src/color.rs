@@ -51,7 +51,7 @@ pub mod utils;
 
 // 重新导出主要类型，方便外部使用
 pub use model::load_model;
-pub use image::{load_image, resize_image, image_to_tensor, input_image, fill_input_image};
+pub use image::{load_image, resize_image, image_to_tensor, input_image, fill_input_image, UndistortMap};
 pub use detect::YoloDetector;
 
 

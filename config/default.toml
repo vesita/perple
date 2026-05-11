@@ -6,11 +6,11 @@ points_capacity = 16384
 # 目标检测超参数配置
 default_input_width = 640
 default_input_height = 640
-default_confidence_threshold = 0.6
+default_confidence_threshold = 0.7
 default_nms_threshold = 0.7
 
 # 模型路径
-model_path = "module/color/yolo11n.onnx"
+model_path = "model/quantized/yolo11n.onnx"
 
 # 地面检测参数（直方图种子 + RANSAC 平面拟合生长）
 ground_strategy = "peak_scan"  # 地面提取策略: "histogram", "histoseed", "ransac", "peak_scan", "gpf"
@@ -18,10 +18,18 @@ ground_expand = 0.10       # 地面种子区域 Z 向扩展量（米），peak_z
 ground_ransac_distance = 0.3   # RANSAC 平面拟合内点距离阈值（米）
 ground_ransac_iterations = 50  # RANSAC 迭代次数
 upside_down = true         # 点云 Z 轴是否上下翻转（LiDAR 安装朝下时为 true）
-has_ceiling = false        # 是否有天花板（配合 [claster].ceiling_filter 使用）
+has_ceiling = false        # 是否有天花板（配合 [cluster].ceiling_filter 使用）
+
+# 墙体提取策略（用于追踪管线，bench 使用 config/bench/wall/*.toml）
+wall_strategy = "xy_ransac"   # 墙体提取策略: xy_ransac / top_down / quadtree / normal_wall / xy_dbscan_wall / adaptive_dbscan / seq_fit
+wall_distance = 0.05         # XYRansacWall 距离阈值
+wall_iterations = 50         # XYRansacWall RANSAC 迭代次数
+wall_eps = 0.20              # XYDBSCANWall eps
+wall_min_pts = 5             # XYDBSCANWall min_pts
+wall_min_z_span = 1.0        # XYDBSCANWall 最小 Z 跨度
 
 # 点云聚类参数
-[claster]
+[cluster]
 # 聚类策略: "dbscan"（固定eps）, "dbscan_adaptive"（eps随距离线性增长）, "range_image"
 strategy = "xy_grid_dbscan"
 # 基础邻域半径 eps（米），自适应模式下为 eps 截距；eps(p) = merge_patience + eps_slope * range(p)
@@ -61,7 +69,7 @@ max_disappeared = 8
 # 聚类结果置信度低于此值的检测被过滤，不参与匹配
 min_confidence = 0.5
 # 轨迹累计出现次数低于此值不输出（过滤一次性噪声目标）
-min_appearances = 3
+min_appearances = 2
 # 点云投票开关：通过对比历史点云位移判断目标是否真正在运动
 use_point_cloud_voting = true
 # 点云投票阈值：超过此比例的点发生位移则判定为运动
@@ -115,4 +123,4 @@ extrinsic = [
 ]
 
 # OpenCV 畸变系数 [k1, k2, p1, p2, k3]，省略表示无畸变
-# dist_coeffs = [-0.498, 0.306, -0.0056, -0.0019, -0.100]
+dist_coeffs = [-0.498, 0.306, -0.0056, -0.0019, -0.100]

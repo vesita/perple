@@ -66,7 +66,7 @@
 ├── src
 │   ├── cloud/
 │   │   ├── classify/
-│   │   │   ├── claster.rs
+│   │   │   ├── cluster.rs
 │   │   │   ├── core.rs
 │   │   │   ├── environment.rs
 │   │   │   ├── kdtree.rs
@@ -148,7 +148,7 @@ LiDAR 点云数据处理模块：
 
 - **core.rs**: 点云数据核心处理（PCD 格式读取、LiDAR 原生帧）
 - **classify/**: 点云分类子模块
-  - **claster.rs**: DBSCAN 聚类算法实现（基于距离阈值和最小点数）
+  - **cluster.rs**: DBSCAN 聚类算法实现（基于距离阈值和最小点数）
   - **core.rs**: 分类核心逻辑（地面检测 → 聚类）
   - **environment.rs**: 地面检测（histoseed 混合策略：直方图种子 + RANSAC 生长），支持倒装 LiDAR
   - **kdtree.rs**: KD-Tree 空间索引（快速近邻搜索）

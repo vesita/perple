@@ -77,6 +77,19 @@ impl Lidar {
         }
     }
 
+    /// 使用预先配置的 Classify 创建 Lidar 实例
+    pub fn with_classify(classify: Classify) -> Self {
+        let pool = global_swapl();
+        info!("Lidar 模块初始化（自定义策略）");
+        Self {
+            cream: Cream {
+                in_stream: pool.clouds.clone(),
+                out_stream: pool.clouds_out.clone(),
+            },
+            classify,
+        }
+    }
+
     pub async fn act(&mut self) -> Result<(), LidarError> {
         self.read_input().await?;
 

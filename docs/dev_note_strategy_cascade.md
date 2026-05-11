@@ -88,13 +88,13 @@ recorder.save("output.rdra");              // 保存文件
 ```rust
 // ground_bench：无前序处理
 let mut preprocessor = PassthroughPreprocessor;
-BenchHarness::new("./data/test", 5, "output/ground_bench")
+BenchHarness::new("./data/cloud", 5, "output/ground_bench")
     .run(&mut preprocessor, &mut strategies)
     .await?;
 
 // cluster_bench：地面提取作为前序
 let mut preprocessor = GroundPreprocessor::default();
-BenchHarness::new("./data/test", 64, "output/cluster_bench")
+BenchHarness::new("./data/cloud", 64, "output/cluster_bench")
     .run(&mut preprocessor, &mut strategies)
     .await?;
 ```
@@ -121,7 +121,7 @@ let mut strategies: Vec<Box<dyn BenchStrategy>> = vec![
     Box::new(GroundBench::new("ransac",    Box::new(RansacGround::new()))),
 ];
 let mut preprocessor = PassthroughPreprocessor;
-BenchHarness::new("./data/test", 64, "output/ground_bench")
+BenchHarness::new("./data/cloud", 64, "output/ground_bench")
     .run(&mut preprocessor, &mut strategies).await?;
 ```
 

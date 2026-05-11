@@ -26,14 +26,14 @@ impl DbscanStrategy {
     pub fn new() -> Self {
         let cfg = fixif();
         Self {
-            patience: cfg.claster.merge_patience,
-            eps_slope: cfg.claster.eps_slope,
-            min_points: cfg.claster.min_points_per_cluster.unwrap_or(3),
-            max_points_per_node: cfg.claster.max_points_per_node.unwrap_or(50),
-            max_tree_depth: cfg.claster.max_tree_depth.unwrap_or(10),
-            voxel_size: cfg.claster.voxel_size,
-            downsample_method: cfg.claster.downsample_method.clone(),
-            gaussian_sigma: cfg.claster.gaussian_downsample_rate,
+            patience: cfg.cluster.merge_patience,
+            eps_slope: cfg.cluster.eps_slope,
+            min_points: cfg.cluster.min_points_per_cluster.unwrap_or(3),
+            max_points_per_node: cfg.cluster.max_points_per_node.unwrap_or(50),
+            max_tree_depth: cfg.cluster.max_tree_depth.unwrap_or(10),
+            voxel_size: cfg.cluster.voxel_size,
+            downsample_method: cfg.cluster.downsample_method.clone(),
+            gaussian_sigma: cfg.cluster.gaussian_downsample_rate,
             quad_tree: None,
             x_min: -100.0,
             x_max: 100.0,

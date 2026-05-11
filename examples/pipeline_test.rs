@@ -7,9 +7,12 @@
 //!   cargo run --example pipeline_test
 //!   cargo run --example pipeline_test -- --frames 50
 
-use std::time::Instant;
+use std::path::PathBuf;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use perple::cloud::core::Lidar;
+use perple::cloud::classify::core::Classify;
+use perple::cloud::wall::XYDBSCANWall;
 use perple::cloud::output::CldBud;
 use perple::color::core::Camera;
 use perple::fuse::Fuse;
@@ -105,6 +108,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .position(|a| a == "--frames")
         .and_then(|i| args.get(i + 1))
         .and_then(|s| s.parse().ok());
+    let wall_strategy: Option<String> = args.iter()
+        .position(|a| a == "--wall" || a.starts_with("--wall="))
+        .and_then(|i| {
+            if args[i] == "--wall" {
+                args.get(i + 1).cloned()
+            } else {
+                args[i].split_once('=').map(|(_, v)| v.to_string())
+            }
+        });
 
     // ─── 检查 YOLO 模型 ─────────────────────────────────────────────────────
     let config = perple::config::fixif();
@@ -117,7 +129,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // ─── 初始化数据加载器 ─────────────────────────────────────────────────
-    let mut data_loader = DataLoader::new("./data/test".to_string());
+    let mut data_loader = DataLoader::new("./data/cloud".to_string());
     data_loader.load().await?;
     let n_frames = n_frames_limit
         .map(|n| n.min(data_loader.frame_count()))
@@ -125,16 +137,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("数据目录：{} 帧可用（已预加载）", n_frames);
 
     // ─── 初始化模块 ──────────────────────────────────────────────────────
-    let mut lidar = Lidar::new();
+    let mut lidar = match wall_strategy.as_deref() {
+        Some("xy_dbscan_wall") => {
+            let wall = XYDBSCANWall::with_params(0.20, 5, 1.0);
+            info!("墙体策略: xy_dbscan_wall eps=0.20 min_pts=5 min_z_span=1.0");
+            let classify = Classify::new().with_wall_strategy(Box::new(wall));
+            Lidar::with_classify(classify)
+        }
+        _ => {
+            let cfg = perple::config::fixif();
+            info!("墙体策略: {} (config 默认)", cfg.wall_strategy);
+            Lidar::new()
+        }
+    };
     let mut camera = Camera::new();
     let mut fuse = Fuse::new();
     let mut tracker = Tracker::new();
 
-    // 四个独立输出流
-    let mut writer_ground = FrameWriter::new("output/ground_result.db")?;
-    let mut writer_wall = FrameWriter::new("output/wall_result.db")?;
-    let mut writer_cluster = FrameWriter::new("output/cluster_result.db")?;
-    let mut writer_tracker = FrameWriter::new("output/tracker_result.db")?;
+    // 四个独立输出流（每次运行独立子目录）
+    let out_dir = {
+        let secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        PathBuf::from(format!("output/pipeline_test_{}", secs))
+    };
+    let mut writer_ground = FrameWriter::new(out_dir.join("ground_result.db"))?;
+    let mut writer_wall = FrameWriter::new(out_dir.join("wall_result.db"))?;
+    let mut writer_cluster = FrameWriter::new(out_dir.join("cluster_result.db"))?;
+    let mut writer_tracker = FrameWriter::new(out_dir.join("tracker_result.db"))?;
 
     // ─── 两级流水 ────────────────────────────────────────────────────────
     let total_start = Instant::now();
@@ -253,7 +281,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     writer_wall.save()?;
     writer_cluster.save()?;
     writer_tracker.save()?;
-    println!("输出保存至 output/ 目录：ground / wall / cluster / tracker");
+    println!("输出保存至 {}/ 目录", out_dir.display());
 
     Ok(())
 }
