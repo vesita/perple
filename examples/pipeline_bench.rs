@@ -26,7 +26,6 @@ struct FrameStats {
     n_after_range: usize,
     n_sampled: usize,
     n_clusters: usize,
-    n_humans: usize,
 }
 
 /// 组合策略测试用例
@@ -39,13 +38,13 @@ struct PipelineBenchCase {
     total_ms: f64,
     frame_count: usize,
     acc_wall: usize,
+    acc_total_input: usize,
     acc_after_voxel: usize,
     acc_after_range: usize,
     acc_clusters: usize,
-    acc_humans: usize,
     frame_times: Vec<f64>,
     last: FrameStats,
-    last_boxes: Vec<(Box3D, bool)>, // (包围盒, 是否行人) 供 write_frame 输出
+    last_boxes: Vec<Box3D>,        // 障碍物包围盒（供 write_frame 输出）
 }
 
 impl PipelineBenchCase {
@@ -58,10 +57,10 @@ impl PipelineBenchCase {
             total_ms: 0.0,
             frame_count: 0,
             acc_wall: 0,
+            acc_total_input: 0,
             acc_after_voxel: 0,
             acc_after_range: 0,
             acc_clusters: 0,
-            acc_humans: 0,
             frame_times: Vec::new(),
             last: FrameStats::default(),
             last_boxes: Vec::new(),
@@ -99,12 +98,14 @@ impl BenchStrategy for PipelineBenchCase {
         let mut buf = frame.non_ground().to_vec();
 
         // 1. 墙体提取
+        let n_wall_before = buf.len();
         let n_wall = if let Some(ref mut w) = self.create_wall() {
             let (n, _) = w.pick(&mut buf);
             n
         } else {
             0
         };
+        self.acc_total_input += n_wall_before;
 
         // 2. LV-DOT 体素占用过滤
         let (after_voxel, _) = XYGrid::voxel_occupancy_filter(&buf[n_wall..], 0.10, self.voxel_min_occ);
@@ -126,9 +127,8 @@ impl BenchStrategy for PipelineBenchCase {
         let mut cluster = self.create_cluster();
         let (sampled, objects) = cluster.run(&cluster_input);
         let n_clusters = objects.len();
-        let n_humans = count_human_like(&objects, &sampled);
 
-        // 构建输出可视化包围盒
+        // 构建输出可视化包围盒（仅障碍物，不分类）
         let mut last_boxes = Vec::with_capacity(objects.len());
         for obj in &objects {
             if obj.len() < 3 { continue; }
@@ -137,8 +137,7 @@ impl BenchStrategy for PipelineBenchCase {
             let w = b.length.max(b.width);
             let h = b.height;
             if w < 0.25 || h < 0.5 { continue; }
-            let is_human = h > w * 0.5 && w < 1.2 && h > 1.0 && h < 2.5;
-            last_boxes.push((b, is_human));
+            last_boxes.push(b);
         }
         self.last_boxes = last_boxes;
 
@@ -148,7 +147,6 @@ impl BenchStrategy for PipelineBenchCase {
             n_after_range: cluster_input.len(),
             n_sampled: sampled.len(),
             n_clusters,
-            n_humans,
         };
 
         let elapsed = start.elapsed();
@@ -160,7 +158,6 @@ impl BenchStrategy for PipelineBenchCase {
         self.acc_after_voxel += n_after_voxel;
         self.acc_after_range += cluster_input.len();
         self.acc_clusters += n_clusters;
-        self.acc_humans += n_humans;
 
         elapsed
     }
@@ -175,22 +172,12 @@ impl BenchStrategy for PipelineBenchCase {
             recorder.write_raw_cloud(&[ng[i]], "point_cloud", 1);
         }
 
-        // 写入聚类包围盒（行人为绿色 person，障碍物为灰色 disabled）
-        let mut human_boxes = Vec::new();
-        let mut obst_boxes = Vec::new();
-        for (box3d, is_human) in &self.last_boxes {
-            let tag = if *is_human { "person".into() } else { "obstacle".into() };
-            if *is_human {
-                human_boxes.push((box3d.clone(), tag));
-            } else {
-                obst_boxes.push((box3d.clone(), tag));
-            }
-        }
-        if !human_boxes.is_empty() {
-            recorder.write_boxes(&human_boxes, "person");
-        }
-        if !obst_boxes.is_empty() {
-            recorder.write_boxes(&obst_boxes, "disabled");
+        // 写入聚类包围盒（全部以统一材质输出，不区分行人）
+        let boxes: Vec<(Box3D, String)> = self.last_boxes.iter()
+            .map(|b| (b.clone(), "obstacle".into()))
+            .collect();
+        if !boxes.is_empty() {
+            recorder.write_boxes(&boxes, "obstacle");
         }
 
         recorder.end_frame();
@@ -198,9 +185,9 @@ impl BenchStrategy for PipelineBenchCase {
         // 每帧进度显示
         if self.frame_count % 20 == 0 {
             let avg_ms = self.total_ms / self.frame_count as f64;
-            println!("  [{}] 帧 {} | 墙={} 剩余={} 簇={} 人={} | {:.0}ms/帧",
+            println!("  [{}] 帧 {} | 墙={} 剩余={} 簇={} | {:.0}ms/帧",
                 self.name, self.frame_count, self.last.n_wall,
-                self.last.n_after_range, self.last.n_clusters, self.last.n_humans, avg_ms);
+                self.last.n_after_range, self.last.n_clusters, avg_ms);
         }
     }
 
@@ -209,16 +196,15 @@ impl BenchStrategy for PipelineBenchCase {
         let avg_ms = self.total_ms / n;
         let avg_remain = self.acc_after_range as f64 / n;
         let avg_clusters = self.acc_clusters as f64 / n;
-        let avg_humans = self.acc_humans as f64 / n;
-        let total_in = (self.acc_wall + self.acc_after_voxel) as f64;
+        let total_in = self.acc_total_input as f64;
         let wall_pct = if total_in > 0.0 {
             self.acc_wall as f64 / total_in * 100.0
         } else {
             0.0
         };
         let status = if avg_ms > 100.0 { " [OVER]" } else { "" };
-        println!("  {:<36} | {:>5.0}% | {:>6.0} | {:>4.1} | {:>4.1} | {:>6.1}ms | {}{}",
-            self.name, wall_pct, avg_remain, avg_clusters, avg_humans, avg_ms, n as usize, status);
+        println!("  {:<36} | {:>5.0}% | {:>6.0} | {:>4.1} | {:>6.1}ms | {}{}",
+            self.name, wall_pct, avg_remain, avg_clusters, avg_ms, n as usize, status);
     }
 
     fn stats(&self) -> BenchStats {
@@ -299,12 +285,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("═══ 全流程策略对比 ({} 帧上限) ═══\n", frame_limit);
 
     let mut strategies = build_strategies();
-    let harness = BenchHarness::new("./data/test", frame_limit, "output/pipeline_bench");
+    let tmp_dir = std::env::temp_dir().join("pipeline_bench");
+    let mut recorders: Vec<BenchRecorder> = (0..strategies.len())
+        .map(|i| BenchRecorder::new(tmp_dir.join(format!("{}.db", i))).expect("创建 recorder 失败"))
+        .collect();
+    let harness = BenchHarness::new("./data/test", frame_limit);
     let mut preprocessor = GroundPreprocessor::default();
-    harness.run(&mut preprocessor, &mut strategies).await?;
+    harness.run(&mut preprocessor, &mut strategies, &mut recorders).await?;
 
     // ─── 按速度升序排序输出 ─────────────────────────────────────────────
-    // 按速度排序
     strategies.sort_by(|a, b| {
         let at = a.stats().total_ms / a.stats().frame_count.max(1) as f64;
         let bt = b.stats().total_ms / b.stats().frame_count.max(1) as f64;
@@ -312,32 +301,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     println!("\n═══ 按速度升序 ═══");
-    println!("{:-<88}", "");
-    println!("  {:<36} | {:>5} | {:>6} | {:>4} | {:>4} | {:>7} | {}",
-        "策略", "墙%", "剩余", "簇", "人", "ms/帧", "帧数");
-    println!("{:-<88}", "");
+    println!("{:-<80}", "");
+    println!("  {:<36} | {:>5} | {:>6} | {:>4} | {:>7} | {}",
+        "策略", "墙%", "剩余", "簇", "ms/帧", "帧数");
+    println!("{:-<80}", "");
     for s in &strategies {
         s.summarize();
     }
-    println!("{:-<88}", "");
+    println!("{:-<80}", "");
     println!("标记 [OVER] = 帧均超过 100ms，建议排除");
 
     Ok(())
-}
-
-/// 统计类人物体数量（宽<1.2m, 高1.0-2.5m, 高>宽×0.5）
-fn count_human_like(objects: &[Vec<usize>], points: &[[f32; 3]]) -> usize {
-    let mut count = 0;
-    for obj in objects {
-        if obj.len() < 3 { continue; }
-        let pts: Vec<[f32; 3]> = obj.iter().map(|&i| points[i]).collect();
-        let b = Box3D::from_cloud_aabb(&pts, 0.05);
-        let w = b.length.max(b.width);
-        let h = b.height;
-        if w < 0.25 || h < 0.5 { continue; }
-        if h > w * 0.5 && w < 1.2 && h > 1.0 && h < 2.5 {
-            count += 1;
-        }
-    }
-    count
 }

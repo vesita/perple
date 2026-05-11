@@ -1,191 +1,210 @@
 use std::time::{Duration, Instant};
 
-use perple::bench::{BenchStrategy, BenchStats, BenchHarness, BenchRecorder, FrameData, PassthroughPreprocessor};
+use perple::bench::{
+    BenchStrategy, BenchStats, BenchHarness, BenchRecorder, FrameData, CliArgs, BenchMode,
+    PassthroughPreprocessor,
+    run_toml_bench,
+    mats,
+};
 use perple::cloud::ground::*;
+use perple::config::fixif;
 use perple::utils::boxes::Box3D;
-
-// redra 语义材质短名（register_category 注册）
-const MAT_RAW: &str = "point_cloud";      // 暖白，专为点云设计
-const MAT_GROUND: &str = "ground";         // 暗橄榄绿，低饱和不抢视线
-const MAT_NON_GROUND: &str = "cyan";       // 冷色，与地面互补
-const MAT_BOX: &str = "disabled";          // 暗灰半透明包围盒，区分内外点
+use redra_client::spawn_point;
 
 struct GroundBenchCase {
     name: String,
     strategy: Box<dyn GroundPickStrategy>,
-    total_us: u128,
-    frame_count: usize,
+    total_ms: f64, frame_count: usize,
     frame_times: Vec<f64>,
-    last_n_ground: usize,
-    last_cloud: Vec<[f32; 3]>,
+    last_n_ground: usize, last_cloud: Vec<[f32; 3]>,
+    last_ground_box: Option<Box3D>,
+    total_ground_pts: usize, total_input_pts: usize,
 }
 
 impl GroundBenchCase {
     fn new(name: &str, strategy: Box<dyn GroundPickStrategy>) -> Self {
         Self {
-            name: name.to_string(),
-            strategy,
-            total_us: 0,
-            frame_count: 0,
-            frame_times: Vec::new(),
-            last_n_ground: 0,
-            last_cloud: Vec::new(),
+            name: name.to_string(), strategy,
+            total_ms: 0.0, frame_count: 0, frame_times: Vec::new(),
+            last_n_ground: 0, last_cloud: Vec::new(),
+            last_ground_box: None,
+            total_ground_pts: 0, total_input_pts: 0,
         }
     }
 }
 
 impl BenchStrategy for GroundBenchCase {
     fn name(&self) -> &str { &self.name }
-
     fn run(&mut self, frame: &FrameData) -> Duration {
         let mut cloud = frame.cloud.to_vec();
         let start = Instant::now();
         let (n_ground, _, _) = self.strategy.pick(&mut cloud);
         let elapsed = start.elapsed();
-        self.total_us += elapsed.as_micros();
-        self.frame_count += 1;
-        self.frame_times.push(elapsed.as_secs_f64() * 1000.0);
-        self.last_n_ground = n_ground;
-        self.last_cloud = cloud;
+
+        let ground_box = if n_ground >= 3 {
+            Some(Box3D::from_cloud_aabb(&cloud[..n_ground], 0.0))
+        } else {
+            None
+        };
+
+        self.total_ms += elapsed.as_secs_f64() * 1000.0;
+        self.frame_count += 1; self.frame_times.push(elapsed.as_secs_f64() * 1000.0);
+        self.total_ground_pts += n_ground; self.total_input_pts += cloud.len();
+        self.last_n_ground = n_ground; self.last_cloud = cloud;
+        self.last_ground_box = ground_box;
         elapsed
     }
-
     fn write_frame(&mut self, recorder: &mut BenchRecorder, frame: &FrameData) {
-        let cloud = &self.last_cloud;
-        let n_ground = self.last_n_ground;
-
         recorder.begin_frame(frame.frame_idx);
 
-        // 原始点云背景（受 write_raw 开关控制，默认关闭避免与分类点云重复）
-        let raw_step = (frame.cloud.len() / 5000).max(1);
-        for i in (0..frame.cloud.len()).step_by(raw_step) {
-            recorder.write_raw_cloud(&[frame.cloud[i]], MAT_RAW, 1);
+        // 全量写入点云（SQLite 无内存累积，不再需要降采样）
+        for (i, pt) in self.last_cloud.iter().enumerate() {
+            let id = i as u64;
+            recorder.spawn(spawn_point(*pt, mats::BG).id(id));
         }
 
-        // 地面点（暗橄榄绿，语义层）
-        let g_step = (n_ground / 3000).max(1);
-        for i in (0..n_ground).step_by(g_step) {
-            recorder.write_point_cloud(&[cloud[i]], MAT_GROUND, 1);
+        // 更新地面点材质为绿色
+        for i in 0..self.last_n_ground {
+            recorder.set_material(i as u64, mats::GROUND);
         }
 
-        // 非地面点（青色，冷色与地面互补）
-        let non_ground_start = n_ground;
-        let non_ground_count = cloud.len() - n_ground;
-        let ng_step = (non_ground_count / 3000).max(1);
-        for i in (non_ground_start..cloud.len()).step_by(ng_step) {
-            recorder.write_point_cloud(&[cloud[i]], MAT_NON_GROUND, 1);
+    // 地面区域包围盒（半透明，不遮挡点云）
+    if let Some(ref bx) = self.last_ground_box {
+        recorder.write_boxes(&[(bx.clone(), "ground".into())], mats::GROUND_BOX);
+    }
+
+        if self.last_n_ground > 0 {
+            let z_min = self.last_cloud[..self.last_n_ground].iter().map(|p| p[2]).fold(f32::INFINITY, f32::min);
+            let z_max = self.last_cloud[..self.last_n_ground].iter().map(|p| p[2]).fold(f32::NEG_INFINITY, f32::max);
+            let ratio = self.last_n_ground as f64 / self.last_cloud.len() as f64 * 100.0;
+            let avg_ms = self.total_ms / self.frame_count.max(1) as f64;
+            println!("[{}] 地面 {}/{} ({:.0}%) Z=[{:.2},{:.2}] {:.1}ms",
+                self.name, self.last_n_ground, self.last_cloud.len(), ratio, z_min, z_max, avg_ms);
         }
-
-        // 地面包围盒（半透明，最小边长 0.05m）
-        if n_ground > 0 {
-            let ground_pts = &cloud[..n_ground];
-            let ground_box = Box3D::from_cloud_aabb(ground_pts, 0.05);
-
-            // 诊断：打印地面点 Z 范围和包围盒尺寸
-            let z_min = ground_pts.iter().map(|p| p[2]).fold(f32::INFINITY, f32::min);
-            let z_max = ground_pts.iter().map(|p| p[2]).fold(f32::NEG_INFINITY, f32::max);
-            let ratio = n_ground as f64 / cloud.len() as f64 * 100.0;
-            println!("[{}] 地面 {}/{} ({:.0}%) | Z=[{:.2},{:.2}] | 盒 {:.1}×{:.1}×{:.2}m",
-                self.name, n_ground, cloud.len(), ratio,
-                z_min, z_max, ground_box.length, ground_box.width, ground_box.height);
-
-            let avg_us = self.total_us / self.frame_count.max(1) as u128;
-            let tag = format!("{} | {}pts | {}μs/帧", self.name, n_ground, avg_us);
-            recorder.write_boxes(&[(ground_box, tag)], MAT_BOX);
-        }
-
         recorder.end_frame();
     }
-
     fn summarize(&self) {
         let n = self.frame_count.max(1) as f64;
-        let avg_us = self.total_us as f64 / n;
-        let avg_ms = avg_us / 1000.0;
-        let status = if avg_ms > 100.0 { " [OVER 100ms]" } else { "" };
-        println!("  {:<28} | 平均 {:>7.0}μs ({:>5.1}ms) | {} 帧{}",
-            self.name, avg_us, avg_ms, self.frame_count, status);
+        let avg_ms = self.total_ms / n;
+        println!("  {:<36} | 平均 {:>7.1}ms | {} 帧{}", self.name, avg_ms, self.frame_count,
+            if avg_ms > 100.0 { " [OVER 100ms]" } else { "" });
     }
-
     fn stats(&self) -> BenchStats {
-        BenchStats {
-            name: self.name.clone(),
-            frame_count: self.frame_count,
-            total_ms: self.total_us as f64 / 1000.0,
-            frame_times: self.frame_times.clone(),
-        }
+        BenchStats { name: self.name.clone(), frame_count: self.frame_count, total_ms: self.total_ms, frame_times: self.frame_times.clone() }
+    }
+    fn extra_metrics(&self) -> Vec<(String, f64)> {
+        let n = self.frame_count.max(1) as f64;
+        vec![
+            ("avg_ground".into(), self.total_ground_pts as f64 / n),
+            ("avg_total".into(), self.total_input_pts as f64 / n),
+            ("ground_ratio".into(), self.total_ground_pts as f64 / self.total_input_pts.max(1) as f64 * 100.0),
+        ]
+    }
+}
+
+// ── 策略工厂 ──────────────────────────────────────────────
+
+fn build_ground_strategy(cli: &CliArgs) -> Box<dyn GroundPickStrategy> {
+    let cfg = fixif();
+    let strat = cli.get::<String>("strategy", cfg.ground_strategy.clone());
+    let expand = cli.get("expand", cfg.ground_expand);
+    let distance = cli.get("distance", cfg.ground_ransac_distance);
+    let iterations = cli.get("iterations", cfg.ground_ransac_iterations);
+    let n_lpr = cli.get("n-lpr", 100usize);
+    let th_seed = cli.get("th-seed", 0.5f32);
+    let th_dist = cli.get("th-dist", 0.3f32);
+    match strat.as_str() {
+        "histogram" => Box::new(HistogramExpand::with_expand(expand)),
+        "peak_scan" => Box::new(PeakScan::with_params(0.10, expand)),
+        "ransac" => Box::new(RansacGround::with_params(distance, iterations)),
+        "histoseed" => Box::new(HistoseedPlane::with_params(expand, distance, iterations)),
+        "gpf" => Box::new(GpfGround::with_params(n_lpr, th_seed, th_dist)),
+        _ => { eprintln!("未知地面策略 '{}'，使用 peak_scan", strat); Box::new(PeakScan::with_params(0.10, expand)) }
+    }
+}
+
+/// 从 TOML 参数字典构建策略。
+fn build_ground_from_toml(strategy_type: &str, p: &toml::Table) -> Box<dyn GroundPickStrategy> {
+    match strategy_type {
+        "histogram" => Box::new(HistogramExpand::with_expand(f(p, "expand"))),
+        "peak_scan" => Box::new(PeakScan::with_params(f(p, "threshold"), f(p, "expand"))),
+        "ransac" => Box::new(RansacGround::with_params(f(p, "distance"), i(p, "iterations") as usize)),
+        "histoseed" => Box::new(HistoseedPlane::with_params(f(p, "expand"), f(p, "distance"), i(p, "iterations") as usize)),
+        "gpf" => Box::new(GpfGround::with_params(i(p, "n_lpr") as usize, f(p, "th_seed"), f(p, "th_dist"))),
+        _ => panic!("未知地面策略类型: {}", strategy_type),
+    }
+}
+
+/// TOML 策略构建器：包装 ground 策略为 BenchStrategy。
+struct GroundBuilder;
+impl perple::bench::StrategyBuilder for GroundBuilder {
+    fn build(&self, strategy_type: &str, p: &toml::Table) -> Box<dyn BenchStrategy> {
+        let strategy = build_ground_from_toml(strategy_type, p);
+        let dirname = perple::bench::param_dirname(strategy_type, p);
+        Box::new(GroundBenchCase::new(&format!("{}_{}", strategy_type, dirname), strategy))
     }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    env_logger::Builder::from_default_env()
-        .filter_level(log::LevelFilter::Info)
-        .init();
+    env_logger::Builder::from_default_env().filter_level(log::LevelFilter::Warn).init();
+    let args: Vec<String> = std::env::args().collect();
+    let cli = CliArgs::parse(&args[1..]);
+    let mode = cli.mode();
+    let json = cli.has("json");
 
-    println!("=== 地面检测策略对比测试（串行） ===\n");
+    match mode {
+        BenchMode::Single => {
+            let frame_limit = cli.get("frames", 5usize);
+            let name = cli.get::<String>("strategy", "peak_scan".to_string());
+            let mut strategies: Vec<Box<dyn BenchStrategy>> = vec![
+                Box::new(GroundBenchCase::new(&name, build_ground_strategy(&cli)))
+            ];
+            let out = "output/ground_bench";
+            let db_name = name.replace(['=', '.', ' '], "_");
+            std::fs::create_dir_all(out)?;
+            let rec = BenchRecorder::new(&format!("{}/{}.db", out, db_name))
+                .map_err(|e| format!("创建 recorder 失败: {}", e))?;
+            let mut recs = vec![rec];
+            let harness = BenchHarness::new("./data/test", frame_limit);
+            let mut pp = PassthroughPreprocessor;
+            harness.run(&mut pp, &mut strategies, &mut recs).await?;
+            recs[0].save().map_err(|e| format!("保存失败: {}", e))?;
 
-    let mut strategies: Vec<Box<dyn BenchStrategy>> = Vec::new();
-
-    // 策略 1：Z-直方图 + expand
-    for &expand in &[0.05, 0.10, 0.15, 0.20, 0.30] {
-        let name = format!("histogram_ex={:.2}", expand);
-        strategies.push(Box::new(GroundBenchCase::new(
-            &name,
-            Box::new(HistogramExpand::with_expand(expand)),
-        )));
-    }
-
-    // 策略 2：峰下扫 + 上扩
-    for &threshold in &[0.05, 0.10, 0.15, 0.20] {
-        for &expand in &[0.05, 0.10, 0.20] {
-            let name = format!("peak_scan_ex={:.2}_sd={:.2}", expand, threshold);
-            strategies.push(Box::new(GroundBenchCase::new(
-                &name,
-                Box::new(PeakScan::with_params(threshold, expand)),
-            )));
+            output_json_or_table(&strategies, json);
+        }
+        BenchMode::Quick | BenchMode::Full => {
+            let mut pp = PassthroughPreprocessor;
+            run_toml_bench("ground", "./data/test", mode, &mut pp, &GroundBuilder).await?;
         }
     }
-
-    // 策略 3：RANSAC
-    for &distance in &[0.3, 0.5] {
-        for &iterations in &[100, 200] {
-            let name = format!("ransac_d={:.1}_i={}", distance, iterations);
-            strategies.push(Box::new(GroundBenchCase::new(
-                &name,
-                Box::new(RansacGround::with_params(distance, iterations)),
-            )));
-        }
-    }
-
-    // 策略 4：种子+生长
-    for &expand in &[0.10, 0.20] {
-        for &distance in &[0.3, 0.5] {
-            for &iterations in &[50, 100] {
-                let name = format!("histoseed_ex={:.2}_d={:.1}_i={}", expand, distance, iterations);
-                strategies.push(Box::new(GroundBenchCase::new(
-                    &name,
-                    Box::new(HistoseedPlane::with_params(expand, distance, iterations)),
-                )));
-            }
-        }
-    }
-
-    // 策略 5：GPF
-    for &n_lpr in &[100, 200] {
-        for &th_dist in &[0.2, 0.3, 0.5] {
-            let name = format!("gpf_nlpr={}_d={:.1}", n_lpr, th_dist);
-            strategies.push(Box::new(GroundBenchCase::new(
-                &name,
-                Box::new(GpfGround::with_params(n_lpr, 0.5, th_dist)),
-            )));
-        }
-    }
-
-    println!("共 {} 个策略\n", strategies.len());
-
-    let harness = BenchHarness::new("./data/test", 5, "output/ground_bench");
-    let mut preprocessor = PassthroughPreprocessor;
-    harness.run(&mut preprocessor, &mut strategies).await?;
-
     Ok(())
 }
+
+fn output_json_or_table(strategies: &[Box<dyn BenchStrategy>], json: bool) {
+    let mut sorted: Vec<_> = strategies.iter().map(|s| (s.stats(), s.extra_metrics())).collect();
+    sorted.sort_by(|a, b| {
+        let at = a.0.total_ms / a.0.frame_count.max(1) as f64;
+        let bt = b.0.total_ms / b.0.frame_count.max(1) as f64;
+        at.partial_cmp(&bt).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    if json {
+        println!("\n=== JSON ===");
+        let entries: Vec<String> = sorted.iter().map(|(st, extra)| {
+            let base = format!(r#"{{"name":"{}","frames":{},"total_ms":{},"avg_ms":{:.1}"#,
+                st.name, st.frame_count, st.total_ms, st.total_ms / st.frame_count.max(1) as f64);
+            let e: String = extra.iter().map(|(k, v)| format!(r#","{}":{}"#, k, v)).collect();
+            format!("{}{}}}", base, e)
+        }).collect();
+        println!("[{}]", entries.join(","));
+    } else {
+        println!("\n=== 按速度升序 ===");
+        println!("{:-<80}", "");
+        println!("| {:<36} | {:>7} | {:>4} |", "策略", "ms/帧", "帧");
+        println!("{:-<80}", "");
+        println!("{:-<80}", "");
+    }
+}
+
+use perple::bench::get_f32 as f;
+use perple::bench::get_i64 as i;

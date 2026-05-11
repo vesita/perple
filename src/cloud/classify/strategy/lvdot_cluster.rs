@@ -1,7 +1,5 @@
-use std::collections::VecDeque;
-
 use super::ClusteringStrategy;
-use crate::cloud::wall::{WallPickStrategy, XYRansacWall, XYGrid, cluster_obstacles_with_indices};
+use crate::cloud::wall::{WallPickStrategy, XYRansacWall, XYGrid, cluster_obstacles_with_indices, xy_dbscan};
 
 /// LV-DOT 风格聚类策略：墙体提取 → 体素占用下采样 → DBSCAN。
 ///
@@ -16,6 +14,8 @@ use crate::cloud::wall::{WallPickStrategy, XYRansacWall, XYGrid, cluster_obstacl
 /// - LV-DOT 原版的 voxelFilter 即此思路：够密的格子输出一个代表点
 pub struct LvdotClusterStrategy {
     wall: Box<dyn WallPickStrategy>,
+    // 上游已提取墙体时跳过内部墙提
+    skip_wall: bool,
     // LV-DOT voxel filter
     voxel_size: f32,
     min_occ: usize,
@@ -33,6 +33,7 @@ impl LvdotClusterStrategy {
     pub fn new() -> Self {
         Self {
             wall: Box::new(XYRansacWall::with_params(0.05, 50, 30).with_seed(42)),
+            skip_wall: false,
             voxel_size: 0.10,
             min_occ: 3,
             use_box_filter: false,
@@ -42,6 +43,12 @@ impl LvdotClusterStrategy {
             dbscan_eps: 0.30,
             dbscan_min_pts: 5,
         }
+    }
+
+    /// 上游已提取墙体，跳过内部墙提直接做体素过滤+DBSCAN。
+    pub fn with_pre_extracted_wall(mut self) -> Self {
+        self.skip_wall = true;
+        self
     }
 
     /// LV-DOT 直连模式：墙体提取 → 体素下采样 → DBSCAN（无 box 预聚类）
@@ -83,77 +90,36 @@ impl LvdotClusterStrategy {
     }
 }
 
-/// XY 平面 DBSCAN，使用 XYGrid 空间索引。
-fn xy_dbscan(points: &[[f32; 3]], eps: f32, min_pts: usize) -> Vec<Vec<usize>> {
-    let n = points.len();
-    if n == 0 { return Vec::new(); }
-
-    let grid = XYGrid::new(points, eps);
-    let mut visited = vec![false; n];
-    let mut clusters = Vec::new();
-    let mut nbr_buf = Vec::new();
-
-    for i in 0..n {
-        if visited[i] { continue; }
-        visited[i] = true;
-
-        nbr_buf.clear();
-        grid.query_neighbors(points, points[i][0], points[i][1], eps, &mut nbr_buf);
-        if nbr_buf.len() < min_pts { continue; }
-
-        let mut cluster = vec![i];
-        let mut queue: VecDeque<usize> = VecDeque::new();
-        let seed_nbrs: Vec<usize> = nbr_buf.drain(..).collect();
-        for &j in &seed_nbrs {
-            if !visited[j] {
-                visited[j] = true;
-                queue.push_back(j);
-            }
-        }
-
-        while let Some(cur) = queue.pop_front() {
-            cluster.push(cur);
-            nbr_buf.clear();
-            grid.query_neighbors(points, points[cur][0], points[cur][1], eps, &mut nbr_buf);
-            if nbr_buf.len() >= min_pts {
-                for &j in &nbr_buf {
-                    if !visited[j] {
-                        visited[j] = true;
-                        queue.push_back(j);
-                    }
-                }
-            }
-        }
-        clusters.push(cluster);
-    }
-    clusters
-}
-
 impl ClusteringStrategy for LvdotClusterStrategy {
     fn run(&mut self, points: &[[f32; 3]]) -> (Vec<[f32; 3]>, Vec<Vec<usize>>) {
         let n = points.len();
         if n == 0 { return (Vec::new(), Vec::new()); }
 
-        // 1. 墙面提取
-        let mut buf = points.to_vec();
-        let (n_wall, _planes) = self.wall.pick(&mut buf);
-        let remaining = &buf[n_wall..];
+        // 1. 墙面提取（上游已提取时可跳过）
+        let non_wall: Vec<[f32; 3]> = if self.skip_wall {
+            points.to_vec()
+        } else {
+            let mut buf = points.to_vec();
+            let (n_wall, _planes) = self.wall.pick(&mut buf);
+            if n_wall >= n { return (points.to_vec(), Vec::new()); }
+            buf[n_wall..].to_vec()
+        };
 
-        let cluster_input: Vec<[f32; 3]> = if self.use_box_filter && !remaining.is_empty() {
+        let cluster_input: Vec<[f32; 3]> = if self.use_box_filter && !non_wall.is_empty() {
             // 2a. box 预聚类 → 过滤远距/小 box
             let (_boxes, box_indices) = cluster_obstacles_with_indices(
-                remaining, self.box_cell_size, self.box_min_pts, 0.05, self.box_max_range,
+                &non_wall, self.box_cell_size, self.box_min_pts, 0.05, self.box_max_range,
             );
             let mut pts = Vec::new();
             for indices in &box_indices {
                 for &idx in indices {
-                    pts.push(remaining[idx]);
+                    pts.push(non_wall[idx]);
                 }
             }
             if pts.is_empty() { return (points.to_vec(), Vec::new()); }
             pts
         } else {
-            remaining.to_vec()
+            non_wall
         };
 
         // 3. LV-DOT 体素占用下采样

@@ -1,11 +1,11 @@
 mod dbscan;
 mod range_image;
-mod wall_cluster;
+mod xy_grid_dbscan;
 mod lvdot_cluster;
 
 pub use dbscan::DbscanStrategy;
 pub use range_image::RangeImageStrategy;
-pub use wall_cluster::WallClusterStrategy;
+pub use xy_grid_dbscan::XYGridDBSCAN;
 pub use lvdot_cluster::LvdotClusterStrategy;
 
 use crate::config::fixif;
@@ -29,9 +29,9 @@ pub fn create_strategy() -> Box<dyn ClusteringStrategy> {
             log::info!("聚类策略: range_image");
             Box::new(RangeImageStrategy::new())
         }
-        "wall_cluster" => {
-            log::info!("聚类策略: wall_cluster");
-            Box::new(WallClusterStrategy::new())
+        "xy_grid_dbscan" => {
+            log::info!("聚类策略: xy_grid_dbscan");
+            Box::new(XYGridDBSCAN::new())
         }
         "lvdot" => {
             log::info!("聚类策略: lvdot (体素{:.2}m 占用>={})", cfg.claster.voxel_size, 3);

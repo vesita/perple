@@ -96,9 +96,11 @@ impl Claster {
                 let (box3d, centroid) = self.cluster_box_and_centroid(cluster, alpha);
                 let w = box3d.length.max(box3d.width);
                 let h = box3d.height;
-                if w <= 0.25 || h <= 0.5 {
-                    return None;
-                }
+                // 排除超小噪点 + 扁度/体积过滤
+                if w <= 0.25 || h <= 0.5 { return None; }
+                if h < 0.15 * w { return None; }
+                if box3d.length * box3d.width * h < 0.03 { return None; }
+
                 Some(CldBud::with_centroid(box3d, 1, format!("cluster_{}", idx), 1.0, centroid))
             })
             .collect()

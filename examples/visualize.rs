@@ -25,7 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let lidar = Arc::new(Mutex::new(Lidar::new()));
     let tracker = Arc::new(Mutex::new(Tracker::new()));
-    let mut writer = FrameWriter::new();
+    let mut writer = FrameWriter::new("output/visualize.db")?;
 
     let n_frames = 14;
     for i in 0..n_frames {
@@ -56,8 +56,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     info!("所有帧处理完成，保存文件...");
-    writer.save("output/visualize.rdra")?;
-    info!("已保存到 output/visualize.rdra");
+    writer.save()?;
+    info!("已保存到 output/visualize.db");
     Ok(())
 }
 

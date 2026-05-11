@@ -1,0 +1,25 @@
+name = "直方图扩展地面检测"
+type = "histogram"
+preprocessor = "passthrough"
+
+[quick]
+frames = 1
+params = [
+  { expand = 0.10 },
+]
+
+[full]
+frames = 10
+params = [
+  { expand = 0.05 },
+  { expand = 0.10 },
+  { expand = 0.15 },
+  { expand = 0.20 },
+]
+
+[stats]
+fastest_ms = 5.5095
+slowest_ms = 8.887
+avg_ms = 6.1787350000000005
+median_ms = 5.76315
+last_run = "1778474634"

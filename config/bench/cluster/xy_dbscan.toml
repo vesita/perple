@@ -1,0 +1,35 @@
+name = "XY 平面 DBSCAN 聚类"
+type = "xy_dbscan"
+preprocessor = "ground+wall"
+
+[quick]
+frames = 1
+params = [
+  { eps = 0.20, min_pts = 3 },
+  { eps = 0.20, min_pts = 5 },
+  { eps = 0.30, min_pts = 3 },
+  { eps = 0.30, min_pts = 5 },
+  { eps = 0.50, min_pts = 3 },
+  { eps = 0.50, min_pts = 5 },
+]
+
+[full]
+frames = 10
+params = [
+  { eps = 0.15, min_pts = 3 },
+  { eps = 0.15, min_pts = 10 },
+  { eps = 0.20, min_pts = 5 },
+  { eps = 0.25, min_pts = 3 },
+  { eps = 0.30, min_pts = 10 },
+  { eps = 0.40, min_pts = 5 },
+  { eps = 0.50, min_pts = 3 },
+  { eps = 0.60, min_pts = 10 },
+  { eps = 0.80, min_pts = 5 },
+]
+
+[stats]
+fastest_ms = 2.8199
+slowest_ms = 20.7374
+avg_ms = 8.112672222222223
+median_ms = 7.2699
+last_run = "1778474425"

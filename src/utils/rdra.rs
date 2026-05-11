@@ -1,15 +1,18 @@
-use redra_client::{RdraWriter, ShapeBuilder, spawn_point, spawn_cube, spawn_line};
+use std::path::{Path, PathBuf};
+use std::fs;
+
+use redra_client::{SqlWriter, ShapeBuilder, spawn_point, spawn_cube, spawn_line};
 use crate::utils::boxes::Box3D;
 
-/// 通用 .rdra 帧写入器。
+/// SQLite 帧写入器。
 ///
-/// 封装 RdraWriter，提供点云、包围盒、线段的写入方法。
-/// 支持原始点云背景开关：开启时 `write_raw_cloud` 写入原始点云，
-/// 关闭时为 no-op。`write_cloud` 始终写入（用于分类后的点云）。
+/// 封装 SqlWriter，提供点云、包围盒、线段的写入方法。
+/// 每帧通过 `end_frame()` 立即持久化到 SQLite，不累积在内存中。
 ///
 /// ID 分配：每帧独立，点云 0-99999，包围盒 800000+，线段 900000+。
 pub struct FrameWriter {
-    writer: RdraWriter,
+    sql_writer: SqlWriter,
+    db_path: PathBuf,
     base_id: u64,
     point_counter: u64,
     box_counter: u64,
@@ -18,15 +21,24 @@ pub struct FrameWriter {
 }
 
 impl FrameWriter {
-    pub fn new() -> Self {
-        Self {
-            writer: RdraWriter::new(),
+    /// 创建写入器并打开/创建 SQLite 数据库文件。
+    ///
+    /// 数据库文件会在构造时创建，所有帧数据直接持久化到该文件。
+    /// `save()` 调用 VACUUM 压缩，也可以通过 `save_as()` 复制到其他路径。
+    pub fn new(path: impl AsRef<Path>) -> Result<Self, String> {
+        let path = path.as_ref().to_path_buf();
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        Ok(Self {
+            sql_writer: SqlWriter::new(&path)?,
+            db_path: path,
             base_id: 0,
             point_counter: 0,
             box_counter: 0,
             line_counter: 0,
             raw_material: None,
-        }
+        })
     }
 
     /// 设置原始点云材质。设置后 `write_raw_cloud` 生效，否则为 no-op。
@@ -36,7 +48,7 @@ impl FrameWriter {
 
     /// 开始新帧。
     pub fn begin_frame(&mut self, frame_idx: usize) {
-        self.writer.destroy_all();
+        self.sql_writer.destroy_all();
         self.base_id = frame_idx as u64 * 1_000_000;
         self.point_counter = 0;
         self.box_counter = 0;
@@ -64,15 +76,13 @@ impl FrameWriter {
         for (i, p) in points.iter().enumerate() {
             if i % step == 0 {
                 let id = self.base_id + self.point_counter;
-                self.writer.spawn(spawn_point(*p, material).id(id));
+                self.sql_writer.spawn(spawn_point(*p, material).id(id));
                 self.point_counter += 1;
             }
         }
     }
 
     /// 写入多个点云组（每组独立材质）。
-    ///
-    /// 用于将不同类别的点云一次性写入，每组自动下采样到 max_points。
     pub fn write_cloud_groups(&mut self, groups: &[(&[[f32; 3]], &str)], max_points: usize) {
         for &(points, material) in groups {
             self.write_cloud(points, material, max_points);
@@ -86,7 +96,7 @@ impl FrameWriter {
                 .map(|v| (v.x, v.y, v.z))
                 .collect();
             let id = self.base_id + 800_000 + self.box_counter;
-            self.writer.spawn(
+            self.sql_writer.spawn(
                 spawn_cube(verts, material).id(id).tag(tag.clone())
             );
             self.box_counter += 1;
@@ -101,7 +111,7 @@ impl FrameWriter {
     /// 写入线段。
     pub fn write_line(&mut self, from: [f32; 3], to: [f32; 3], material: &str) {
         let id = self.base_id + 900_000 + self.line_counter;
-        self.writer.spawn(spawn_line(from, to, material).id(id));
+        self.sql_writer.spawn(spawn_line(from, to, material).id(id));
         self.line_counter += 1;
     }
 
@@ -114,25 +124,38 @@ impl FrameWriter {
 
     /// 写入自定义 ShapeBuilder。
     pub fn spawn(&mut self, builder: ShapeBuilder) -> u64 {
-        self.writer.spawn(builder)
+        self.sql_writer.spawn(builder)
     }
 
-    /// 结束当前帧。
+    /// 修改已有实体的材质。
+    pub fn set_material(&mut self, id: u64, material: impl Into<String>) {
+        self.sql_writer.set_material(id, material);
+    }
+
+    /// 结束当前帧，将所有实体写入 SQLite。
     pub fn end_frame(&mut self) {
-        self.writer.end_frame();
+        if let Err(e) = self.sql_writer.end_frame() {
+            log::warn!("写入帧到 SQLite 失败: {}", e);
+        }
     }
 
-    /// 保存到 .rdra 文件。
-    pub fn save(&self, path: &str) -> Result<(), String> {
-        self.writer.save(path)
+    /// VACUUM 压缩数据库文件。
+    ///
+    /// 写入完成后调用，减小文件体积。
+    pub fn save(&self) -> Result<(), String> {
+        self.sql_writer.save()
+    }
+
+    /// 将数据库复制到目标路径（先 VACUUM 再复制）。
+    pub fn save_as(&self, dest: impl AsRef<Path>) -> Result<(), String> {
+        self.save()?;
+        fs::copy(&self.db_path, dest.as_ref())
+            .map_err(|e| format!("复制数据库失败: {}", e))?;
+        Ok(())
     }
 
     /// 清空所有帧数据。
     pub fn clear(&mut self) {
-        self.writer.clear();
+        let _ = self.sql_writer.clear_all();
     }
-}
-
-impl Default for FrameWriter {
-    fn default() -> Self { Self::new() }
 }

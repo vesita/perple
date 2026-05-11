@@ -212,6 +212,9 @@ impl DbscanStrategy {
             if let Some(qt) = &self.quad_tree {
                 qt.query_range(points[i][0], points[i][1], self.patience, points, &mut neighbors);
             }
+            // 四叉树仅做 XY 搜索，Z 轴单独过滤：避免不同高度点被误聚类
+            let zi = points[i][2];
+            neighbors.retain(|&j| (points[j][2] - zi).abs() < self.patience);
 
             if neighbors.len() < self.min_points {
                 continue;
@@ -232,6 +235,9 @@ impl DbscanStrategy {
                     if let Some(qt) = &self.quad_tree {
                         qt.query_range(points[ni][0], points[ni][1], self.patience, points, &mut more);
                     }
+                    // Z 轴过滤
+                    let zni = points[ni][2];
+                    more.retain(|&j| (points[j][2] - zni).abs() < self.patience);
 
                     if more.len() >= self.min_points {
                         for &m in &more {

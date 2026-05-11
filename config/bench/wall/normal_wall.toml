@@ -1,0 +1,52 @@
+name = "法向量墙体检测"
+type = "normal_wall"
+preprocessor = "wall"
+
+[quick]
+frames = 1
+params = [
+  { cell_size = 0.03, min_pts = 5, normal_threshold = 0.12 },
+  { cell_size = 0.03, min_pts = 5, normal_threshold = 0.15 },
+  { cell_size = 0.03, min_pts = 5, normal_threshold = 0.18 },
+  { cell_size = 0.05, min_pts = 5, normal_threshold = 0.12 },
+  { cell_size = 0.05, min_pts = 5, normal_threshold = 0.15 },
+  { cell_size = 0.05, min_pts = 5, normal_threshold = 0.18 },
+  { cell_size = 0.06, min_pts = 5, normal_threshold = 0.12 },
+  { cell_size = 0.06, min_pts = 5, normal_threshold = 0.15 },
+  { cell_size = 0.06, min_pts = 5, normal_threshold = 0.18 },
+  { cell_size = 0.08, min_pts = 5, normal_threshold = 0.15 },
+  { cell_size = 0.10, min_pts = 5, normal_threshold = 0.15 },
+]
+
+[full]
+frames = 10
+params = [
+  { cell_size = 0.02, min_pts = 5, normal_threshold = 0.15 },
+  { cell_size = 0.03, min_pts = 5, normal_threshold = 0.10 },
+  { cell_size = 0.03, min_pts = 5, normal_threshold = 0.15 },
+  { cell_size = 0.03, min_pts = 5, normal_threshold = 0.20 },
+  { cell_size = 0.04, min_pts = 5, normal_threshold = 0.15 },
+  { cell_size = 0.05, min_pts = 5, normal_threshold = 0.10 },
+  { cell_size = 0.05, min_pts = 5, normal_threshold = 0.12 },
+  { cell_size = 0.05, min_pts = 5, normal_threshold = 0.15 },
+  { cell_size = 0.05, min_pts = 5, normal_threshold = 0.18 },
+  { cell_size = 0.05, min_pts = 5, normal_threshold = 0.20 },
+  { cell_size = 0.06, min_pts = 5, normal_threshold = 0.10 },
+  { cell_size = 0.06, min_pts = 5, normal_threshold = 0.15 },
+  { cell_size = 0.06, min_pts = 5, normal_threshold = 0.20 },
+  { cell_size = 0.08, min_pts = 5, normal_threshold = 0.10 },
+  { cell_size = 0.08, min_pts = 5, normal_threshold = 0.15 },
+  { cell_size = 0.08, min_pts = 5, normal_threshold = 0.20 },
+  { cell_size = 0.10, min_pts = 5, normal_threshold = 0.10 },
+  { cell_size = 0.10, min_pts = 5, normal_threshold = 0.15 },
+  { cell_size = 0.10, min_pts = 5, normal_threshold = 0.20 },
+  { cell_size = 0.15, min_pts = 5, normal_threshold = 0.15 },
+  { cell_size = 0.20, min_pts = 5, normal_threshold = 0.15 },
+]
+
+[stats]
+fastest_ms = 15.539
+slowest_ms = 29.1559
+avg_ms = 20.85152999999999
+median_ms = 20.38145
+last_run = "1778474714"

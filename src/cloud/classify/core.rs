@@ -111,7 +111,7 @@ impl Classify {
         // ─── 5. 聚类输入 ────────────────────────────────────────────────────
         let config = crate::config::fixif();
         let cluster_input = match config.claster.strategy.as_str() {
-            "wall_cluster" | "lvdot" => {
+            "xy_grid_dbscan" | "lvdot" => {
                 // 全管线策略传入全部非地面点（策略内部处理墙体+过滤）
                 target[n_ground..].to_vec()
             }

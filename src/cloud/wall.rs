@@ -3,12 +3,16 @@ mod quad_wall;
 mod xy_ransac;
 mod adaptive_dbscan;
 mod normal_wall;
+mod seq_fit;
+mod xy_dbscan;
 
 pub use top_down::TopDownCluster;
 pub use quad_wall::QuadtreeWall;
 pub use xy_ransac::XYRansacWall;
 pub use adaptive_dbscan::{AdaptiveDBSCANWall, Downsampler};
 pub use normal_wall::NormalWall;
+pub use seq_fit::SequentialFit;
+pub use xy_dbscan::XYDBSCANWall;
 
 use crate::utils::boxes::Box3D;
 
@@ -206,7 +210,7 @@ impl XYGrid {
     /// 返回 `(过滤后点, 原始索引映射)`。
     pub fn voxel_occupancy_filter(points: &[[f32; 3]], voxel_size: f32, min_occ: usize) -> (Vec<[f32; 3]>, Vec<usize>) {
         let n = points.len();
-        if n == 0 || min_occ <= 1 {
+        if n == 0 || voxel_size <= 0.0 || min_occ <= 1 {
             return (points.to_vec(), (0..n).collect());
         }
         let inv = 1.0 / voxel_size;
@@ -243,7 +247,7 @@ impl XYGrid {
     /// 返回 `(下采样点, 原始索引映射)`。
     pub fn voxel_occupancy_downsample(points: &[[f32; 3]], voxel_size: f32, min_occ: usize) -> (Vec<[f32; 3]>, Vec<usize>) {
         let n = points.len();
-        if n == 0 || min_occ <= 1 {
+        if n == 0 || voxel_size <= 0.0 || min_occ <= 1 {
             return (points.to_vec(), (0..n).collect());
         }
         let inv = 1.0 / voxel_size;
@@ -344,4 +348,53 @@ pub fn cluster_obstacles_with_indices(
     }
 
     (boxes, all_indices)
+}
+
+/// XY 平面 DBSCAN，使用 XYGrid 空间索引。
+///
+/// 返回簇索引列表，每个簇是采样点集中的索引。
+pub fn xy_dbscan(points: &[[f32; 3]], eps: f32, min_pts: usize) -> Vec<Vec<usize>> {
+    let n = points.len();
+    if n == 0 { return Vec::new(); }
+
+    let grid = XYGrid::new(points, eps);
+    let mut visited = vec![false; n];
+    let mut clusters = Vec::new();
+    let mut nbr_buf = Vec::new();
+
+    for i in 0..n {
+        if visited[i] { continue; }
+        visited[i] = true;
+
+        nbr_buf.clear();
+        grid.query_neighbors(points, points[i][0], points[i][1], eps, &mut nbr_buf);
+        if nbr_buf.len() < min_pts { continue; }
+
+        let mut cluster = vec![i];
+        let mut queue = std::collections::VecDeque::new();
+        let seed_nbrs: Vec<usize> = nbr_buf.drain(..).collect();
+        for &j in &seed_nbrs {
+            if !visited[j] {
+                visited[j] = true;
+                queue.push_back(j);
+            }
+        }
+
+        while let Some(cur) = queue.pop_front() {
+            cluster.push(cur);
+            nbr_buf.clear();
+            grid.query_neighbors(points, points[cur][0], points[cur][1], eps, &mut nbr_buf);
+            if nbr_buf.len() >= min_pts {
+                for &j in &nbr_buf {
+                    if !visited[j] {
+                        visited[j] = true;
+                        queue.push_back(j);
+                    }
+                }
+            }
+        }
+        clusters.push(cluster);
+    }
+
+    clusters
 }

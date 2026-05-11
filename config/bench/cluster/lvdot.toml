@@ -1,0 +1,44 @@
+name = "LV-DOT 降采样聚类"
+type = "lvdot"
+preprocessor = "ground"
+
+[quick]
+frames = 1
+params = [
+  { voxel_size = 0.10, min_occ = 2, eps = 0.20, min_pts = 3 },
+  { voxel_size = 0.10, min_occ = 3, eps = 0.30, min_pts = 3 },
+  { voxel_size = 0.20, min_occ = 2, eps = 0.20, min_pts = 3 },
+  { voxel_size = 0.20, min_occ = 3, eps = 0.30, min_pts = 3 },
+]
+
+[full]
+frames = 10
+params = [
+  { voxel_size = 0.05, min_occ = 2, eps = 0.15, min_pts = 3 },
+  { voxel_size = 0.05, min_occ = 2, eps = 0.30, min_pts = 5 },
+  { voxel_size = 0.05, min_occ = 3, eps = 0.20, min_pts = 3 },
+  { voxel_size = 0.05, min_occ = 3, eps = 0.40, min_pts = 5 },
+  { voxel_size = 0.10, min_occ = 2, eps = 0.20, min_pts = 3 },
+  { voxel_size = 0.10, min_occ = 2, eps = 0.40, min_pts = 5 },
+  { voxel_size = 0.10, min_occ = 3, eps = 0.15, min_pts = 3 },
+  { voxel_size = 0.10, min_occ = 3, eps = 0.30, min_pts = 5 },
+  { voxel_size = 0.15, min_occ = 2, eps = 0.15, min_pts = 5 },
+  { voxel_size = 0.15, min_occ = 2, eps = 0.30, min_pts = 3 },
+  { voxel_size = 0.15, min_occ = 3, eps = 0.20, min_pts = 5 },
+  { voxel_size = 0.15, min_occ = 3, eps = 0.40, min_pts = 3 },
+  { voxel_size = 0.20, min_occ = 2, eps = 0.20, min_pts = 5 },
+  { voxel_size = 0.20, min_occ = 2, eps = 0.40, min_pts = 3 },
+  { voxel_size = 0.20, min_occ = 3, eps = 0.15, min_pts = 5 },
+  { voxel_size = 0.20, min_occ = 3, eps = 0.30, min_pts = 3 },
+  { voxel_size = 0.25, min_occ = 2, eps = 0.15, min_pts = 3 },
+  { voxel_size = 0.25, min_occ = 2, eps = 0.30, min_pts = 5 },
+  { voxel_size = 0.25, min_occ = 3, eps = 0.20, min_pts = 3 },
+  { voxel_size = 0.25, min_occ = 3, eps = 0.40, min_pts = 5 },
+]
+
+[stats]
+fastest_ms = 16.6596
+slowest_ms = 24.021
+avg_ms = 18.4314425
+median_ms = 18.18055
+last_run = "1778474425"

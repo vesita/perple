@@ -131,10 +131,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut tracker = Tracker::new();
 
     // 四个独立输出流
-    let mut writer_ground = FrameWriter::new();
-    let mut writer_wall = FrameWriter::new();
-    let mut writer_cluster = FrameWriter::new();
-    let mut writer_tracker = FrameWriter::new();
+    let mut writer_ground = FrameWriter::new("output/ground_result.db")?;
+    let mut writer_wall = FrameWriter::new("output/wall_result.db")?;
+    let mut writer_cluster = FrameWriter::new("output/cluster_result.db")?;
+    let mut writer_tracker = FrameWriter::new("output/tracker_result.db")?;
 
     // ─── 两级流水 ────────────────────────────────────────────────────────
     let total_start = Instant::now();
@@ -248,11 +248,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         n_frames, total_elapsed, total_elapsed * 1000.0 / n_frames as f64);
     println!("══════════════════════════════════════════");
 
-    // ─── 保存 .rdra 文件 ──────────────────────────────────────────────────
-    writer_ground.save("output/ground_result.rdra")?;
-    writer_wall.save("output/wall_result.rdra")?;
-    writer_cluster.save("output/cluster_result.rdra")?;
-    writer_tracker.save("output/tracker_result.rdra")?;
+    // ─── VACUUM 压缩 ─────────────────────────────────────────────────────
+    writer_ground.save()?;
+    writer_wall.save()?;
+    writer_cluster.save()?;
+    writer_tracker.save()?;
     println!("输出保存至 output/ 目录：ground / wall / cluster / tracker");
 
     Ok(())

@@ -1,0 +1,30 @@
+name = "自适应 DBSCAN 聚类"
+type = "dbscan_adaptive"
+preprocessor = "ground+wall"
+
+[quick]
+frames = 1
+params = [
+  { patience = 0.10, slope = 0.20, min_pts = 5, voxel_size = 0.05 },
+  { patience = 0.10, slope = 0.20, min_pts = 5, voxel_size = 0.10 },
+  { patience = 0.20, slope = 0.20, min_pts = 5, voxel_size = 0.05 },
+  { patience = 0.20, slope = 0.20, min_pts = 5, voxel_size = 0.10 },
+]
+
+[full]
+frames = 10
+params = [
+  { patience = 0.10, slope = 0.10, min_pts = 5, voxel_size = 0.05 },
+  { patience = 0.10, slope = 0.10, min_pts = 10, voxel_size = 0.10 },
+  { patience = 0.10, slope = 0.30, min_pts = 5, voxel_size = 0.05 },
+  { patience = 0.10, slope = 0.30, min_pts = 10, voxel_size = 0.10 },
+  { patience = 0.20, slope = 0.20, min_pts = 5, voxel_size = 0.05 },
+  { patience = 0.20, slope = 0.20, min_pts = 10, voxel_size = 0.10 },
+]
+
+[stats]
+fastest_ms = 10.069099999999999
+slowest_ms = 68.3344
+avg_ms = 30.988468333333334
+median_ms = 27.205550000000002
+last_run = "1778474425"
