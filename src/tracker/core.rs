@@ -12,11 +12,11 @@ use crate::{
         hungarian::hungarian,
         kalman::{KalmanConfig, KalmanFilterWrapper},
         output::Target,
+        trick,
     },
     utils::{
         boxes::Box3D,
-        sight::Sight,
-        stream::{Eap, Stream, StreamError},
+        stream::{DualBuf, Eap, Stream, StreamError},
     },
 };
 
@@ -62,7 +62,7 @@ impl std::error::Error for TrackerError {}
 
 /// 目标分类（状态机）
 #[derive(Debug, Clone, PartialEq)]
-enum TargetClass {
+pub(crate) enum TargetClass {
     Floating, // 待定——新对象或未确认运动能力
     Static,   // 背景/地面——confirmed 不可移动
     Moving,   // 运动中（confirmed）
@@ -70,16 +70,16 @@ enum TargetClass {
 }
 
 /// 跟踪目标信息（包含卡尔曼滤波器）
-struct TrackedObject {
-    id: usize,
-    class_type: String,
+pub(crate) struct TrackedObject {
+    pub(crate) id: usize,
+    pub(crate) class_type: String,
     last_seen: SystemTime,
     disappeared_count: u32,
     appearance_count: u32,
     confidence: f32,
     kalman_filter: KalmanFilterWrapper,
     velocity_history: VecDeque<[f32; 3]>,
-    classification: TargetClass,
+    pub(crate) classification: TargetClass,
     /// 一旦为 true，永不回到 Static/Floating
     confirmed_moving: bool,
     /// 连续点云投票通过帧数（Floating→Moving 用）
@@ -106,6 +106,8 @@ struct TrackedObject {
     class_cooldown: u32,
     /// 速度 EMA 系数（0=自适应置信度）
     vel_smoothing_alpha: f32,
+    /// 静态簇缺失连续计数（Static→Floating 迟滞用）
+    static_miss_count: u32,
 }
 
 impl TrackedObject {
@@ -147,6 +149,7 @@ impl TrackedObject {
             smoothed_box: None,
             class_cooldown: 0,
             vel_smoothing_alpha,
+            static_miss_count: 0,
         })
     }
 
@@ -217,7 +220,10 @@ impl TrackedObject {
         self.velocity_history.push_back([v.x as f32, v.y as f32, v.z as f32]);
 
         self.appearance_count += 1;
-        self.class_type = new_class_type;
+        // 保留 person 标签：避免 YOLO 间歇性漏检导致标签闪烁
+        if !(self.class_type == "person" && new_class_type != "person") {
+            self.class_type = new_class_type;
+        }
         self.confidence = new_confidence;
         self.last_seen = SystemTime::now();
         self.disappeared_count = 0;
@@ -370,10 +376,10 @@ impl TrackedObject {
 
 /// 主跟踪器
 pub struct Tracker {
-    sight: Eap<Stream<Vec<Sight>>>,
     tar3d: Eap<Stream<Vec<CldBud>>>,
     target: Eap<Stream<Vec<Target>>>,
-    clouds_filtered: Eap<Stream<Vec<[f32; 3]>>>,
+    /// DualBuf consumer：后融合阶段读取检测阶段写入的体素过滤点云
+    clouds_filtered: DualBuf<Vec<[f32; 3]>>,
     next_id: usize,
     tracked_objects: HashMap<usize, TrackedObject>,
     max_disappeared: u32,
@@ -415,10 +421,9 @@ impl Tracker {
         let swapl = global_swapl();
         let cfg = &fixif().tracker;
         Self {
-            sight: swapl.sights.clone(),
             tar3d: swapl.cld_objs.clone(),
             target: swapl.targets.clone(),
-            clouds_filtered: swapl.clouds_filtered.clone(),
+            clouds_filtered: swapl.clouds_filtered.clone(), // DualBuf clone
             next_id: 1,
             tracked_objects: HashMap::new(),
             max_disappeared: cfg.max_disappeared,
@@ -701,9 +706,15 @@ impl Tracker {
         match obj.classification {
             TargetClass::Static => {
                 if !in_static_cluster {
-                    // Static → Floating：任何偏离静态簇（无门槛）
-                    obj.classification = TargetClass::Floating;
-                    obj.floating_static_count = 0;
+                    // Static → Floating：带迟滞，连续 N 帧偏离静态簇后才转换
+                    obj.static_miss_count += 1;
+                    if obj.static_miss_count >= 10 {
+                        obj.classification = TargetClass::Floating;
+                        obj.floating_static_count = 0;
+                        obj.static_miss_count = 0;
+                    }
+                } else {
+                    obj.static_miss_count = 0;
                 }
             }
             TargetClass::Floating => {
@@ -751,40 +762,19 @@ impl Tracker {
         }
     }
 
-    fn refine_classification_with_sight(target: &mut Target, sight_data: &[Sight]) {
-        for sight in sight_data {
-            if sight.slab(&target.the_box) {
-                target.class_type = "person".to_string();
-                return;
-            }
-        }
-        // 把无意义的 cluster_N 替换为通用障碍物标签
-        if target.class_type.is_empty() || target.class_type.starts_with("cluster_") {
-            target.class_type = "obstacle".to_string();
-        }
-    }
+	    pub async fn run(&mut self) -> Result<(), TrackerError> {
+	        let _t0 = Instant::now();
+	        let current_detections = {
+	            let mut tar3d_guard = self.tar3d.lock().unwrap();
+	            match tar3d_guard.read() {
+	                Some(data) => data.into_iter()
+	                    .filter(|d| d.confidence >= self.min_confidence && d.class_name != "ground" && d.class_name != "wall")
+	                    .collect::<Vec<_>>(),
+	                None => Vec::new(),
+	            }
+	        };
 
-    pub async fn run(&mut self) -> Result<(), TrackerError> {
-        let _t0 = Instant::now();
-        let current_detections = {
-            let mut tar3d_guard = self.tar3d.lock().await;
-            match tar3d_guard.read() {
-                Some(data) => data.into_iter()
-                    .filter(|d| d.confidence >= self.min_confidence && d.class_name != "ground" && d.class_name != "wall")
-                    .collect::<Vec<_>>(),
-                None => Vec::new(),
-            }
-        };
-
-        let sight_data = {
-            let mut sight_guard = self.sight.lock().await;
-            match sight_guard.read() {
-                Some(data) => data,
-                None => Vec::new(),
-            }
-        };
-
-        let now = SystemTime::now();
+	        let now = SystemTime::now();
 
         // 步骤 1: 对所有轨迹做预测
         let _t_pred = Instant::now();
@@ -882,13 +872,7 @@ impl Tracker {
         let _t_pc = Instant::now();
         // 先更新点云历史（需要 &mut self）
         if self.use_point_cloud_voting {
-            let filter_points = {
-                let mut cf = self.clouds_filtered.lock().await;
-                match cf.read() {
-                    Some(data) => data,
-                    None => Vec::new(),
-                }
-            };
+            let filter_points = self.clouds_filtered.consumer().lock().unwrap().clone();
             if !filter_points.is_empty() {
                 Self::update_object_point_clouds(
                     &mut self.tracked_objects,
@@ -952,6 +936,9 @@ impl Tracker {
                 obj.voting_streak = 0;
             }
         }
+
+        // 步骤 9c: trick — 正在移动的目标标记为行人
+        trick::apply(&mut self.tracked_objects);
 
         // 步骤 10: 箱体尺寸平滑
         let _t_fix = Instant::now();
@@ -1027,14 +1014,18 @@ impl Tracker {
                     classification: class_str.to_string(),
                 };
 
-                Self::refine_classification_with_sight(&mut target, &sight_data);
-
                 // 地面始终 static（语义不变）
                 if target.class_type == "ground" {
                     target.classification = "static".to_string();
                     target.is_dynamic = false;
                 }
                 // person：状态机层 confirmed_moving=true 保证不再退回 floating/static
+
+                // Static 目标速度强制归零（避免输出噪声速度）
+                if obj.classification == TargetClass::Static {
+                    target.velocity = [0.0, 0.0, 0.0];
+                    target.speed = 0.0;
+                }
 
                 output_targets.push(target);
             }
@@ -1043,7 +1034,7 @@ impl Tracker {
         // 步骤 12: 写入输出
         let _t_write = Instant::now();
         {
-            let mut target_guard = self.target.lock().await;
+            let mut target_guard = self.target.lock().unwrap();
             target_guard.write(output_targets)?;
         }
 

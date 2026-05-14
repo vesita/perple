@@ -33,30 +33,22 @@ impl Fuse {
     /// 执行一次融合（async）
     ///
     /// 步骤：
-    /// 1. 从 cld_buds_raw 读取原始聚类结果
-    /// 2. 从 clr_objs 读取 YOLO 检测
+    /// 1. 从 cld_buds_raw consumer 读取原始聚类结果
+    /// 2. 从 clr_objs consumer 读取 YOLO 检测
     /// 3. 无 YOLO 时透传原始结果到 cld_objs
     /// 4. 有 YOLO 时执行投影匹配 + 合并 + 标签更新
     pub async fn act(&mut self) {
         let swapl = global_swapl();
 
-        let cld_buds: Vec<CldBud> = match swapl.cld_buds_raw.lock().await.read() {
-            Some(buds) => buds,
-            None => return,
-        };
+        let cld_buds: Vec<CldBud> = swapl.cld_buds_raw.consumer().lock().unwrap().clone();
+        if cld_buds.is_empty() {
+            return;
+        }
 
-        let clr_buds: Vec<ClrBud> = match swapl.clr_objs.lock().await.peek_latest() {
-            Some(buds) => buds,
-            None => {
-                // 无 YOLO 数据：将原始聚类结果透传到 cld_objs
-                let _ = swapl.cld_objs.lock().await.write(cld_buds);
-                return;
-            }
-        };
-
-        if clr_buds.is_empty() || cld_buds.is_empty() {
-            // 无 YOLO 数据：透传原始聚类
-            let _ = swapl.cld_objs.lock().await.write(cld_buds);
+        let clr_buds: Vec<ClrBud> = swapl.clr_objs.consumer().lock().unwrap().clone();
+        if clr_buds.is_empty() {
+            // 无 YOLO 数据：将原始聚类结果透传到 cld_objs
+            let _ = swapl.cld_objs.lock().unwrap().write(cld_buds);
             return;
         }
 
@@ -72,7 +64,7 @@ impl Fuse {
 
         let mut proj: Vec<Option<ProjMatch>> = Vec::with_capacity(cld_buds.len());
 
-        for cld in &cld_buds {
+        for (ci_3d, cld) in cld_buds.iter().enumerate() {
             let verts = cld.the_box.vertices();
 
             let (mut l, mut t, mut r, mut b) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
@@ -109,6 +101,8 @@ impl Fuse {
                 }
             }
             if best_idx != usize::MAX {
+                log::info!("Fuse: 3D簇#{} 重投影匹配 YOLO#{} \"{}\" IoU={:.2}",
+                    ci_3d, best_idx, clr_buds[best_idx].class_name, best_iou);
                 proj.push(Some(ProjMatch { clr_idx: best_idx }));
             } else {
                 proj.push(None);
@@ -208,6 +202,6 @@ impl Fuse {
             result.push(cld);
         }
 
-        let _ = swapl.cld_objs.lock().await.write(result);
+        let _ = swapl.cld_objs.lock().unwrap().write(result);
     }
 }

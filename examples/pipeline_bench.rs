@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use perple::bench::{BenchStrategy, BenchStats, BenchHarness, BenchRecorder, FrameData, GroundPreprocessor};
 use perple::cloud::wall::{
-    WallPickStrategy, TopDownCluster, XYRansacWall, QuadtreeWall, XYGrid,
+    WallPickStrategy, BevEdLines, XYGrid,
 };
 use perple::cloud::classify::strategy::{ClusteringStrategy, DbscanStrategy};
 use perple::config::fixif;
@@ -70,11 +70,8 @@ impl PipelineBenchCase {
     /// 创建对应索引的墙体策略（每次 new 一个，避免 clone 问题）
     fn create_wall(&self) -> Option<Box<dyn WallPickStrategy>> {
         match self.wall {
-            Some(0) => Some(Box::new(TopDownCluster::with_params(0.05, 5, 2))),
-            Some(1) => Some(Box::new(TopDownCluster::with_params(0.10, 3, 2))),
-            Some(2) => Some(Box::new(XYRansacWall::with_params(0.05, 50, 30))),
-            Some(3) => Some(Box::new(XYRansacWall::with_params(0.08, 50, 30))),
-            Some(4) => Some(Box::new(QuadtreeWall::with_params(0.10, 3, 1.5).with_merge_dist(2))),
+            Some(0) => Some(Box::new(BevEdLines::with_params(0.05, 20))),
+            Some(1) => Some(Box::new(BevEdLines::with_params(0.08, 20))),
             _ => None,
         }
     }
@@ -220,11 +217,11 @@ impl BenchStrategy for PipelineBenchCase {
 fn build_strategies() -> Vec<Box<dyn BenchStrategy>> {
     let wall_indices: Vec<Option<usize>> = vec![
         None,           // 0: no_wall（基准）
-        Some(0),        // 1: TopDownCluster 0.05/5/2
-        Some(1),        // 2: TopDownCluster 0.10/3/2
+        Some(0),        // 1: TopDownCluster p50_m5_w0.3
+        Some(1),        // 2: TopDownCluster p100_m3_w0.3
         Some(2),        // 3: XYRansacWall 0.05/50/30（当前默认）
         Some(3),        // 4: XYRansacWall 0.08/50/30
-        Some(4),        // 5: QuadtreeWall 0.10/3/1.5
+        Some(4),        // 5: GridWall 0.10/3/1.5
     ];
     let cluster_indices: Vec<usize> = vec![
         0,  // dbscan_adaptive eps=0.10 slope=0.20 min=10 voxel=0.10

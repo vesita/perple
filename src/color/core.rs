@@ -8,7 +8,7 @@ use crate::color::{ClrBud, image::ScaleMessage, look::Look, UndistortMap};
 use crate::color::{YoloDetector, fill_input_image};
 use crate::config::fixif;
 use crate::swapl::global_swapl;
-use crate::utils::stream::{Cream, Eap, Stream, StreamError};
+use crate::utils::stream::{DualBuf, Eap, Stream, StreamError};
 
 use ort::value::{Tensor, TensorValueType, Value};
 
@@ -54,8 +54,8 @@ impl From<StreamError> for ColorError {
 /// - 模型推理
 /// - 检测结果输出
 pub struct Color {
-    /// 输入输出流（线程安全）
-    cream: Cream<DynamicImage, Vec<ClrBud>>,
+    /// 输入流（图像）
+    in_stream: Eap<Stream<DynamicImage>>,
     /// YOLO检测器
     model: YoloDetector,
     /// 图像缩放信息
@@ -66,6 +66,8 @@ pub struct Color {
     local_bounds: Vec<ClrBud>,
     /// 去畸变映射（预计算，复用）
     undistort_map: Option<UndistortMap>,
+    /// 双缓冲 producer：检测阶段写入 YOLO 结果（后融合阶段读 consumer）
+    clr_objs: DualBuf<Vec<ClrBud>>,
 }
 
 pub struct Camera {
@@ -81,14 +83,10 @@ impl Color {
     ///
     /// # 参数
     /// * `input_stream` - 输入图像流的线程安全引用
-    /// * `output_stream` - 输出结果流的线程安全引用
-    /// * `model_path` - 模型文件路径
-    ///
-    /// # 返回值
-    /// 返回新的Color实例
+    /// * `clr_objs` - DualBuf producer，检测阶段写入 YOLO 结果
     pub fn new(
         input_stream: Eap<Stream<DynamicImage>>,
-        output_stream: Eap<Stream<Vec<ClrBud>>>,
+        clr_objs: DualBuf<Vec<ClrBud>>,
     ) -> Self {
         // 初始化YOLO检测器
         let model = YoloDetector::new();
@@ -103,10 +101,7 @@ impl Color {
             Tensor::from_array(([1, 3, input_height, input_width], initial_data)).unwrap();
 
         Self {
-            cream: Cream {
-                in_stream: input_stream,
-                out_stream: output_stream,
-            },
+            in_stream: input_stream,
             model,
             message: ScaleMessage {
                 o_width: 0,
@@ -120,6 +115,7 @@ impl Color {
             tensor_value,
             local_bounds: Vec::new(),
             undistort_map: None,
+            clr_objs,
         }
     }
 
@@ -133,7 +129,7 @@ impl Color {
     pub async fn act(&mut self) -> Result<(), ColorError> {
         // 从输入流中读取图像
         let mut input = {
-            let mut stream = self.cream.in_stream.lock().await;
+            let mut stream = self.in_stream.lock().unwrap();
             match stream.read() {
                 Some(img) => img,
                 None => return Ok(()), // 没有数据可处理，这不是错误
@@ -187,29 +183,13 @@ impl Color {
         self.local_bounds.clear();
         let infer_ok = self.model.infer(&self.tensor_value, &mut self.local_bounds, &self.message).is_ok();
 
-        // 推理完成后，获取输出锁并写入结果
-        {
-            let mut output_stream = self.cream.out_stream.lock().await;
-            if infer_ok {
-                let write_result = output_stream.get_write_mut();
-                match write_result {
-                    Ok(slot) => {
-                        let bounds = slot.get_or_insert_with(|| Vec::new());
-                        std::mem::swap(bounds, &mut self.local_bounds);
-                        output_stream
-                            .commit_write()
-                            .map_err(|e| ColorError::CommitError(format!("{:?}", e)))?;
-                    }
-                    Err(e) => {
-                        return Err(ColorError::from(e));
-                    }
-                }
-            } else {
-                eprintln!("推理过程中发生错误");
-                let _ = output_stream.commit_write();
-                return Err(ColorError::InferenceError("模型推理失败".to_string()));
-            }
-        } // 在这里释放 output_stream 锁
+        // 推理完成后，写入 DualBuf producer（检测阶段，无跨阶段竞争）
+        if infer_ok {
+            *self.clr_objs.producer().lock().unwrap() = std::mem::take(&mut self.local_bounds);
+        } else {
+            eprintln!("推理过程中发生错误");
+            return Err(ColorError::InferenceError("模型推理失败".to_string()));
+        }
 
         let duration = start_time.elapsed();
         println!("模型推理耗时：{:?}", duration);
@@ -230,10 +210,6 @@ impl Color {
     }
 
     /// 获取输入输出流的引用
-    pub fn cream(&self) -> &Cream<DynamicImage, Vec<ClrBud>> {
-        &self.cream
-    }
-
     // 模型参数设置方法
     // ------------------------------------------------------------------------
 
@@ -259,9 +235,12 @@ impl Camera {
 
       info!("Camera 模块初始化");
 
+        // clr_objs 改用 DualBuf：Camera 写 producer，Fuse 读 consumer
+        let clr_objs: DualBuf<Vec<ClrBud>> = pool.clr_objs.clone();
+
         Self {
-           data: Color::new(Arc::clone(&pool.colors), Arc::clone(&pool.clr_objs)),
-            look: Look::new(Arc::clone(&pool.clr_objs), Arc::clone(&pool.sights)),
+           data: Color::new(Arc::clone(&pool.colors), clr_objs.clone()),
+            look: Look::new(clr_objs, Arc::clone(&pool.sights)),
         }
     }
 

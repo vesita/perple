@@ -5,7 +5,7 @@ use super::ClusteringStrategy;
 
 use super::super::quadtree::QuadTreeNode;
 
-/// 四叉树 DBSCAN 策略（支持固定 eps 和自适应 eps）
+/// 四叉树 DBSCAN 策略（dbscan_qt，支持固定 eps 和自适应 eps）
 pub struct DbscanStrategy {
     patience: f32,
     eps_slope: f32,
@@ -29,7 +29,7 @@ impl DbscanStrategy {
             patience: cfg.cluster.merge_patience,
             eps_slope: cfg.cluster.eps_slope,
             min_points: cfg.cluster.min_points_per_cluster.unwrap_or(3),
-            max_points_per_node: cfg.cluster.max_points_per_node.unwrap_or(50),
+            max_points_per_node: cfg.cluster.max_points_per_node.unwrap_or(20),
             max_tree_depth: cfg.cluster.max_tree_depth.unwrap_or(10),
             voxel_size: cfg.cluster.voxel_size,
             downsample_method: cfg.cluster.downsample_method.clone(),
@@ -189,9 +189,11 @@ impl DbscanStrategy {
 
     /// 构建四叉树
     fn build_quad_tree(&mut self, points: &Vec<[f32; 3]>) {
-        let mut root = QuadTreeNode::new(self.x_min, self.x_max, self.y_min, self.y_max);
+        let mut root = QuadTreeNode::new(self.x_min, self.x_max, self.y_min, self.y_max)
+            .with_max_pts_per_node(self.max_points_per_node)
+            .with_max_depth(self.max_tree_depth);
         for i in 0..points.len() {
-            root.insert_point(i, points, self.max_points_per_node, self.max_tree_depth, 0);
+            root.insert_point(i, points);
         }
         self.quad_tree = Some(root);
     }
@@ -359,10 +361,6 @@ impl ClusteringStrategy for DbscanStrategy {
     }
 
     fn strategy_name(&self) -> &'static str {
-        if self.eps_slope > 0.0 {
-            "dbscan_adaptive"
-        } else {
-            "dbscan"
-        }
+        "dbscan_qt"
     }
 }

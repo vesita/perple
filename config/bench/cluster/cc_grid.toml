@@ -1,0 +1,33 @@
+name = "连通域聚类 (cc_grid)"
+type = "cc_grid"
+preprocessor = "ground+wall"
+
+[quick]
+frames = 1
+params = [
+  { cell_size = 0.10, min_pts = 3, merge_dist = 1, denoise_radius = 0.20, denoise_min_pts = 3 },
+  { cell_size = 0.10, min_pts = 5, merge_dist = 1, denoise_radius = 0.20, denoise_min_pts = 3 },
+  { cell_size = 0.15, min_pts = 3, merge_dist = 2, denoise_radius = 0.20, denoise_min_pts = 3 },
+  { cell_size = 0.15, min_pts = 5, merge_dist = 2, denoise_radius = 0.20, denoise_min_pts = 3 },
+]
+
+[full]
+frames = 10
+params = [
+  { cell_size = 0.08, min_pts = 3, merge_dist = 1, denoise_radius = 0.20, denoise_min_pts = 3 },
+  { cell_size = 0.08, min_pts = 5, merge_dist = 1, denoise_radius = 0.15, denoise_min_pts = 3 },
+  { cell_size = 0.10, min_pts = 3, merge_dist = 1, denoise_radius = 0.20, denoise_min_pts = 3 },
+  { cell_size = 0.10, min_pts = 5, merge_dist = 2, denoise_radius = 0.20, denoise_min_pts = 5 },
+  { cell_size = 0.12, min_pts = 3, merge_dist = 2, denoise_radius = 0.15, denoise_min_pts = 3 },
+  { cell_size = 0.12, min_pts = 5, merge_dist = 1, denoise_radius = 0.20, denoise_min_pts = 5 },
+  { cell_size = 0.15, min_pts = 3, merge_dist = 2, denoise_radius = 0.15, denoise_min_pts = 3 },
+  { cell_size = 0.15, min_pts = 8, merge_dist = 1, denoise_radius = 0.20, denoise_min_pts = 3 },
+  { cell_size = 0.20, min_pts = 3, merge_dist = 2, denoise_radius = 0.20, denoise_min_pts = 5 },
+  { cell_size = 0.20, min_pts = 5, merge_dist = 2, denoise_radius = 0.15, denoise_min_pts = 3 },
+]
+[stats]
+fastest_ms = 340.3954
+slowest_ms = 346.6475
+avg_ms = 342.9755
+median_ms = 342.42955
+last_run = "1778762079"

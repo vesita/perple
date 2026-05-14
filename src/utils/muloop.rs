@@ -81,7 +81,7 @@ impl MultiLoop {
         F: FnMut() + Send + 'static,
     {
         {
-            let mut running = self.running.lock().await;
+            let mut running = self.running.lock().unwrap();
             if *running {
                 error!("循环已在运行中");
                 return Err("循环已在运行中".to_string());
@@ -99,7 +99,7 @@ impl MultiLoop {
                     while counter < count {
                         // 检查是否应该停止
                         let should_stop = {
-                            let running = loop_running.lock().await;
+                            let running = loop_running.lock().unwrap();
                             !*running
                         };
                         
@@ -115,7 +115,7 @@ impl MultiLoop {
                     }
                     
                     // 确保退出时将状态设置为 false
-                    let mut running = loop_running.lock().await;
+                    let mut running = loop_running.lock().unwrap();
                     *running = false;
                 }
                 LoopMode::Duration(duration_ms) => {
@@ -123,7 +123,7 @@ impl MultiLoop {
                     while start_time.elapsed().as_millis() < duration_ms as u128 {
                         // 检查是否应该停止
                         let should_stop = {
-                            let running = loop_running.lock().await;
+                            let running = loop_running.lock().unwrap();
                             !*running
                         };
                         
@@ -138,14 +138,14 @@ impl MultiLoop {
                     }
                     
                     // 确保退出时将状态设置为 false
-                    let mut running = loop_running.lock().await;
+                    let mut running = loop_running.lock().unwrap();
                     *running = false;
                 }
                 LoopMode::Signal => {
                     loop {
                         // 检查是否应该停止
                         let should_stop = {
-                            let running = loop_running.lock().await;
+                            let running = loop_running.lock().unwrap();
                             !*running
                         };
                         
@@ -160,7 +160,7 @@ impl MultiLoop {
                     }
                     
                     // 确保退出时将状态设置为 false
-                    let mut running = loop_running.lock().await;
+                    let mut running = loop_running.lock().unwrap();
                     *running = false;
                 }
             }
@@ -199,7 +199,7 @@ impl MultiLoop {
        F: Fn(&mut T) + Send + Sync + 'static,
     {
         {
-         let mut running = self.running.lock().await;
+         let mut running = self.running.lock().unwrap();
           if *running {
                error!("循环已在运行中");
                 return Err("循环已在运行中".to_string());
@@ -218,7 +218,7 @@ impl MultiLoop {
                    while counter < count {
                         // 检查是否应该停止
                     let should_stop = {
-                         let running = loop_running.lock().await;
+                         let running = loop_running.lock().unwrap();
                             !*running
                         };
 
@@ -244,7 +244,7 @@ impl MultiLoop {
                     }
 
                     // 确保退出时将状态设置为 false
-                 let mut running = loop_running.lock().await;
+                 let mut running = loop_running.lock().unwrap();
                    *running = false;
                 }
              LoopMode::Duration(duration_ms) => {
@@ -252,7 +252,7 @@ impl MultiLoop {
                    while start_time.elapsed().as_millis() < duration_ms as u128 {
                         // 检查是否应该停止
                     let should_stop = {
-                         let running = loop_running.lock().await;
+                         let running = loop_running.lock().unwrap();
                             !*running
                         };
 
@@ -276,14 +276,14 @@ impl MultiLoop {
                     }
 
                     // 确保退出时将状态设置为 false
-                 let mut running = loop_running.lock().await;
+                 let mut running = loop_running.lock().unwrap();
                    *running = false;
                 }
              LoopMode::Signal => {
                     loop {
                         // 检查是否应该停止
                     let should_stop = {
-                         let running = loop_running.lock().await;
+                         let running = loop_running.lock().unwrap();
                             !*running
                         };
 
@@ -307,7 +307,7 @@ impl MultiLoop {
                     }
 
                     // 确保退出时将状态设置为 false
-                 let mut running = loop_running.lock().await;
+                 let mut running = loop_running.lock().unwrap();
                    *running = false;
                 }
             }
@@ -320,7 +320,7 @@ impl MultiLoop {
     ///
     /// 将运行状态设置为 false，使循环在下一次迭代时退出
     pub async fn stop(&mut self) {
-     let mut running = self.running.lock().await;
+     let mut running = self.running.lock().unwrap();
         *running = false;
         drop(running); // 立即释放锁，让循环能够获取到停止标志
         
@@ -335,7 +335,7 @@ impl MultiLoop {
     /// # 返回值
     /// 如果循环正在运行返回 true，否则返回 false
     pub async fn is_running(&self) -> bool {
-        *self.running.lock().await
+        *self.running.lock().unwrap()
     }
 
     /// 等待循环任务执行完成
@@ -386,7 +386,7 @@ impl MultiLoop {
         Fut: std::future::Future<Output = ()> + Send,
     {
         {
-            let mut running = self.running.lock().await;
+            let mut running = self.running.lock().unwrap();
             if *running {
                 error!("循环已在运行中");
                 return Err("循环已在运行中".to_string());
@@ -404,7 +404,7 @@ impl MultiLoop {
                     while counter < count {
                         // 检查是否应该停止
                         let should_stop = {
-                            let running = loop_running.lock().await;
+                            let running = loop_running.lock().unwrap();
                             !*running
                         };
 
@@ -424,7 +424,7 @@ impl MultiLoop {
                     }
 
                     // 确保退出时将状态设置为 false
-                    let mut running = loop_running.lock().await;
+                    let mut running = loop_running.lock().unwrap();
                     *running = false;
                 }
                 LoopMode::Duration(duration_ms) => {
@@ -432,7 +432,7 @@ impl MultiLoop {
                     while start_time.elapsed().as_millis() < duration_ms as u128 {
                         // 检查是否应该停止
                         let should_stop = {
-                            let running = loop_running.lock().await;
+                            let running = loop_running.lock().unwrap();
                             !*running
                         };
 
@@ -450,14 +450,14 @@ impl MultiLoop {
                     }
 
                     // 确保退出时将状态设置为 false
-                    let mut running = loop_running.lock().await;
+                    let mut running = loop_running.lock().unwrap();
                     *running = false;
                 }
                 LoopMode::Signal => {
                     loop {
                         // 检查是否应该停止
                         let should_stop = {
-                            let running = loop_running.lock().await;
+                            let running = loop_running.lock().unwrap();
                             !*running
                         };
 
@@ -475,7 +475,7 @@ impl MultiLoop {
                     }
 
                     // 确保退出时将状态设置为 false
-                    let mut running = loop_running.lock().await;
+                    let mut running = loop_running.lock().unwrap();
                     *running = false;
                 }
             }

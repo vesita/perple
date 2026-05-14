@@ -616,7 +616,7 @@ impl RosBridge {
         // ── 发布跟踪目标 (MarkerArray) ──
         let swapl = global_swapl();
         if let Some(ref pub_) = self.targets_pub {
-            if let Some(targets) = swapl.targets.blocking_lock().peek_latest() {
+            if let Some(targets) = swapl.targets.lock().unwrap().peek_latest() {
                 let markers = targets_to_marker_array(&targets, frame_id, stamp, self.seq);
                 let bytes = marker_array_to_tcpros(&markers);
                 pub_.send(RawMessage(bytes)).ok();
@@ -625,7 +625,7 @@ impl RosBridge {
 
         // ── 发布 3D 检测框 (MarkerArray) ──
         if let Some(ref pub_) = self.detections_pub {
-            if let Some(buds) = swapl.cld_objs.blocking_lock().peek_latest() {
+            if let Some(buds) = swapl.cld_objs.lock().unwrap().peek_latest() {
                 let markers = cldbuds_to_marker_array(&buds, frame_id, stamp, self.seq);
                 let bytes = marker_array_to_tcpros(&markers);
                 pub_.send(RawMessage(bytes)).ok();
@@ -671,7 +671,7 @@ impl RosBridge {
         // 简化实现：解析点云结构并提取 [x, y, z] 点
         if let Some(points) = parse_pointcloud2_payload(&mut cursor) {
             let swapl = global_swapl();
-            let mut stream = swapl.clouds.blocking_lock();
+            let mut stream = swapl.clouds.lock().unwrap();
             let _ = stream.write(points);
         }
     }

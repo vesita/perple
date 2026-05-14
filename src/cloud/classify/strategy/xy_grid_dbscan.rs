@@ -1,5 +1,5 @@
 use super::ClusteringStrategy;
-use crate::cloud::wall::{WallPickStrategy, XYRansacWall, XYGrid, cluster_obstacles_with_indices, xy_dbscan};
+use crate::cloud::wall::{WallPickStrategy, BevEdLines, XYGrid, cluster_obstacles_with_indices, xy_dbscan};
 
 /// XY 网格预过滤 + DBSCAN 聚类策略。
 ///
@@ -23,7 +23,7 @@ pub struct XYGridDBSCAN {
 impl XYGridDBSCAN {
     pub fn new() -> Self {
         Self {
-            wall: Box::new(XYRansacWall::with_params(0.05, 50, 30).with_seed(42)),
+            wall: Box::new(BevEdLines::with_params(0.05, 20).with_min_extent(0.0)),
             skip_wall: false,
             cell_size: 0.30,
             min_pts: 3,

@@ -1,7 +1,7 @@
 use super::ClusteringStrategy;
-use crate::cloud::wall::{WallPickStrategy, XYRansacWall, XYGrid, cluster_obstacles_with_indices, xy_dbscan};
+use crate::cloud::wall::{WallPickStrategy, BevEdLines, XYGrid, cluster_obstacles_with_indices, xy_dbscan};
 
-/// LV-DOT 风格聚类策略：墙体提取 → 体素占用下采样 → DBSCAN。
+/// LV-DOT 风格聚类策略（lvdot_grid）：墙体提取 → 体素占用下采样 → DBSCAN。
 ///
 /// 对应 LV-DOT 原版的视觉深度管线：
 /// 1. 墙面提取（XYRansacWall）分离墙面/非墙面点
@@ -32,7 +32,7 @@ pub struct LvdotClusterStrategy {
 impl LvdotClusterStrategy {
     pub fn new() -> Self {
         Self {
-            wall: Box::new(XYRansacWall::with_params(0.05, 50, 30).with_seed(42)),
+            wall: Box::new(BevEdLines::with_params(0.05, 20).with_min_extent(0.0)),
             skip_wall: false,
             voxel_size: 0.10,
             min_occ: 3,
@@ -138,6 +138,6 @@ impl ClusteringStrategy for LvdotClusterStrategy {
     }
 
     fn strategy_name(&self) -> &'static str {
-        "lvdot_cluster"
+        "lvdot_grid"
     }
 }

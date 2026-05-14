@@ -1,18 +1,12 @@
-mod top_down;
-mod quad_wall;
-mod xy_ransac;
-mod adaptive_dbscan;
-mod normal_wall;
-mod seq_fit;
-mod xy_dbscan;
+pub mod l2_util;
 
-pub use top_down::TopDownCluster;
-pub use quad_wall::QuadtreeWall;
-pub use xy_ransac::XYRansacWall;
-pub use adaptive_dbscan::{AdaptiveDBSCANWall, Downsampler};
-pub use normal_wall::NormalWall;
-pub use seq_fit::SequentialFit;
-pub use xy_dbscan::XYDBSCANWall;
+mod bev_hough;
+mod bev_edlines;
+
+pub use bev_edlines::BevEdLines;
+pub use bev_hough::BevHough;
+
+pub(crate) use l2_util::best_xy_line;
 
 use crate::utils::boxes::Box3D;
 
@@ -31,7 +25,8 @@ pub(crate) type CellKey = (i32, i32);
 
 /// XY 平面哈希网格，O(1) 插入/查询。
 ///
-/// 所有 XY 墙体策略共用：TopDownCluster、AdaptiveDBSCANWall 等。
+/// 所有 XY 墙体策略共用：cc_pca_grid、adapt_pca_grid、adapt_l2_grid 等。
+/// cc_pca_qt 改用四叉树索引，不再使用 XYGrid。
 pub struct XYGrid {
     pub cell_size: f32,
     pub cells: std::collections::HashMap<CellKey, Vec<usize>>,
@@ -118,7 +113,8 @@ impl XYGrid {
                 }
                 return (result, map);
             }
-            cell_size *= 0.7;
+            // 格子数超过目标 → 增大格子尺寸以合并更多点
+            cell_size /= 0.7;
         }
 
         let step = (n / target_pts).max(1);

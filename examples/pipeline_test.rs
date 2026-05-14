@@ -11,8 +11,6 @@ use std::path::PathBuf;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use perple::cloud::core::Lidar;
-use perple::cloud::classify::core::Classify;
-use perple::cloud::wall::XYDBSCANWall;
 use perple::cloud::output::CldBud;
 use perple::color::core::Camera;
 use perple::fuse::Fuse;
@@ -108,7 +106,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .position(|a| a == "--frames")
         .and_then(|i| args.get(i + 1))
         .and_then(|s| s.parse().ok());
-    let wall_strategy: Option<String> = args.iter()
+    let _wall_strategy: Option<String> = args.iter()
         .position(|a| a == "--wall" || a.starts_with("--wall="))
         .and_then(|i| {
             if args[i] == "--wall" {
@@ -137,18 +135,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("数据目录：{} 帧可用（已预加载）", n_frames);
 
     // ─── 初始化模块 ──────────────────────────────────────────────────────
-    let mut lidar = match wall_strategy.as_deref() {
-        Some("xy_dbscan_wall") => {
-            let wall = XYDBSCANWall::with_params(0.20, 5, 1.0);
-            info!("墙体策略: xy_dbscan_wall eps=0.20 min_pts=5 min_z_span=1.0");
-            let classify = Classify::new().with_wall_strategy(Box::new(wall));
-            Lidar::with_classify(classify)
-        }
-        _ => {
-            let cfg = perple::config::fixif();
-            info!("墙体策略: {} (config 默认)", cfg.wall_strategy);
-            Lidar::new()
-        }
+    let mut lidar = {
+        let cfg = perple::config::fixif();
+        info!("墙体策略: {} (config 默认)", cfg.wall_strategy);
+        Lidar::new()
     };
     let mut camera = Camera::new();
     let mut fuse = Fuse::new();
@@ -185,6 +175,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }));
 
     for i in 0..n_frames {
+        let iter_start = Instant::now();
+
         let (l_res, c_res) = tokio::join!(
             l_handle.take().unwrap(),
             c_handle.take().unwrap(),
@@ -192,26 +184,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         lidar = l_res.unwrap();
         camera = c_res.unwrap();
 
-        let frame_start = Instant::now();
+        let t_join = iter_start.elapsed().as_secs_f64() * 1000.0;
 
+        // ─── 交换 DualBuf：检测阶段 → 后融合阶段 ────────────────────────
+        let swapl = global_swapl();
+        swapl.cld_buds_raw.swap();
+        swapl.clr_objs.swap();
+        swapl.clouds_filtered.swap();
+
+        // ─── 提前启动下一帧检测（与当前帧后融合并行） ──────────────────
+        if i + 1 < n_frames {
+            l_handle = Some(tokio::spawn(async move {
+                let _ = lidar.act().await;
+                lidar
+            }));
+            c_handle = Some(tokio::spawn(async move {
+                let _ = camera.act().await;
+                camera
+            }));
+        }
+
+        // ─── 后融合（与下一帧检测并行执行） ─────────────────────────────
         fuse.act().await;
-        let t2 = frame_start.elapsed().as_secs_f64() * 1000.0;
+        let t_fuse = iter_start.elapsed().as_secs_f64() * 1000.0;
 
         // ─── 读取各语义流 ────────────────────────────────────────────────
-        let swapl = global_swapl();
-
         let ground_buds: Vec<CldBud> = {
-            let gb = swapl.ground_buds.lock().await;
+            let gb = swapl.ground_buds.lock().unwrap();
             gb.peek_latest().unwrap_or_default()
         };
         let wall_buds: Vec<CldBud> = {
-            let wb = swapl.wall_buds.lock().await;
+            let wb = swapl.wall_buds.lock().unwrap();
             wb.peek_latest().unwrap_or_default()
         };
-        let cluster_buds: Vec<CldBud> = {
-            let cb = swapl.cld_buds_raw.lock().await;
-            cb.peek_latest().unwrap_or_default()
-        };
+        let cluster_buds: Vec<CldBud> = swapl.cld_buds_raw.consumer().lock().unwrap().clone();
 
         // ─── 写入 .rdra ──────────────────────────────────────────────────
         writer_ground.begin_frame(i);
@@ -230,38 +236,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             data_loader.load_next().await?;
         }
 
-        if i + 1 < n_frames {
-            l_handle = Some(tokio::spawn(async move {
-                let _ = lidar.act().await;
-                lidar
-            }));
-            c_handle = Some(tokio::spawn(async move {
-                let _ = camera.act().await;
-                camera
-            }));
-        }
-
         let _ = tracker.run().await;
-        let t3 = frame_start.elapsed().as_secs_f64() * 1000.0;
+        let t_tracker = iter_start.elapsed().as_secs_f64() * 1000.0;
 
         // ─── 读取跟踪输出 ────────────────────────────────────────────────
-        let n_filtered_pts = {
-            let filtered = swapl.clouds_filtered.lock().await;
-            filtered.peek_latest().as_ref().map(|c| c.len()).unwrap_or(0)
-        };
+        let n_filtered_pts = swapl.clouds_filtered.consumer().lock().unwrap().len();
 
         let targets: Vec<Target> = {
-            let mut t_stream = swapl.targets.lock().await;
+            let mut t_stream = swapl.targets.lock().unwrap();
             t_stream.read().unwrap_or_default()
         };
-        let t4 = frame_start.elapsed().as_secs_f64() * 1000.0;
+        let t_end = iter_start.elapsed().as_secs_f64() * 1000.0;
 
-        if i % 50 == 0 || i == n_frames - 1 {
-            println!("  ⏱  fuse={:.0}  tracker={:.0}  overhead={:.0}  total={:.0}ms",
-                t2, t3 - t2, t4 - t3, t4);
+        if i % 50 == 0 || i == n_frames - 1 || i < 5 {
+            println!("  join={:.0}  fuse={:.0}  tracker={:.0}  seq={:.0}  iter={:.0}ms",
+                t_join, t_fuse - t_join, t_tracker - t_fuse, t_end - t_tracker, t_end);
         }
 
-        print_stats(i, n_frames, t4, n_filtered_pts, cluster_buds.len(),
+        print_stats(i, n_frames, t_end, n_filtered_pts, cluster_buds.len(),
                     targets.len(), &targets);
 
         writer_tracker.begin_frame(i);

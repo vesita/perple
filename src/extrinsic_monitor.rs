@@ -88,11 +88,11 @@ impl ExtrinsicMonitor {
     pub fn update(&mut self) {
         let swapl = global_swapl();
 
-        let clr_buds: Vec<ClrBud> = match swapl.clr_objs.blocking_lock().get_at(0) {
-            Some(buds) => buds,
-            None => return,
-        };
-        let cld_buds: Vec<CldBud> = match swapl.cld_objs.blocking_lock().get_at(0) {
+        let clr_buds: Vec<ClrBud> = swapl.clr_objs.producer().lock().unwrap().clone();
+        if clr_buds.is_empty() {
+            return;
+        }
+        let cld_buds: Vec<CldBud> = match swapl.cld_objs.lock().unwrap().get_at(0) {
             Some(buds) => buds,
             None => return,
         };

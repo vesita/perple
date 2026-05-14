@@ -2,15 +2,15 @@ use std::time::{Duration, Instant};
 
 use perple::bench::{
     BenchStrategy, BenchStats, BenchHarness, BenchRecorder, FrameData,
-    WallPreprocessor, DenoisePreprocessor, Preprocessor,
+    GroundWallPreprocessor, Preprocessor,
     CliArgs, BenchMode, run_toml_bench, StrategyBuilder, to_cluster_result,
     mats, CLUSTER_PALETTE,
 };
 use perple::cloud::classify::strategy::{
-    ClusteringStrategy, DbscanStrategy, RangeImageStrategy, XYGridDBSCAN, LvdotClusterStrategy,
+    ClusteringStrategy, CcCluster, RansacCluster, SeqCluster,
+    DbscanStrategy, DbscanGrid, RangeImageStrategy, XYGridDBSCAN, LvdotClusterStrategy, LvdotQt,
 };
-use perple::cloud::wall::{WallPickStrategy, XYRansacWall};
-use perple::cloud::denoise::RadiusOutlierRemoval;
+use perple::cloud::wall::{WallPickStrategy, BevEdLines};
 use perple::config::fixif;
 use perple::utils::boxes::Box3D;
 use redra_client::spawn_point;
@@ -185,29 +185,57 @@ fn build_cluster_strategy(cli: &CliArgs) -> Box<dyn ClusteringStrategy> {
     let min_occ = cli.get("min-occ", 3usize);
     let cell_size = cli.get("cell-size", 0.30f32);
     let wall: Box<dyn WallPickStrategy> = Box::new(
-        XYRansacWall::with_params(0.05, 50, 30).with_seed(cli.get("seed", 42u64)),
+        BevEdLines::with_params(0.05, 20).with_min_extent(0.0),
     );
     match strat.as_str() {
-        "xy_grid_dbscan" => Box::new(XYGridDBSCAN::with_params(wall, cell_size, 3, 12.0, eps, min_pts).with_pre_extracted_wall()),
-        "lvdot" => Box::new(LvdotClusterStrategy::direct(voxel_size, min_occ, eps, min_pts)),
+        "cc_grid" | "cc" => Box::new(CcCluster::new(cell_size, min_pts).with_denoise(0.20, 3)),
+        "ransac" => Box::new(RansacCluster::new(eps, 100, min_pts).with_denoise(0.20, 3)),
+        "seq" => Box::new(SeqCluster::new(eps, min_pts).with_denoise(0.20, 3)),
+        "xy_grid_dbscan" | "xy_grid_dbscan_grid" => Box::new(XYGridDBSCAN::with_params(wall, cell_size, 3, 12.0, eps, min_pts).with_pre_extracted_wall()),
+        "lvdot_grid" | "lvdot" => Box::new(LvdotClusterStrategy::direct(voxel_size, min_occ, eps, min_pts)),
+        "lvdot_qt" => Box::new(LvdotQt::new().with_params(min_occ, eps, min_pts)),
         "xy_dbscan" => Box::new(LvdotClusterStrategy::direct(0.0, 1, eps, min_pts).with_pre_extracted_wall()),
-        "dbscan" | "dbscan_adaptive" => Box::new(DbscanStrategy::with_params(0.10, 0.20, 10, 50, 10, 0.10)),
+        "dbscan_qt" | "dbscan" | "dbscan_adaptive" => Box::new(DbscanStrategy::with_params(0.10, 0.20, 10, 20, 10, 0.10)),
+        "dbscan_grid" => Box::new(DbscanGrid::new(eps, min_pts)),
         "range_image" => Box::new(RangeImageStrategy::new()),
-        _ => { eprintln!("未知聚类策略 '{}'，使用 xy_grid_dbscan", strat);
+        _ => { eprintln!("未知聚类策略 '{}'，使用 xy_grid_dbscan_grid", strat);
             Box::new(XYGridDBSCAN::with_params(wall, cell_size, 3, 12.0, eps, min_pts)) }
     }
 }
 
 fn build_cluster_from_toml(strategy_type: &str, p: &toml::Table) -> Box<dyn ClusteringStrategy> {
     let wall: Box<dyn WallPickStrategy> = Box::new(
-        XYRansacWall::with_params(0.05, 50, 30).with_seed(42),
+        BevEdLines::with_params(0.05, 20).with_min_extent(0.0),
     );
     match strategy_type {
-        "xy_grid_dbscan" => Box::new(XYGridDBSCAN::with_params(wall, f32(p, "cell_size"), 3, 12.0, f32(p, "eps"), i(p, "min_pts") as usize).with_pre_extracted_wall()),
-        "lvdot" => Box::new(LvdotClusterStrategy::direct(f32(p, "voxel_size"), i(p, "min_occ") as usize, f32(p, "eps"), i(p, "min_pts") as usize)),
+        "cc_grid" | "cc" => {
+            Box::new(CcCluster::with_params(f32(p, "cell_size"), i(p, "min_pts") as usize,
+                p.get("merge_dist").and_then(|v| v.as_integer()).unwrap_or(1) as usize)
+                .with_denoise(f32(p, "denoise_radius"), i(p, "denoise_min_pts") as usize))
+        },
+        "ransac" => {
+            let mut r = RansacCluster::new(f32(p, "distance"), i(p, "iterations") as usize, i(p, "min_pts") as usize)
+                .with_denoise(f32(p, "denoise_radius"), i(p, "denoise_min_pts") as usize);
+            if let Some(mw) = p.get("max_walls").and_then(|v| v.as_integer()) {
+                r = r.with_max_clusters(mw as usize);
+            }
+            Box::new(r)
+        },
+        "seq" => {
+            let mut s = SeqCluster::new(f32(p, "distance"), i(p, "min_pts") as usize)
+                .with_denoise(f32(p, "denoise_radius"), i(p, "denoise_min_pts") as usize);
+            if let Some(mw) = p.get("max_walls").and_then(|v| v.as_integer()) {
+                s = s.with_max_clusters(mw as usize);
+            }
+            Box::new(s)
+        },
+        "xy_grid_dbscan" | "xy_grid_dbscan_grid" => Box::new(XYGridDBSCAN::with_params(wall, f32(p, "cell_size"), 3, 12.0, f32(p, "eps"), i(p, "min_pts") as usize).with_pre_extracted_wall()),
+        "lvdot_grid" | "lvdot" => Box::new(LvdotClusterStrategy::direct(f32(p, "voxel_size"), i(p, "min_occ") as usize, f32(p, "eps"), i(p, "min_pts") as usize)),
+        "lvdot_qt" => Box::new(LvdotQt::new().with_params(i(p, "min_occ") as usize, f32(p, "eps"), i(p, "min_pts") as usize)),
         "xy_dbscan" => Box::new(LvdotClusterStrategy::direct(0.0, 1, f32(p, "eps"), i(p, "min_pts") as usize).with_pre_extracted_wall()),
         "range_image" => Box::new(RangeImageStrategy::with_params(f32(p, "azimuth"), f32(p, "elevation"), f32(p, "threshold"), i(p, "min_pts") as usize)),
-        "dbscan_adaptive" => Box::new(DbscanStrategy::with_params(f32(p, "patience"), f32(p, "slope"), i(p, "min_pts") as usize, 50, 10, f32(p, "voxel_size"))),
+        "dbscan_qt" | "dbscan_adaptive" => Box::new(DbscanStrategy::with_params(f32(p, "patience"), f32(p, "slope"), i(p, "min_pts") as usize, 20, 10, f32(p, "voxel_size"))),
+        "dbscan_grid" => Box::new(DbscanGrid::new(f32(p, "eps"), i(p, "min_pts") as usize)),
         _ => panic!("未知聚类策略类型: {}", strategy_type),
     }
 }
@@ -218,9 +246,9 @@ impl StrategyBuilder for ClusterBuilder {
         let strategy = build_cluster_from_toml(strategy_type, p);
         let dirname = perple::bench::param_dirname(strategy_type, p);
         // 墙提已在预处理阶段完成，所有聚类策略的输入统一为去地面+墙体后的点。
-        // xy_grid_dbscan 在此框架下等价于网格降采样+DBSCAN 的变体，不再做内部墙提。
+        // cc/ransac/seq 等新策略内部自带降噪，只需 non_wall 输入。
         let input_source = match strategy_type {
-            "lvdot" => InputSource::NonGround,
+            "lvdot" | "lvdot_grid" | "lvdot_qt" => InputSource::NonGround,
             _ => InputSource::Denoised,
         };
         Box::new(ClusterBenchCase::new(&format!("{}_{}", strategy_type, dirname), strategy, input_source))
@@ -253,24 +281,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(|e| format!("创建 recorder 失败: {}", e))?;
             let mut recs = vec![rec];
             let harness = BenchHarness::new("./data/cloud", frame_limit);
-            let wall_pp = WallPreprocessor::new(
+            let wall_strat = build_wall_strategy(&cli);
+            let mut pp: Box<dyn Preprocessor> = Box::new(GroundWallPreprocessor::new(
                 Box::new(perple::cloud::ground::PeakScan::new()),
-                Box::new(RadiusOutlierRemoval::new(0.30, 3)),
-                Box::new(XYRansacWall::with_params(0.05, 50, 30)),
-            );
-            let mut pp: Box<dyn Preprocessor> = Box::new(DenoisePreprocessor::new(
-                wall_pp,
-                Box::new(RadiusOutlierRemoval::new(cli.get("denoise-radius", 0.20f32), cli.get("denoise-min-pts", 3usize))),
+                wall_strat,
             ));
             harness.run(&mut *pp, &mut strategies, &mut recs).await?;
             recs[0].save().map_err(|e| format!("保存失败: {}", e))?;
             output_json_or_table(&strategies, json);
         }
         BenchMode::Quick | BenchMode::Full => {
-            let mut pp = DenoisePreprocessor::new(
-                WallPreprocessor::default(),
-                Box::new(RadiusOutlierRemoval::new(0.20, 3)),
-            );
+            let mut pp = GroundWallPreprocessor::default();
             run_toml_bench("cluster", "./data/cloud", mode, &mut pp, &ClusterBuilder).await?;
         }
     }
@@ -299,6 +320,19 @@ fn output_json_or_table(strategies: &[Box<dyn BenchStrategy>], json: bool) {
         println!("| {:<44} | {:>5} | {:>4} | {:>7} | {:>4} |", "策略", "输入", "簇", "ms/帧", "帧");
         println!("{:-<90}", "");
         println!("{:-<90}", "");
+    }
+}
+
+/// 从 CLI 参数创建墙体策略。
+fn build_wall_strategy(cli: &CliArgs) -> Box<dyn WallPickStrategy> {
+    let wall = cli.get("wall", "edlines".to_string());
+    match wall.as_str() {
+        "edlines" | "bev_edlines" => Box::new(BevEdLines::new()),
+        "hough" | "bev_hough" => Box::new(perple::cloud::wall::BevHough::new()),
+        _ => {
+            eprintln!("未知墙体策略 '{}'，使用 bev_edlines", wall);
+            Box::new(BevEdLines::new())
+        }
     }
 }
 

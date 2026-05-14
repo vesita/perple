@@ -43,11 +43,13 @@ impl BenchHarness {
 
         let mut frame_idx = 0usize;
         let total_start = Instant::now();
+        let mut skipped: Vec<bool> = vec![false; n_strategies];
+        let mut skip_count = 0;
 
         while data_loader.load_next().await? {
             let cloud: Vec<[f32; 3]> = {
                 let swapl = global_swapl();
-                let mut stream = swapl.clouds.lock().await;
+                let mut stream = swapl.clouds.lock().unwrap();
                 match stream.read() {
                     Some(data) => data,
                     None => continue,
@@ -60,16 +62,27 @@ impl BenchHarness {
             let frame = FrameData { cloud: &cloud, preprocessed: &preprocessed, frame_idx };
 
             for (i, strategy) in strategies.iter_mut().enumerate() {
+                if skipped[i] { continue; }
+
                 let elapsed = strategy.run(&frame);
                 let ms = elapsed.as_secs_f64() * 1000.0;
                 if ms > WARN_THRESHOLD_MS {
-                    println!("  [WARN] {} 第 {} 帧耗时 {:.1}ms (> {:.0}ms)",
-                        strategy.name(), frame_idx, ms, WARN_THRESHOLD_MS);
+                    if frame_idx == 0 {
+                        println!("  >>> 跳过 {} ({:.1}ms > {:.0}ms)", strategy.name(), ms, WARN_THRESHOLD_MS);
+                        skipped[i] = true;
+                        skip_count += 1;
+                    } else {
+                        println!("  [WARN] {} 第 {} 帧耗时 {:.1}ms (> {:.0}ms)",
+                            strategy.name(), frame_idx, ms, WARN_THRESHOLD_MS);
+                    }
                 }
                 strategy.write_frame(&mut recorders[i], &frame);
             }
 
             frame_idx += 1;
+            if skip_count > 0 && frame_idx == 1 {
+                println!("  >>> 跳过 {} 个慢策略，剩余 {} 个\n", skip_count, n_strategies - skip_count);
+            }
             if frame_idx % 10 == 0 { println!("已处理 {} 帧...", frame_idx); }
         }
 
@@ -103,6 +116,9 @@ where
 ///
 /// `task` 对应 `config/bench/{task}/` 目录下的 TOML 文件集合。
 /// `builder` 负责将 (strategy_type, params) 转换为具体的 BenchStrategy。
+///
+/// 快速测试与全量测试共享速度过滤器：上次最慢 >100ms 的策略会被跳过。
+/// 帧数取所有策略族中的最大值，确保每个 TOML 的 frames 设置生效。
 pub async fn run_toml_bench(
     task: &str,
     data_path: &str,
@@ -116,20 +132,23 @@ pub async fn run_toml_bench(
         return Ok(());
     }
 
+    // 清理该任务下所有旧数据，避免已移除策略的残留
+    let task_out_dir = format!("output/bench/{}", task);
+    let _ = std::fs::remove_dir_all(&task_out_dir);
+    std::fs::create_dir_all(&task_out_dir)?;
+
     let (mode_label, expected_frames) = match mode {
         BenchMode::Quick => ("quick", families[0].quick.frames),
-        BenchMode::Full => ("full", families[0].full.frames),
+        BenchMode::Full => ("full", families.iter().map(|f| f.full.frames).max().unwrap_or(1)),
         _ => unreachable!(),
     };
 
-    // Full mode：跳过上次最慢 >100ms 的策略
+    // 跳过上次最慢 >100ms 的策略（快速测试也维护此标签，供全量测试参考）
     let filtered: Vec<&StrategyFamily> = families.iter().filter(|f| {
-        if mode == BenchMode::Full {
-            if let Some(ref st) = f.stats {
-                if st.slowest_ms > 100.0 && st.last_run.is_some() {
-                    println!("  跳过 {} (上次最慢 {:.0}ms > 100ms)", f.name, st.slowest_ms);
-                    return false;
-                }
+        if let Some(ref st) = f.stats {
+            if st.slowest_ms > 100.0 && st.last_run.is_some() {
+                println!("  跳过 {} (上次最慢 {:.0}ms > 100ms)", f.name, st.slowest_ms);
+                return false;
             }
         }
         true

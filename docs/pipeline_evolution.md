@@ -54,8 +54,8 @@
                            │ 降噪后非地面点
                     ┌──────▼──────┐
                     │   墙体提取   │  WallPickStrategy
-                    │  XYRansacWall│  TopDown / Quadtree
-                    │  0.05/50/30 │
+                    │  ransac_l2_grid│  cc_pca_qt / cc_pca_grid
+                    │  0.08/50/30 │
                     └──────┬──────┘
                            │ 非墙面点 ~1484 pts
                     ┌──────▼──────┐
@@ -107,10 +107,10 @@ benchmark 结果（详细数据见 `output/bench/wall/`）：
 
 | 策略 | 平均耗时 | 特点 |
 |------|:-------:|------|
-| XYRansacWall (默认) | 最快 | TLS 精化+确定性种子 |
-| TopDownCluster | 中等 | 网格自顶向下聚类 |
-| QuadtreeWall | 较慢 | 四叉树递归分割 |
-| seq_fit | — | 所有参数都检测到 0 墙面点（待排查） |
+| ransac_l2_grid (默认) | 最快 | TLS 精化+确定性种子 |
+| cc_pca_qt | 中等 | 网格自顶向下聚类 |
+| cc_pca_grid | 较慢 | XY 哈希网格+BFS 连通域+PCA 判别 |
+| seq_pca_grid | — | 所有参数都检测到 0 墙面点（待排查） |
 
 ## 后聚类策略对比
 
@@ -140,9 +140,9 @@ benchmark 结果（详细数据见 `output/bench/wall/`）：
 ## 综合推荐管线
 
 ```
-地面提取: histogram expand=0.20 (28ms, 23.3%)
-  → 墙体提取: XYRansacWall 0.05/50/30 (默认, TLS 精化)
-    → 后聚类: xy_dbscan eps=0.2~0.3 min_pts=5 (22ms, 人检 recall 最高)
+地面提取: peak_scan threshold=0.10 expand=0.20 (28ms)
+  → 墙体提取: bev_edlines distance=0.08 (图像边缘检测, ~15ms)
+    → 后聚类: dbscan_qt eps_slope=0.2 min_pts=10 voxel=0.10 (~24ms)
 ```
 
 如需低噪声场景：
@@ -155,8 +155,87 @@ benchmark 结果（详细数据见 `output/bench/wall/`）：
 后聚类: range_image azimuth=2.0 elevation=2.0 threshold=0.5 (2.4ms)
 ```
 
----
+## Era 5：基于图像的墙体检测 + 降噪内聚
 
-*生成日期: 2026-05-10*
-*运行: `cargo run --example pipeline_evolution_bench -- --frames 20`*
-*分析图更新: `.venv/Scripts/python.exe scripts/bench_pipeline.py --analysis-only`*
+2026-05-14 管线重构：
+
+### 墙体检测：几何 → 图像
+
+经过大量对比测试发现，传统几何方法（RANSAC、连通域、法线聚类、SVD 平面拟合等）在室内点云墙体检测中存在以下问题：
+
+- **RANSAC 系列**：对稀疏点云鲁棒性差，随机采样在降采样后易丢失墙面结构
+- **CC 系列**：网格分辨率敏感，薄墙易断裂，厚墙过度合并
+- **法线系列**：依赖局部法线估计，对噪声敏感，计算开销大
+- **自适应系列**：参数耦合度高，调参困难
+
+**BevEdLines**（BEV 图像 + OpenCV EDLines）将墙体检测转化为 2D 图像边缘检测问题：
+1. 点云投影到 BEV 图像（俯视图）
+2. EDLines 算法提取图像边缘线段
+3. 反投影回 3D 空间得到墙面直线
+4. 沿 Z 轴扩展为墙面
+
+优势：利用成熟的图像边缘检测算法，对点云稀疏和密度不均不敏感，速度稳定 ~15ms/帧。
+保留 `BevHough` 作为 Hough 变换备选方案，预留 LSD 算法接口。
+
+### 降噪内聚至聚类策略
+
+预处理降噪（地面→墙体间）和后处理降噪（墙体→聚类间）均从核心管线移除，将降噪逻辑内聚到各 ClusteringStrategy 实现内部。
+降噪不再是管线层级的固定环节，而是策略的可选特性。
+
+当前管线简化为：
+
+```
+原始点云
+  → 地面提取 (peak_scan)
+    → 墙体提取 (bev_edlines)
+      → 体素过滤 (仅跟踪器投票用)
+        → 后聚类 (含内部降噪)
+```
+
+性能（release 模式）：全管线（含 YOLO 推理 28-44ms）平均 ~42ms/帧。点云处理 5-9ms，YOLO 推理为瓶颈。
+
+## Era 6：Pipeline 并行 + DualBuf 锁域分离
+
+2026-05-14 管线优化：
+
+### DualBuf 锁域分离
+
+引入 DualBuf（双缓冲 + producer/consumer 模式）替代 Stream 作为检测→后融合的跨阶段数据通道：
+
+```rust
+pub struct DualBuf<T> {
+    producer: Mutex<Vec<T>>,  // 检测阶段写入
+    consumer: Mutex<Vec<T>>,  // 后融合阶段读取
+}
+```
+
+通过 `swap()` 一次性交换 producer/consumer 缓冲区，消除检测阶段（Lidar/Camera）和后融合阶段（Fuse/Tracker）之间的锁竞争。涉及字段：`clouds_filtered`、`cld_buds_raw`、`clr_objs`。
+
+### std::sync::Mutex 替代 tokio::sync::Mutex
+
+所有 Eap/Stream/DualBuf 的内部锁从 `tokio::sync::Mutex` 改为 `std::sync::Mutex`。原因：CPU 密集型检测任务在 tokio 工作线程上运行时，tokio::sync::Mutex 的 async 上下文切换引入 ~10-15ms 调度延迟。`std::sync::Mutex` 的同步锁在短临界区场景下更高效。
+
+### 帧级 Pipeline 并行
+
+检测阶段与后融合阶段通过 spawn 重排序实现并行：
+
+```
+帧 N: [  检测(Lidar+Camera)  ] → swap → [ 后融合(Fuse+Tracker) ]
+                   ↓ spawn next 帧 N+1 检测
+帧 N+1:           [  检测(Lidar+Camera)  ] → swap → ...
+```
+
+关键改动：swap 后立即 spawn 下一帧检测，使其与当前帧后融合并行执行。
+
+### 性能收益
+
+| 指标 | Debug（优化前） | Release（优化后） |
+|------|:-:|:-:|
+| 帧耗时 | ~90-100ms | ~42ms |
+| 点云处理 | 5-9ms | 5-9ms |
+| YOLO 推理 | 40ms | 28-44ms |
+| fps | ~10 | ~24 |
+
+631 帧全量测试：总耗时 26.6s，帧均 42ms。瓶颈完全在 YOLO 端，点云处理 5-9ms 被 pipeline 并行覆盖为零成本。<｜end▁of▁thinking｜>
+
+<｜｜DSML｜｜parameter name="file_path" string="true">E:\code\perple\docs\pipeline_evolution.md

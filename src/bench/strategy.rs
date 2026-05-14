@@ -3,7 +3,7 @@ use serde::Serialize;
 use super::recorder::BenchRecorder;
 use crate::cloud::ground::{GroundPickStrategy, create_ground_strategy};
 use crate::cloud::wall::WallPickStrategy;
-use crate::cloud::wall::XYRansacWall;
+use crate::cloud::wall::BevEdLines;
 use crate::cloud::ground::PeakScan;
 use crate::cloud::denoise::{DenoiseStrategy, RadiusOutlierRemoval};
 
@@ -18,6 +18,10 @@ pub enum Preprocessed {
     Passthrough,
     /// 地面提取完成，非地面点可用。
     Ground {
+        non_ground: Vec<[f32; 3]>,
+    },
+    /// 地面+降噪完成，墙体策略从此接管自有降噪逻辑。
+    GroundDenoised {
         non_ground: Vec<[f32; 3]>,
     },
     /// 地面+墙面提取完成，非地面和非墙面点均可用。
@@ -77,6 +81,40 @@ impl Preprocessor for GroundPreprocessor {
     }
 }
 
+/// 地面+降噪预处理器（无墙体检测），wall_bench 使用。
+/// 管线：地面 → 降噪，墙体策略自行处理自有降噪逻辑。
+pub struct GroundDenoisePreprocessor {
+    ground: Box<dyn GroundPickStrategy>,
+    denoise: Box<dyn DenoiseStrategy>,
+}
+
+impl GroundDenoisePreprocessor {
+    pub fn new(
+        ground: Box<dyn GroundPickStrategy>,
+        denoise: Box<dyn DenoiseStrategy>,
+    ) -> Self {
+        Self { ground, denoise }
+    }
+
+    pub fn default() -> Self {
+        Self::new(
+            Box::new(crate::cloud::ground::PeakScan::new()),
+            Box::new(RadiusOutlierRemoval::new(0.30, 3)),
+        )
+    }
+}
+
+impl Preprocessor for GroundDenoisePreprocessor {
+    fn name(&self) -> &str { "ground+denoise" }
+    fn preprocess(&mut self, cloud: &[[f32; 3]]) -> Preprocessed {
+        let mut buf = cloud.to_vec();
+        let (n_ground, _, _) = self.ground.pick(&mut buf);
+        let non_ground = buf[n_ground..].to_vec();
+        let (denoised, _) = self.denoise.denoise(&non_ground);
+        Preprocessed::GroundDenoised { non_ground: denoised }
+    }
+}
+
 /// 地面+墙面（+预处理降噪）提取预处理器，wall_bench 使用。
 /// 管线：地面 → 降噪（预处理，改善墙体 BFS 连通性）→ 墙体
 pub struct WallPreprocessor {
@@ -98,7 +136,7 @@ impl WallPreprocessor {
         Self::new(
             Box::new(PeakScan::new()),
             Box::new(RadiusOutlierRemoval::new(0.30, 3)),
-            Box::new(XYRansacWall::with_params(0.05, 50, 30)),
+            Box::new(BevEdLines::with_params(0.08, 20)),
         )
     }
 }
@@ -121,7 +159,45 @@ impl Preprocessor for WallPreprocessor {
     }
 }
 
-/// 地面+墙面+降噪预处理器，cluster_bench 使用。
+/// 地面+墙面提取预处理器（无降噪），cluster_bench 使用。
+/// 管线：地面 → 墙体，降噪移至各聚类策略内部处理。
+pub struct GroundWallPreprocessor {
+    ground: Box<dyn GroundPickStrategy>,
+    wall: Box<dyn WallPickStrategy>,
+}
+
+impl GroundWallPreprocessor {
+    pub fn new(
+        ground: Box<dyn GroundPickStrategy>,
+        wall: Box<dyn WallPickStrategy>,
+    ) -> Self {
+        Self { ground, wall }
+    }
+
+    pub fn default() -> Self {
+        Self::new(
+            Box::new(PeakScan::new()),
+            Box::new(BevEdLines::with_params(0.08, 20)),
+        )
+    }
+}
+
+impl Preprocessor for GroundWallPreprocessor {
+    fn name(&self) -> &str { "ground+wall" }
+    fn preprocess(&mut self, cloud: &[[f32; 3]]) -> Preprocessed {
+        let mut buf = cloud.to_vec();
+        let (n_ground, _, _) = self.ground.pick(&mut buf);
+        let non_ground = buf[n_ground..].to_vec();
+
+        let mut wall_buf = non_ground.clone();
+        let (n_wall, _) = self.wall.pick(&mut wall_buf);
+        let non_wall = wall_buf[n_wall..].to_vec();
+
+        Preprocessed::Wall { non_ground, non_wall }
+    }
+}
+
+/// 地面+墙面+降噪预处理器，旧版 cluster_bench 使用。
 /// 管线：地面 → 降噪（预处理）→ 墙体 → 降噪（后处理，聚类前清洁）
 pub struct DenoisePreprocessor {
     wall_pp: WallPreprocessor,
@@ -173,6 +249,7 @@ impl<'a> FrameData<'a> {
     pub fn non_ground(&self) -> &'a [[f32; 3]] {
         match self.preprocessed {
             Preprocessed::Ground { non_ground }
+            | Preprocessed::GroundDenoised { non_ground }
             | Preprocessed::Wall { non_ground, .. }
             | Preprocessed::Denoise { non_ground, .. } => non_ground,
             Preprocessed::Passthrough => self.cloud,

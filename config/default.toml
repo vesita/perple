@@ -2,6 +2,7 @@ stream_capacity = 1024
 detections_capacity = 16
 person_class_label = "person"
 points_capacity = 16384
+max_range = 12.0
 
 # 目标检测超参数配置
 default_input_width = 640
@@ -21,21 +22,22 @@ upside_down = true         # 点云 Z 轴是否上下翻转（LiDAR 安装朝下
 has_ceiling = false        # 是否有天花板（配合 [cluster].ceiling_filter 使用）
 
 # 墙体提取策略（用于追踪管线，bench 使用 config/bench/wall/*.toml）
-wall_strategy = "xy_ransac"   # 墙体提取策略: xy_ransac / top_down / quadtree / normal_wall / xy_dbscan_wall / adaptive_dbscan / seq_fit
-wall_distance = 0.05         # XYRansacWall 距离阈值
-wall_iterations = 50         # XYRansacWall RANSAC 迭代次数
-wall_eps = 0.20              # XYDBSCANWall eps
-wall_min_pts = 5             # XYDBSCANWall min_pts
-wall_min_z_span = 1.0        # XYDBSCANWall 最小 Z 跨度
+wall_strategy = "bev_edlines"   # 墙体提取策略: bev_edlines / ransac_l2_grid / dbscan_l2_qt_dif / ...
+wall_distance = 0.08         # RansacL2Grid 距离阈值
+wall_iterations = 50         # RansacL2Grid RANSAC 迭代次数
+wall_max_walls = 30          # 最大墙体平面数（RansacL2Grid 每帧保留的墙面数上限）
+wall_eps = 0.20              # DbscanL2QtDif BFS 合并距离
+wall_min_pts = 16            # DbscanL2QtDif 叶节点最小点数（密度中心门槛）
+wall_min_z_span = 1.0        # 墙面最小 Z 跨度
 
 # 点云聚类参数
 [cluster]
 # 聚类策略: "dbscan"（固定eps）, "dbscan_adaptive"（eps随距离线性增长）, "range_image"
-strategy = "xy_grid_dbscan"
+strategy = "dbscan_qt"
 # 基础邻域半径 eps（米），自适应模式下为 eps 截距；eps(p) = merge_patience + eps_slope * range(p)
 merge_patience = 0.10
 # 体素下采样格子大小（米），0 表示不下采样
-voxel_size = 0.3
+voxel_size = 0.10
 # DBSCAN 核心点最少邻居数，低于此数的点被视为噪声
 min_points_per_cluster = 10
 # 自适应 eps 斜率，值越大远处邻域半径越大；设为 0 则退化为固定 eps 模式
@@ -45,7 +47,7 @@ max_points_per_node = 50
 # 四叉树最大深度
 max_tree_depth = 10
 # 下采样方法: "voxel"（均匀体素） 或 "gaussian"（距离概率采样，近密远疏）
-downsample_method = "gaussian"
+downsample_method = "voxel"
 # Gaussian 下采样 σ 值（米），keep_prob = exp(-d²/2σ²)；σ 越大远处保留越多
 # 6m 处保留约 60%，12m 处保留约 14%
 gaussian_downsample_rate = 6.0
@@ -106,7 +108,7 @@ box_smoothing_alpha = 0.25
 # 速度 EMA 系数（0-1）；0=自适应置信度
 vel_smoothing_alpha = 0.25
 # 分类转换冷却帧数（Moving↔Movable 迟滞）
-class_cooldown_frames = 3
+class_cooldown_frames = 15
 
 [camera]
 intrinsic = [

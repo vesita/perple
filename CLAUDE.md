@@ -99,27 +99,22 @@ ui/         — egui UI: VS Code-style sidebar, playback controls, file manager,
 
 `render::frame_renderer` reads `FrameManager` each frame in `Update`, spawns/despawns Bevy entities to match current keyframe. Camera is a separate `FpsCameraController` component.
 
-### Five-Stage Processing Pipeline (Ground → Denoise → Wall → Denoise → Cluster)
+### Three-Stage Processing Pipeline (Ground → Wall → Cluster)
 
-The point cloud processing pipeline: ground extraction → pre-denois e → wall extraction → post-denoise → clustering.
+The point cloud processing pipeline: ground extraction → wall extraction → clustering (with internal denoise).
 
 ```
 Raw Cloud (~20k pts)
-  → Ground Extraction (GroundPickStrategy: histogram/peak_scan/ransac)
-    → Pre-Denoise (DenoiseStrategy: RadiusOutlierRemoval r=0.30 m=3, 改善墙体 BFS 连通性)
-      → Wall Extraction (WallPickStrategy: XYRansacWall/TopDown/Quadtree)
-        → Post-Denoise (DenoiseStrategy: RadiusOutlierRemoval r=0.20 m=3, 聚类前清洁)
-          → Post-Clustering (ClusteringStrategy: xy_dbscan/lvdot/range_image/xy_grid_dbscan)
-            → Detection Results (障碍物簇)
+  → Ground Extraction (GroundPickStrategy: peak_scan/histogram/ransac)
+    → Wall Extraction (WallPickStrategy: bev_edlines, image-based edge detection)
+      → Post-Clustering (ClusteringStrategy: dbscan_qt/lvdot/xy_dbscan/cc/ransac/seq, denoise internalized)
+        → YOLO fusion + Tracking → Detection Results
 ```
 
-Key insight: downsampling gives 244x speedup, ground removal adds 1.4x, wall removal reduces noise.
+Key insight: image-based wall detection (BevEdLines) outperforms all geometric methods (RANSAC, CC, normal-based, SVD). Pipeline simplified by removing pre/post denoising as fixed stages — each clustering strategy handles its own denoise.
 
-- `src/bench/strategy.rs` — Preprocessor trait + WallPreprocessor (地面→降噪→墙体) + DenoisePreprocessor (封装 WallPreprocessor + 后降噪)
-- `src/cloud/denoise.rs` — DenoiseStrategy trait + RadiusOutlierRemoval/SOR
-- `examples/cluster_bench.rs` — 聚类策略 bench（降噪默认开启，`--denoise` 标志已移除）
-- `examples/wall_pipeline_bench.rs` — 墙体管线对比：固定后聚类（xy_grid_dbscan e0.15_m3），遍历墙体策略
-- `examples/denoise_bench.rs` — 降噪策略 bench
-- `examples/pipeline_evolution_bench.rs` — 管线演化对比（Era1→Era2→Era3）
-- `scripts/bench_pipeline.py` — Python 分析图生成
-- `scripts/run_wall_pipeline.py` — 墙体管线对比自动执行脚本
+- `src/cloud/wall.rs` — WallPickStrategy trait + XYGrid shared infra + wall module root: only `bev_edlines` (active) and `bev_hough` (reserved) remain
+- `src/cloud/wall/bev_edlines.rs` — BEV image + OpenCV EDLines 边缘检测墙体提取
+- `src/cloud/wall/bev_hough.rs` — Hough 变换备选
+- `src/cloud/classify/core.rs` — Three-stage pipeline: ground → wall → cluster (no denoise stages)
+- `src/bench/strategy.rs` — Preprocessor trait + GroundWallPreprocessor (地面→墙体, 无降噪) + GroundPreprocessor

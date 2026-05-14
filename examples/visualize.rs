@@ -67,7 +67,7 @@ async fn write_frame(writer: &mut FrameWriter, frame: usize, total: usize) -> Re
     let swapl = global_swapl();
 
     // ── 点云（暖白，语义层） ──
-    let cloud_stream = swapl.clouds_out.lock().await;
+    let cloud_stream = swapl.clouds_out.lock().unwrap();
     if let Some(cloud) = cloud_stream.peek_latest() {
         println!("  帧 {}/{} | 点云: {} points", frame + 1, total, cloud.len());
         writer.write_cloud(&cloud, "point_cloud", 5000);
@@ -77,7 +77,7 @@ async fn write_frame(writer: &mut FrameWriter, frame: usize, total: usize) -> Re
     drop(cloud_stream);
 
     // ── 跟踪目标（框 + 标签 + 颜色） ──
-    let target_stream = swapl.targets.lock().await;
+    let target_stream = swapl.targets.lock().unwrap();
     if let Some(targets) = target_stream.peek_latest() {
         println!("  帧 {}/{} | 目标: {} 个", frame + 1, total, targets.len());
         for t in targets.iter() {

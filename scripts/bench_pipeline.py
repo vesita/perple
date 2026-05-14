@@ -36,25 +36,21 @@ ANALYSIS_DIR = OUTPUT_BASE / "analysis"
 
 TASKS = ["ground", "cluster", "wall", "denoise"]
 
-# ── 中文 ───────────────────────────────────────────────────
-
-CHINESE_FONTS = [
-    "Microsoft YaHei", "SimHei", "WenQuanYi Micro Hei",
-    "Noto Sans CJK SC", "Source Han Sans CN",
-    "PingFang SC", "Hiragino Sans GB", "STHeiti",
-]
-
-def setup_chinese_font():
-    for font in CHINESE_FONTS:
-        try:
-            matplotlib.font_manager.findfont(font, fallback_to_default=False)
-            plt.rcParams["font.sans-serif"] = [font]
-            plt.rcParams["axes.unicode_minus"] = False
-            return
-        except Exception:
-            continue
-    print("WARN: 未找到中文字体", file=sys.stderr)
-setup_chinese_font()
+# ── 论文级图表配置 ────────────────────────────────────────────
+plt.rcParams.update({
+    "font.family": "sans-serif",
+    "font.sans-serif": ["SimHei", "Microsoft YaHei", "SimSun"],
+    "axes.unicode_minus": False,
+    # 字体大小：四号=14, 五号=10.5, 小五=9
+    "font.size": 9,
+    "axes.labelsize": 10.5,
+    "axes.titlesize": 14,
+    "xtick.labelsize": 9,
+    "ytick.labelsize": 9,
+    "legend.fontsize": 9,
+    "figure.dpi": 300,
+})
+FIG_W = 5.9   # A4 文本区宽度 15cm ≈ 5.9in
 
 # ── 工具函数 ────────────────────────────────────────────────
 
@@ -213,11 +209,11 @@ def plot_speed_bar(results: list[dict], title: str, out: Path):
     names = sorted(grp, key=lambda k: np.median(grp[k]))
     avgs = [np.mean(grp[k]) for k in names]
     colors = plt.cm.viridis(np.linspace(0.2, 0.8, len(names)))
-    fig, ax = plt.subplots(figsize=(10, max(4, len(names) * 0.35)))
+    fig, ax = plt.subplots(figsize=(FIG_W, max(3, len(names) * 0.28)))
     bars = ax.barh(range(len(names)), avgs, color=colors, height=0.6)
     for bar, v in zip(bars, avgs):
         ax.text(bar.get_width() + 0.5, bar.get_y() + bar.get_height() / 2,
-                fmt_ms(v), va="center", fontsize=8)
+                fmt_ms(v), va="center", fontsize=9)
     ax.set_yticks(range(len(names)))
     ax.set_yticklabels(names, fontsize=9)
     ax.set_xlabel("平均耗时 (ms)")
@@ -225,9 +221,9 @@ def plot_speed_bar(results: list[dict], title: str, out: Path):
     ax.invert_yaxis()
     ax.axvline(100, color="red", linestyle="--", alpha=0.5, linewidth=0.8, label="100ms 阈值")
     if any(a > 80 for a in avgs):
-        ax.legend(fontsize=8)
+        ax.legend(fontsize=9)
     fig.tight_layout()
-    fig.savefig(out, dpi=150, bbox_inches="tight")
+    fig.savefig(out, dpi=300, bbox_inches="tight")
     plt.close(fig)
     print(f"  [图] {out.name}")
 
@@ -236,7 +232,7 @@ def plot_speed_scatter(results: list[dict], title: str, out: Path):
         return
     strategies = sorted({r.get("strategy", "?") for r in results})
     colors = plt.cm.tab10(np.linspace(0, 1, len(strategies)))
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(FIG_W, 3.5))
     for si, s_name in enumerate(strategies):
         pts = [r for r in results if r.get("strategy") == s_name]
         xs = [r.get("avg_ms", 0) for r in pts]
@@ -247,9 +243,9 @@ def plot_speed_scatter(results: list[dict], title: str, out: Path):
     ax.set_title(title)
     ax.axvline(100, color="red", linestyle="--", alpha=0.5, linewidth=0.8)
     if len(strategies) <= 10:
-        ax.legend(fontsize=7, loc="best", ncol=2)
+        ax.legend(fontsize=9, loc="best", ncol=2)
     fig.tight_layout()
-    fig.savefig(out, dpi=150, bbox_inches="tight")
+    fig.savefig(out, dpi=300, bbox_inches="tight")
     plt.close(fig)
     print(f"  [图] {out.name}")
 
@@ -262,7 +258,7 @@ def plot_ground_ratio_vs_speed(results: list[dict], title: str, out: Path):
         return
     colors = plt.cm.tab10(np.linspace(0, 1, len(strategies)))
     markers = ["o", "s", "D", "^", "v", "p"]
-    fig, ax = plt.subplots(figsize=(10, 7))
+    fig, ax = plt.subplots(figsize=(FIG_W, 4.1))
     for si, s_name in enumerate(strategies):
         pts = [r for r in results if r.get("strategy") == s_name]
         xs = [r.get("avg_ms", 0) for r in pts]
@@ -276,14 +272,14 @@ def plot_ground_ratio_vs_speed(results: list[dict], title: str, out: Path):
         # 为每个点标注参数
         for x, y, lbl in zip(xs, ys, labels_parts):
             ax.annotate(lbl, (x, y), textcoords="offset points", xytext=(4, 4),
-                        fontsize=6, alpha=0.8)
+                        fontsize=9, alpha=0.8)
     ax.set_xlabel("平均耗时 (ms)")
     ax.set_ylabel("地面占比 (%)")
     ax.set_title(title)
-    ax.legend(fontsize=8, loc="best")
+    ax.legend(fontsize=9, loc="best")
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
-    fig.savefig(out, dpi=150, bbox_inches="tight")
+    fig.savefig(out, dpi=300, bbox_inches="tight")
     plt.close(fig)
     print(f"  [图] {out.name}")
 
@@ -310,7 +306,7 @@ def plot_ground_sweep(results: list[dict], out_dir: Path):
         main_vals = [r.get("params", {}).get(main_param) for r in pts_sorted]
         ratios = [r.get("extra", {}).get("ground_ratio", 0) for r in pts_sorted]
         speeds = [r.get("avg_ms", 0) for r in pts_sorted]
-        fig, ax1 = plt.subplots(figsize=(9, 5))
+        fig, ax1 = plt.subplots(figsize=(FIG_W, 3.3))
         color_ratio = "tab:blue"
         color_speed = "tab:red"
         l1 = ax1.plot(main_vals, ratios, "o-", color=color_ratio, label="地面占比 (%)", linewidth=1.5)
@@ -337,7 +333,7 @@ def plot_ground_sweep(results: list[dict], out_dir: Path):
         ax1.grid(True, alpha=0.3)
         fig.tight_layout()
         out_path = out_dir / f"{s_name}_sweep.png"
-        fig.savefig(out_path, dpi=150, bbox_inches="tight")
+        fig.savefig(out_path, dpi=300, bbox_inches="tight")
         plt.close(fig)
         print(f"  [图] {out_path.name}")
 
@@ -350,7 +346,7 @@ def plot_cluster_detail(results: list[dict], title: str, out: Path):
     if not strategies:
         return
     colors = plt.cm.tab10(np.linspace(0, 1, len(strategies)))
-    fig, axes = plt.subplots(1, 3, figsize=(14, 5))
+    fig, axes = plt.subplots(1, 3, figsize=(FIG_W, 2.1))
     # 子图 1：簇数（带 std 误差条或 min~max 范围）
     ax = axes[0]
     for si, s_name in enumerate(strategies):
@@ -384,10 +380,10 @@ def plot_cluster_detail(results: list[dict], title: str, out: Path):
     ax.set_title("簇大小 vs 速度"); ax.grid(True, alpha=0.3)
     handles = [plt.Line2D([0], [0], marker="o", color="w", markerfacecolor=colors[i], markersize=8)
                for i in range(len(strategies))]
-    fig.legend(handles, strategies, loc="lower center", ncol=min(len(strategies), 6), fontsize=8)
-    fig.suptitle(title, fontsize=12)
+    fig.legend(handles, strategies, loc="lower center", ncol=min(len(strategies), 6), fontsize=9)
+    fig.suptitle(title, fontsize=14)
     fig.tight_layout(rect=[0, 0.08, 1, 0.97])
-    fig.savefig(out, dpi=150, bbox_inches="tight")
+    fig.savefig(out, dpi=300, bbox_inches="tight")
     plt.close(fig)
     print(f"  [图] {out.name}")
 
@@ -398,7 +394,7 @@ def plot_cluster_count_comparison(results: list[dict], title: str, out: Path):
         return
     colors = plt.cm.tab10(np.linspace(0, 1, len(strategies)))
     markers = ["o", "s", "D", "^", "v", "p"]
-    fig, ax = plt.subplots(figsize=(10, 7))
+    fig, ax = plt.subplots(figsize=(FIG_W, 4.1))
     for si, s_name in enumerate(strategies):
         pts = [r for r in results if r.get("strategy") == s_name]
         xs = [r.get("avg_ms", 0) for r in pts]
@@ -414,21 +410,21 @@ def plot_cluster_count_comparison(results: list[dict], title: str, out: Path):
             labels_parts.append(", ".join(f"{k}={v}" for k, v in sorted(p.items())))
         for x, y, lbl in zip(xs, ys, labels_parts):
             ax.annotate(lbl, (x, y), textcoords="offset points", xytext=(4, 4),
-                        fontsize=5.5, alpha=0.8)
+                        fontsize=9, alpha=0.8)
     ax.set_xlabel("平均耗时 (ms)")
     ax.set_ylabel("聚类数量")
     ax.set_title(title)
-    ax.legend(fontsize=8, loc="best")
+    ax.legend(fontsize=9, loc="best")
     ax.grid(True, alpha=0.3)
     # 图例：点大小代表簇大小
     h1 = ax.scatter([], [], s=16, c="gray", alpha=0.5)
     h2 = ax.scatter([], [], s=60, c="gray", alpha=0.5)
     h3 = ax.scatter([], [], s=120, c="gray", alpha=0.5)
     leg2 = ax.legend([h1, h2, h3], ["小簇 (~5)", "中簇 (~30)", "大簇 (~80)"],
-                     loc="lower right", fontsize=7, title="簇大小", title_fontsize=8)
+                     loc="lower right", fontsize=9, title="簇大小", title_fontsize=9)
     ax.add_artist(leg2)
     fig.tight_layout()
-    fig.savefig(out, dpi=150, bbox_inches="tight")
+    fig.savefig(out, dpi=300, bbox_inches="tight")
     plt.close(fig)
     print(f"  [图] {out.name}")
 
@@ -458,7 +454,7 @@ def plot_stage_comparison(results: list[dict], title: str, out: Path, x_key: str
         return
     colors = plt.cm.tab10(np.linspace(0, 1, len(strategies)))
     markers = ["o", "s", "D", "^", "v", "p", "<", ">"]
-    fig, ax = plt.subplots(figsize=(10, 7))
+    fig, ax = plt.subplots(figsize=(FIG_W, 4.1))
     for si, s_name in enumerate(strategies):
         pts = [r for r in results if r.get("strategy") == s_name]
         xs = [r.get(x_key, 0) for r in pts]
@@ -478,11 +474,11 @@ def plot_stage_comparison(results: list[dict], title: str, out: Path, x_key: str
                 labels_parts.append(", ".join(f"{k}={v}" for k, v in sorted(p.items())))
             for x, y, lbl in zip(xs, ys, labels_parts):
                 ax.annotate(lbl, (x, y), textcoords="offset points", xytext=(4, 4),
-                            fontsize=5.5, alpha=0.8)
+                            fontsize=9, alpha=0.8)
     ax.set_xlabel("平均耗时 (ms)")
     ax.set_ylabel(y_label or y_key)
     ax.set_title(title)
-    ax.legend(fontsize=8, loc="best")
+    ax.legend(fontsize=9, loc="best")
     ax.grid(True, alpha=0.3)
     if size_key:
         vals = [r.get("extra", {}).get(size_key, 0) for r in results]
@@ -494,10 +490,10 @@ def plot_stage_comparison(results: list[dict], title: str, out: Path, x_key: str
                          [f"低 {size_label or size_key} ({vmin:.0f})",
                           f"中 {size_label or size_key} ({(vmin+vmax)/2:.0f})",
                           f"高 {size_label or size_key} ({vmax:.0f})"],
-                         loc="lower right", fontsize=7, title=size_label or size_key, title_fontsize=8)
+                         loc="lower right", fontsize=9, title=size_label or size_key, title_fontsize=9)
         ax.add_artist(leg2)
     fig.tight_layout()
-    fig.savefig(out, dpi=150, bbox_inches="tight")
+    fig.savefig(out, dpi=300, bbox_inches="tight")
     plt.close(fig)
     print(f"  [图] {out.name}")
 
@@ -509,7 +505,7 @@ def plot_wall_ratio_analysis(results: list[dict], title: str, out: Path):
         return
     colors = plt.cm.tab10(np.linspace(0, 1, len(strategies)))
     markers = ["o", "s", "D", "^", "v", "p"]
-    fig, ax = plt.subplots(figsize=(10, 7))
+    fig, ax = plt.subplots(figsize=(FIG_W, 4.1))
     for si, s_name in enumerate(strategies):
         pts = [r for r in results if r.get("strategy") == s_name]
         xs = [r.get("avg_ms", 0) for r in pts]
@@ -523,14 +519,14 @@ def plot_wall_ratio_analysis(results: list[dict], title: str, out: Path):
                         label=s_name, alpha=0.7, s=[max(30, o * 5) for o in obstacles], zorder=5)
         for x, y, lbl in zip(xs, ys, labels_parts):
             ax.annotate(lbl, (x, y), textcoords="offset points", xytext=(4, 4),
-                        fontsize=5.5, alpha=0.8)
+                        fontsize=9, alpha=0.8)
     ax.set_xlabel("平均耗时 (ms)")
     ax.set_ylabel("墙体占比 (%)")
     ax.set_title(title)
-    ax.legend(fontsize=8, loc="best")
+    ax.legend(fontsize=9, loc="best")
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
-    fig.savefig(out, dpi=150, bbox_inches="tight")
+    fig.savefig(out, dpi=300, bbox_inches="tight")
     plt.close(fig)
     print(f"  [图] {out.name}")
 
@@ -541,7 +537,7 @@ def plot_cluster_noise_analysis(results: list[dict], title: str, out: Path):
         return
     colors = plt.cm.tab10(np.linspace(0, 1, len(strategies)))
     markers = ["o", "s", "D", "^", "v", "p"]
-    fig, ax = plt.subplots(figsize=(10, 7))
+    fig, ax = plt.subplots(figsize=(FIG_W, 4.1))
     for si, s_name in enumerate(strategies):
         pts = [r for r in results if r.get("strategy") == s_name]
         xs = [r.get("extra", {}).get("avg_clusters", 0) for r in pts]
@@ -555,17 +551,17 @@ def plot_cluster_noise_analysis(results: list[dict], title: str, out: Path):
                    label=s_name, alpha=0.7, s=60, zorder=5)
         for x, y, lbl in zip(xs, ys, labels_parts):
             ax.annotate(lbl, (x, y), textcoords="offset points", xytext=(4, 4),
-                        fontsize=5.5, alpha=0.8)
+                        fontsize=9, alpha=0.8)
     ax.set_xlabel("簇数量")
     ax.set_ylabel("噪声点数量")
     ax.set_title(title)
-    ax.legend(fontsize=8, loc="best")
+    ax.legend(fontsize=9, loc="best")
     ax.grid(True, alpha=0.3)
     # 理想区域标注（低簇数 + 低噪声）
     ax.annotate("理想区\n少簇+低噪", xy=(10, 500), fontsize=9,
                 bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgreen", alpha=0.5))
     fig.tight_layout()
-    fig.savefig(out, dpi=150, bbox_inches="tight")
+    fig.savefig(out, dpi=300, bbox_inches="tight")
     plt.close(fig)
     print(f"  [图] {out.name}")
 
@@ -585,22 +581,22 @@ def plot_cross_comparison(qr: list[dict], fr: list[dict], out: Path):
         return
     qv = [q[k] for k in common]
     fv = [f[k] for k in common]
-    fig, ax = plt.subplots(figsize=(8, 6))
+    fig, ax = plt.subplots(figsize=(FIG_W, 4.4))
     x = range(len(common))
     w = 0.35
     ax.bar([i - w/2 for i in x], qv, w, label="快速测试", alpha=0.8)
     ax.bar([i + w/2 for i in x], fv, w, label="全量测试", alpha=0.8)
     ax.set_xticks(list(x))
-    ax.set_xticklabels(common, rotation=45, ha="right", fontsize=8)
+    ax.set_xticklabels(common, rotation=45, ha="right", fontsize=9)
     ax.set_ylabel("平均耗时 (ms)")
     ax.set_title("快速 vs 全量 速度对比")
     ax.legend()
     for i, (qvv, fvv) in enumerate(zip(qv, fv)):
         if qvv > 0:
             ax.text(i, max(qvv, fvv) + 1, f"{(fvv - qvv)/qvv*100:+.0f}%",
-                    ha="center", fontsize=7)
+                    ha="center", fontsize=9)
     fig.tight_layout()
-    fig.savefig(out, dpi=150, bbox_inches="tight")
+    fig.savefig(out, dpi=300, bbox_inches="tight")
     plt.close(fig)
     print(f"  [图] {out.name}")
 
@@ -657,6 +653,10 @@ def run_pipeline(tasks: list[str], quick_only: bool, release: bool = False):
         print("  编译失败，终止流水线", file=sys.stderr)
         return
 
+    # ── 清理旧数据 ──
+    for task in tasks:
+        clean_dir(OUTPUT_BASE / task)
+
     # ── 第 1 步：快速测试（串行） ──
     print("\n" + "="*60)
     print("  阶段 1/3: 快速测试")
@@ -673,7 +673,7 @@ def run_pipeline(tasks: list[str], quick_only: bool, release: bool = False):
         if not results:
             continue
         td = ANALYSIS_DIR / "quick" / task
-        td.mkdir(parents=True, exist_ok=True)
+        clean_dir(td)
         write_stats_table(results, td / "stats.csv")
         plot_speed_bar(results, f"{task} 快速测试", td / "speed_bar.png")
 
@@ -682,14 +682,18 @@ def run_pipeline(tasks: list[str], quick_only: bool, release: bool = False):
         print(f"\n快速测试图表: {ANALYSIS_DIR / 'quick'}")
         return
 
-    # ── 第 2 步：全量测试（task 间并发，直接运行已编译的二进制） ──
+    # ── 第 2 步：全量测试（task 间并发，但 wall 单独串行以免拖慢整体） ──
     print("\n" + "="*60)
-    print("  阶段 2/3: 全量测试（{} 任务并发）".format(len(tasks)))
+    print("  阶段 2/3: 全量测试（非 wall 任务并发，wall 单独串行）")
     print("="*60)
     full_results: dict[str, list[dict]] = {}
 
-    with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
-        fut_map = {pool.submit(run_bench_binary, t, "full", release): t for t in tasks}
+    # 先并发跑非 wall 任务（ground/cluster/denoise 较快）
+    fast_tasks = [t for t in tasks if t != "wall"]
+    slow_tasks = [t for t in tasks if t == "wall"]
+
+    with ThreadPoolExecutor(max_workers=max(1, len(fast_tasks))) as pool:
+        fut_map = {pool.submit(run_bench_binary, t, "full", release): t for t in fast_tasks}
         for f in as_completed(fut_map):
             task = fut_map[f]
             ok, output = f.result()
@@ -703,6 +707,19 @@ def run_pipeline(tasks: list[str], quick_only: bool, release: bool = False):
             else:
                 print(f"  WARN: {task} 全量测试失败", file=sys.stderr)
 
+    # wall 单独串行（策略多、耗时久，不阻塞其余任务的分析）
+    for task in slow_tasks:
+        ok, output = run_bench_binary(task, "full", release)
+        output = output.strip()
+        if output:
+            print(f"\n── {task} full {'─'*52}\n{output}\n")
+        else:
+            print(f"\n── {task} full {'─'*52}")
+        if ok:
+            full_results[task] = collect_results(task)
+        else:
+            print(f"  WARN: {task} 全量测试失败", file=sys.stderr)
+
     for task in tasks:
         full_results.setdefault(task, [])
 
@@ -712,7 +729,7 @@ def run_pipeline(tasks: list[str], quick_only: bool, release: bool = False):
         if not results:
             continue
         td = ANALYSIS_DIR / "full" / task
-        td.mkdir(parents=True, exist_ok=True)
+        clean_dir(td)
         write_stats_table(results, td / "stats.csv")
         plot_speed_bar(results, f"{task} 全量测试", td / "speed_bar.png")
         plot_speed_scatter(results, f"{task} 全量测试", td / "speed_scatter.png")
@@ -804,6 +821,13 @@ def run_analysis_only(tasks: list[str]):
     for task in tasks:
         full_results[task] = collect_results(task)
 
+    # 清理旧分析数据
+    for task in tasks:
+        clean_dir(ANALYSIS_DIR / "full" / task)
+
+    cross_dir = ANALYSIS_DIR / "cross"
+    clean_dir(cross_dir)
+
     # 重新生成所有分析图
     for task in tasks:
         results = full_results[task]
@@ -811,7 +835,6 @@ def run_analysis_only(tasks: list[str]):
             print(f"  WARN: {task} 无数据", file=sys.stderr)
             continue
         td = ANALYSIS_DIR / "full" / task
-        td.mkdir(parents=True, exist_ok=True)
         write_stats_table(results, td / "stats.csv")
         plot_speed_bar(results, f"{task} 全量测试", td / "speed_bar.png")
         plot_speed_scatter(results, f"{task} 全量测试", td / "speed_scatter.png")
@@ -841,7 +864,6 @@ def run_analysis_only(tasks: list[str]):
                                   size_key="avg_input", size_label="输入点量")
 
     cross_dir = ANALYSIS_DIR / "cross"
-    cross_dir.mkdir(parents=True, exist_ok=True)
     all_ground = full_results.get("ground", [])
     all_cluster = full_results.get("cluster", [])
     all_wall = full_results.get("wall", [])

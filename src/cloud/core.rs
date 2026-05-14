@@ -106,7 +106,7 @@ impl Lidar {
 
     pub async fn read_input(&mut self) -> Result<(), LidarError> {
         let data = {
-            let mut stream = self.cream.in_stream.lock().await;
+            let mut stream = self.cream.in_stream.lock().unwrap();
             match stream.read() {
                 Some(data) => data,
                 None => return Err(LidarError::Other("没有数据".to_string())),
@@ -114,7 +114,7 @@ impl Lidar {
         };
 
         {
-            let mut stream = self.cream.out_stream.lock().await;
+            let mut stream = self.cream.out_stream.lock().unwrap();
             stream.write(data)?;
         }
         Ok(())

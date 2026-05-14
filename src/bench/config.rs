@@ -84,31 +84,66 @@ pub fn param_dirname(strategy_type: &str, params: &toml::Table) -> String {
     match strategy_type {
         "histogram" => format!("ex{:.2}", float(params, "expand")),
         "peak_scan" => format!("t{:.2}_e{:.2}", float(params, "threshold"), float(params, "expand")),
-        "ransac" => format!("d{:.1}_i{}", float(params, "distance"), int(params, "iterations")),
         "histoseed" => format!("e{:.2}_d{:.1}_i{}", float(params, "expand"), float(params, "distance"), int(params, "iterations")),
         "gpf" => format!("l{}_s{:.1}_d{:.2}", int(params, "n_lpr"), float(params, "th_seed"), float(params, "th_dist")),
-        "xy_grid_dbscan" | "lvdot" => format!("e{:.2}_m{}", float(params, "eps"), int(params, "min_pts")),
+        "xy_grid_dbscan" | "xy_grid_dbscan_grid" | "lvdot_grid" | "lvdot" => format!("e{:.2}_m{}", float(params, "eps"), int(params, "min_pts")),
         "xy_dbscan" => format!("e{:.2}_m{}", float(params, "eps"), int(params, "min_pts")),
+        "lvdot_qt" => format!("o{}_e{:.2}_m{}", int(params, "min_occ"), float(params, "eps"), int(params, "min_pts")),
         "range_image" => format!("a{:.1}_e{:.1}_t{:.1}_m{}",
             float(params, "azimuth"), float(params, "elevation"),
             float(params, "threshold"), int(params, "min_pts")),
-        "dbscan_adaptive" => format!("p{:.2}_s{:.2}_m{}_v{:.2}",
+        "dbscan_qt" | "dbscan_adaptive" => format!("p{:.2}_s{:.2}_m{}_v{:.2}",
             float(params, "patience"), float(params, "slope"),
             int(params, "min_pts"), float(params, "voxel_size")),
-        "top_down" => format!("c{:.2}_d{}_w{:.2}",
-            float(params, "cell_size"), int(params, "min_density"), float(params, "width_ratio")),
-        "xy_ransac" => format!("d{:.2}_i{}", float(params, "distance"), int(params, "iterations")),
-        "normal_wall" => format!("c{:.2}_z{:.2}", float(params, "cell_size"), float(params, "normal_threshold")),
-        "quadtree" => format!("c{:.2}_m{}_w{:.2}",
+        "dbscan_grid" => format!("e{:.2}_m{}", float(params, "eps"), int(params, "min_pts")),
+        "cc_pca_qt" => format!("p{}_m{}_w{:.2}",
+            int(params, "max_pts_per_node"), int(params, "min_points"), float(params, "width_ratio")),
+        "cc_pca_grid" => format!("c{:.2}_m{}_w{:.2}",
             float(params, "cell_size"), int(params, "min_pts"), float(params, "width_ratio")),
-        "seq_fit" => format!("d{:.2}_t{:.1}_w{}",
+        "cc_l2_grid" => format!("c{:.2}_m{}_r{:.2}",
+            float(params, "cell_size"), int(params, "min_pts"), float(params, "max_rms")),
+        "cc_l2_qt" => format!("p{}_m{}_r{:.2}",
+            int(params, "max_pts_per_node"), int(params, "min_points"), float(params, "max_rms")),
+        "ransac_l2_grid" => {
+            let base = format!("d{:.2}_i{}", float(params, "distance"), int(params, "iterations"));
+            if params.contains_key("min_extent") {
+                format!("{}_e{:.1}", base, float(params, "min_extent"))
+            } else { base }
+        },
+        "ransac_l2_qt" => format!("d{:.2}_i{}", float(params, "distance"), int(params, "iterations")),
+        "bev_hough" => {
+            let base = format!("d{:.2}_m{}", float(params, "distance"), int(params, "min_wall_pts"));
+            if params.contains_key("hough_threshold") {
+                format!("{}_ht{:.2}", base, float(params, "hough_threshold"))
+            } else { base }
+        },
+        "bev_edlines" => format!("d{:.2}_m{}", float(params, "distance"), int(params, "min_wall_pts")),
+        "nrm_pca_grid" => format!("c{:.2}_z{:.2}", float(params, "cell_size"), float(params, "normal_threshold")),
+        "nrm_l2_grid" => format!("c{:.2}_r{:.2}", float(params, "cell_size"), float(params, "max_rms")),
+        "nrm_pca_qt" => format!("p{}_z{:.2}", int(params, "max_pts_per_node"), float(params, "normal_threshold")),
+        "nrm_l2_qt" => format!("p{}_r{:.2}", int(params, "max_pts_per_node"), float(params, "max_rms")),
+        "seq_pca_grid" => format!("d{:.2}_t{:.1}_w{}",
             float(params, "distance"), float(params, "normal_threshold"), int(params, "max_walls")),
-        "adaptive_dbscan" => format!("be{:.3}_s{:.3}_m{}",
+        "seq_l2_grid" => format!("d{:.2}_m{}",
+            float(params, "distance"), int(params, "min_wall_pts")),
+        "adapt_pca_grid" => format!("be{:.3}_s{:.3}_m{}",
             float(params, "base_eps"), float(params, "scale_factor"), int(params, "min_pts")),
-        "xy_dbscan_wall" => format!("e{:.2}_m{}_z{:.1}",
+        "dbscan_pca_qt" => format!("e{:.2}_m{}_z{:.1}",
             float(params, "eps"), int(params, "min_pts"), float(params, "min_z_span")),
+        "dbscan_l2_qt" => format!("e{:.2}_m{}_z{:.1}",
+            float(params, "eps"), int(params, "min_pts"), float(params, "min_z_span")),
+        "dbscan_l2_qt_dif" => format!("p{}_m{}_z{:.1}",
+            int(params, "max_pts_per_node"), int(params, "min_points"), float(params, "min_z_span")),
+        "adapt_l2_grid" => format!("be{:.3}_s{:.3}_m{}",
+            float(params, "base_eps"), float(params, "scale_factor"), int(params, "min_pts")),
         "radius_outlier" => format!("r{:.2}_m{}",
             float(params, "radius"), int(params, "min_pts")),
+        "cc_grid" | "cc" => format!("c{:.2}_m{}_mr{}",
+            float(params, "cell_size"), int(params, "min_pts"), int(params, "merge_dist")),
+        "ransac" => format!("d{:.2}_i{}_m{}",
+            float(params, "distance"), int(params, "iterations"), int(params, "min_pts")),
+        "seq" => format!("d{:.2}_m{}_w{}",
+            float(params, "distance"), int(params, "min_pts"), int(params, "max_walls")),
         _ => {
             let parts: Vec<String> = params.iter()
                 .map(|(k, v)| format!("{}_{}", k, fmt_val(v)))

@@ -101,6 +101,13 @@ impl Cluster {
                 if h < 0.15 * w { return None; }
                 if box3d.length * box3d.width * h < 0.03 { return None; }
 
+                // box 过大过滤（室内场景物体不应过大）
+                if w > 3.0 { return None; }
+                // 点云稀疏度过滤：大体积内点数过少 → 离群噪点
+                let n_pts = cluster.len() as f32;
+                let volume = box3d.length * box3d.width * h;
+                if volume > 0.5 && n_pts / volume < 20.0 { return None; }
+
                 Some(CldBud::with_centroid(box3d, 1, format!("cluster_{}", idx), 1.0, centroid))
             })
             .collect()

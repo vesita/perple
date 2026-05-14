@@ -14,6 +14,7 @@ pub struct Config {
     pub detections_capacity: usize,
     pub person_class_label: String,
     pub points_capacity: usize,
+    pub max_range: f32,
 
     pub default_input_width: usize,
     pub default_input_height: usize,
@@ -27,6 +28,7 @@ pub struct Config {
     pub wall_strategy: String,
     pub wall_distance: f32,
     pub wall_iterations: usize,
+    pub wall_max_walls: usize,
     pub wall_eps: f32,
     pub wall_min_pts: usize,
     pub wall_min_z_span: f32,
@@ -164,6 +166,7 @@ impl Config {
         update_field!(detections_capacity);
         update_field!(person_class_label);
         update_field!(points_capacity);
+        update_field!(max_range);
         update_field!(default_input_width);
         update_field!(default_input_height);
         update_field!(default_confidence_threshold);
@@ -173,6 +176,7 @@ impl Config {
         update_field!(wall_strategy);
         update_field!(wall_distance);
         update_field!(wall_iterations);
+        update_field!(wall_max_walls);
         update_field!(wall_eps);
         update_field!(wall_min_pts);
         update_field!(wall_min_z_span);
@@ -259,6 +263,7 @@ struct PartialConfig {
     pub detections_capacity: Option<usize>,
     pub person_class_label: Option<String>,
     pub points_capacity: Option<usize>,
+    pub max_range: Option<f32>,
 
     pub default_input_width: Option<usize>,
     pub default_input_height: Option<usize>,
@@ -270,6 +275,7 @@ struct PartialConfig {
     pub wall_strategy: Option<String>,
     pub wall_distance: Option<f32>,
     pub wall_iterations: Option<usize>,
+    pub wall_max_walls: Option<usize>,
     pub wall_eps: Option<f32>,
     pub wall_min_pts: Option<usize>,
     pub wall_min_z_span: Option<f32>,

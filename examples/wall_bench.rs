@@ -2,12 +2,11 @@ use std::time::{Duration, Instant};
 
 use perple::bench::{
     BenchStrategy, BenchStats, BenchHarness, BenchRecorder, FrameData, CliArgs, BenchMode,
-    WallPreprocessor, run_toml_bench, StrategyBuilder,
+    GroundDenoisePreprocessor, run_toml_bench, StrategyBuilder,
     mats, CLUSTER_PALETTE,
 };
 use perple::cloud::wall::{
-    WallPickStrategy, TopDownCluster, XYRansacWall, NormalWall, QuadtreeWall,
-    AdaptiveDBSCANWall, SequentialFit, XYDBSCANWall, Downsampler,
+    WallPickStrategy, BevEdLines, BevHough,
     cluster_obstacles_with_indices,
 };
 use perple::utils::boxes::Box3D;
@@ -57,14 +56,14 @@ impl BenchStrategy for WallBenchCase {
         let wall_ms = wall_start.elapsed().as_secs_f64() * 1000.0;
 
         let post_start = Instant::now();
+
+        let remaining = &cloud[n_wall..];
         let (all_boxes, all_indices) =
-            cluster_obstacles_with_indices(&cloud[n_wall..], 0.30, 3, 0.05, 0.0);
+            cluster_obstacles_with_indices(remaining, 0.30, 3, 0.05, 0.0);
         let post_ms = post_start.elapsed().as_secs_f64() * 1000.0;
 
         let elapsed = Duration::from_secs_f64((wall_ms + post_ms) / 1000.0);
 
-        let wall_nz_threshold: f32 = 0.15;
-        let remaining = &cloud[n_wall..];
         let max_d2 = 12.0f32 * 12.0;
         let mut near_boxes = Vec::new();
         let mut far_boxes = Vec::new();
@@ -77,18 +76,15 @@ impl BenchStrategy for WallBenchCase {
         for (b, indices) in all_boxes.into_iter().zip(all_indices.into_iter()) {
             let mut discard = false;
             if indices.len() < self.min_box_pts { discard = true; }
-            if !discard {
-                if let Some((normal, _)) = fit_plane_3d_wallbench(&indices, remaining, b.height) {
-                    if normal[2].abs() < wall_nz_threshold { discard = true; }
-                }
-            }
             if discard { n_discarded += indices.len(); continue; }
             let abs_indices: Vec<usize> = indices.iter().map(|ri| ri + n_wall).collect();
-            let cluster_pts: Vec<[f32; 3]> = indices.iter().map(|&ri| remaining[ri]).collect();
             let c = b.center();
             let d2 = c[0] * c[0] + c[1] * c[1];
             if d2 <= max_d2 { near_boxes.push(b); near_indices.push(abs_indices); }
-            else { far_boxes.push(b); far_clouds.push(cluster_pts); far_distances.push(d2.sqrt()); far_indices.push(abs_indices); }
+            else {
+                let cluster_pts: Vec<[f32; 3]> = indices.iter().map(|&ri| remaining[ri]).collect();
+                far_boxes.push(b); far_clouds.push(cluster_pts); far_distances.push(d2.sqrt()); far_indices.push(abs_indices);
+            }
         }
 
         let ms = wall_ms + post_ms;
@@ -106,18 +102,15 @@ impl BenchStrategy for WallBenchCase {
         recorder.begin_frame(frame.frame_idx);
         let n = self.frame_count.max(1) as f64;
 
-        // 全量写入点云（SQLite 无内存累积，不再需要降采样）
         for (i, pt) in self.last_cloud.iter().enumerate() {
             let id = i as u64;
             recorder.spawn(spawn_point(*pt, mats::BG).id(id));
         }
 
-        // 更新墙面点材质
         for i in 0..self.last_n_wall {
             recorder.set_material(i as u64, mats::WALL);
         }
 
-        // 更新近距聚类点材质
         for (ci, indices) in self.last_near_indices.iter().enumerate() {
             let color = CLUSTER_PALETTE[ci % CLUSTER_PALETTE.len()];
             for &abs_idx in indices {
@@ -125,14 +118,12 @@ impl BenchStrategy for WallBenchCase {
             }
         }
 
-        // 更新远距聚类点材质
         for indices in &self.last_far_indices {
             for &abs_idx in indices {
                 recorder.set_material(abs_idx as u64, mats::FAR_BOX);
             }
         }
 
-        // 剩余点云（非墙面点）的障碍物检测框
         recorder.write_boxes(
             &self.last_near_boxes.iter().enumerate().map(|(i, b)| (b.clone(), format!("n{}", i))).collect::<Vec<_>>(),
             mats::WALL_BOX,
@@ -179,52 +170,56 @@ impl BenchStrategy for WallBenchCase {
     }
 }
 
-// ── 策略工厂 ──────────────────────────────────────────────
-
 fn build_wall_strategy(cli: &CliArgs) -> Box<dyn WallPickStrategy> {
-    let strat = cli.get::<String>("strategy", "xy_ransac".to_string());
+    let strat = cli.get::<String>("strategy", "bev_edlines".to_string());
     let distance = cli.get("distance", 0.05f32);
-    let iterations = cli.get("iterations", 50usize);
-    let seed = cli.get("seed", 42u64);
-    let cell_size = cli.get("cell-size", 0.10f32);
-    let min_density = cli.get("min-density", 5usize);
-    let merge_dist = cli.get("merge-dist", 2usize);
-    let normal_threshold = cli.get("normal-threshold", 0.17f32);
-    let min_pts = cli.get("min-pts", 10usize);
     match strat.as_str() {
-        "top_down" => Box::new(TopDownCluster::with_params(cell_size, min_density, merge_dist)
-            .with_width_ratio(normal_threshold)),
-        "xy_ransac" => Box::new(XYRansacWall::with_params(distance, iterations, 30).with_seed(seed)),
-        "normal_wall" => Box::new(NormalWall::with_params(cell_size, min_pts, 30.0)
-            .with_normal_threshold(normal_threshold)),
-        "quadtree" => Box::new(QuadtreeWall::with_params(cell_size, min_pts, 0.5)),
-        "adaptive_dbscan" => Box::new(AdaptiveDBSCANWall::with_params(0.10, 2.0, min_pts)),
-        "xy_dbscan" => Box::new(AdaptiveDBSCANWall::with_params(0.0, 1.0, min_pts)),
-        "seq_fit" => Box::new(SequentialFit::with_params(distance, normal_threshold, cli.get("max-walls", 5usize))),
-        "xy_dbscan_wall" => Box::new(XYDBSCANWall::with_params(cli.get("eps", 0.15f32), cli.get("min-pts", 5usize), cli.get("min-z-span", 1.5f32))),
-        _ => { eprintln!("未知墙体策略 '{}'，使用 xy_ransac", strat);
-            Box::new(XYRansacWall::with_params(distance, iterations, 30).with_seed(seed)) }
+        "bev_hough" => {
+            let mut s = BevHough::with_params(distance, cli.get("min-wall-pts", 30usize));
+            let ext = cli.get("min-extent", 0.0f32);
+            if ext > 0.0 { s = s.with_min_extent(ext); }
+            let ht = cli.get("hough-threshold", 0.0f32);
+            if ht > 0.0 { s = s.with_hough_threshold(ht); }
+            Box::new(s)
+        },
+        _ => {
+            let mut s = BevEdLines::with_params(distance, cli.get("min-wall-pts", 30usize));
+            let ext = cli.get("min-extent", 0.0f32);
+            if ext > 0.0 { s = s.with_min_extent(ext); }
+            let gt = cli.get("grad-threshold", 0.0f32);
+            if gt > 0.0 { s = s.with_grad_threshold(gt); }
+            let at = cli.get("angle-tolerance", 0.0f32);
+            if at > 0.0 { s = s.with_angle_tolerance(at); }
+            Box::new(s)
+        },
     }
 }
 
 fn build_wall_from_toml(strategy_type: &str, p: &toml::Table) -> Box<dyn WallPickStrategy> {
     match strategy_type {
-        "top_down" => Box::new(TopDownCluster::with_params(f(p, "cell_size"), i(p, "min_density") as usize, 2)
-            .with_width_ratio(f(p, "width_ratio"))),
-        "xy_ransac" => Box::new(XYRansacWall::with_params(f(p, "distance"), i(p, "iterations") as usize, 30).with_seed(42)),
-        "normal_wall" => Box::new(NormalWall::with_params(f(p, "cell_size"), i(p, "min_pts") as usize, 30.0)
-            .with_normal_threshold(f(p, "normal_threshold"))),
-        "quadtree" => Box::new(QuadtreeWall::with_params(f(p, "cell_size"), i(p, "min_pts") as usize, 0.5)
-            .with_width_ratio(f(p, "width_ratio"))),
-        "seq_fit" => Box::new(SequentialFit::with_params(f(p, "distance"), f(p, "normal_threshold"), i(p, "max_walls") as usize)),
-        "adaptive_dbscan" => {
-            let ds = p.get("downsampler").and_then(|v| v.as_str()).unwrap_or("grid");
-            let down = if ds == "fps" { Downsampler::FPS } else { Downsampler::Grid };
-            Box::new(AdaptiveDBSCANWall::with_params(f(p, "base_eps"), f(p, "scale_factor"), i(p, "min_pts") as usize)
-                .with_downsampler(down))
-        }
-        "xy_dbscan_wall" => Box::new(XYDBSCANWall::with_params(f(p, "eps"), i(p, "min_pts") as usize, f(p, "min_z_span"))),
-        _ => panic!("未知墙体策略类型: {}", strategy_type),
+        "bev_hough" => {
+            let mut s = BevHough::with_params(perple::bench::get_f32(p, "distance"), perple::bench::get_i64(p, "min_wall_pts") as usize);
+            if let Some(ext) = p.get("min_extent").and_then(|v| v.as_float()) {
+                s = s.with_min_extent(ext as f32);
+            }
+            if let Some(ht) = p.get("hough_threshold").and_then(|v| v.as_float()) {
+                s = s.with_hough_threshold(ht as f32);
+            }
+            Box::new(s)
+        },
+        _ => {
+            let mut s = BevEdLines::with_params(perple::bench::get_f32(p, "distance"), perple::bench::get_i64(p, "min_wall_pts") as usize);
+            if let Some(ext) = p.get("min_extent").and_then(|v| v.as_float()) {
+                s = s.with_min_extent(ext as f32);
+            }
+            if let Some(gt) = p.get("grad_threshold").and_then(|v| v.as_float()) {
+                s = s.with_grad_threshold(gt as f32);
+            }
+            if let Some(at) = p.get("angle_tolerance").and_then(|v| v.as_float()) {
+                s = s.with_angle_tolerance(at as f32);
+            }
+            Box::new(s)
+        },
     }
 }
 
@@ -247,12 +242,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let json = cli.has("json");
     let frame_limit = cli.get("frames", 10usize);
 
-    // 传统 --sweep 标志兼容（映射到 BenchMode::Quick）
     let effective_mode = if sweep { BenchMode::Quick } else { mode };
 
     match effective_mode {
         BenchMode::Single => {
-            let name = cli.get::<String>("strategy", "xy_ransac".to_string());
+            let name = cli.get::<String>("strategy", "bev_edlines".to_string());
             let min_box_pts = cli.get("min-box-pts", 20usize);
             let mut strategies: Vec<Box<dyn BenchStrategy>> = vec![
                 Box::new(WallBenchCase::new(&name, build_wall_strategy(&cli), min_box_pts))
@@ -264,13 +258,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(|e| format!("创建 recorder 失败: {}", e))?;
             let mut recs = vec![rec];
             let harness = BenchHarness::new("./data/cloud", frame_limit);
-            let mut pp = WallPreprocessor::default();
+            let mut pp = GroundDenoisePreprocessor::default();
             harness.run(&mut pp, &mut strategies, &mut recs).await?;
             recs[0].save().map_err(|e| format!("保存失败: {}", e))?;
             output_json_or_table(&strategies, json);
         }
         BenchMode::Quick | BenchMode::Full => {
-            let mut pp = WallPreprocessor::default();
+            let mut pp = GroundDenoisePreprocessor::default();
             run_toml_bench("wall", "./data/cloud", effective_mode, &mut pp, &WallBuilder).await?;
         }
     }
@@ -300,32 +294,4 @@ fn output_json_or_table(strategies: &[Box<dyn BenchStrategy>], json: bool) {
         println!("{:-<90}", "");
         println!("{:-<90}", "");
     }
-}
-
-use perple::bench::get_f32 as f;
-use perple::bench::get_i64 as i;
-
-fn fit_plane_3d_wallbench(indices: &[usize], points: &[[f32; 3]], box_h: f32) -> Option<([f32; 3], f32)> {
-    let n = indices.len();
-    if n < 10 { return None; }
-    if box_h < 0.8 { return None; }
-    let nf = n as f32;
-    let mut cx = 0.0f32; let mut cy = 0.0f32; let mut cz = 0.0f32;
-    for &i in indices { let p = &points[i]; cx += p[0]; cy += p[1]; cz += p[2]; }
-    cx /= nf; cy /= nf; cz /= nf;
-    let mut cov = nalgebra::Matrix3::zeros();
-    for &i in indices {
-        let p = &points[i];
-        let dx = p[0] - cx; let dy = p[1] - cy; let dz = p[2] - cz;
-        cov[(0, 0)] += dx * dx; cov[(0, 1)] += dx * dy; cov[(0, 2)] += dx * dz;
-        cov[(1, 1)] += dy * dy; cov[(1, 2)] += dy * dz; cov[(2, 2)] += dz * dz;
-    }
-    cov /= nf;
-    cov[(1, 0)] = cov[(0, 1)]; cov[(2, 0)] = cov[(0, 2)]; cov[(2, 1)] = cov[(1, 2)];
-    let eig = cov.symmetric_eigen();
-    let mut min_idx = 0;
-    let mut min_val = eig.eigenvalues[0];
-    for i in 1..3 { if eig.eigenvalues[i] < min_val { min_val = eig.eigenvalues[i]; min_idx = i; } }
-    let nv = eig.eigenvectors.column(min_idx);
-    Some(([nv[0], nv[1], nv[2]], -(nv[0] * cx + nv[1] * cy + nv[2] * cz)))
 }

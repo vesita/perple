@@ -89,7 +89,7 @@ impl GroundPickStrategy for GpfGround {
         let plane_eq = if n_ground > 0 {
             // plane 在翻转坐标系下拟合，转回原始坐标系
             if upside_down {
-                Some([plane_normal[0], plane_normal[1], -plane_normal[2], -plane_d])
+                Some([plane_normal[0], plane_normal[1], -plane_normal[2], plane_d])
             } else {
                 Some([plane_normal[0], plane_normal[1], plane_normal[2], plane_d])
             }
@@ -125,7 +125,7 @@ fn fit_plane_svd(points: &[[f32; 3]]) -> ([f32; 3], f32) {
     cov /= n_f;
 
     let svd = SVD::new(cov, true, false);
-    let norm = match svd.v_t {
+    let mut norm = match svd.v_t {
         Some(vt) => {
             let v = vt.transpose();
             let col = v.column(2);
@@ -133,6 +133,13 @@ fn fit_plane_svd(points: &[[f32; 3]]) -> ([f32; 3], f32) {
         }
         None => [0.0, 0.0, 1.0],
     };
-    let d = -(norm[0]*mx + norm[1]*my + norm[2]*mz);
+    let mut d = -(norm[0]*mx + norm[1]*my + norm[2]*mz);
+
+    // 统一法向量方向：约定 n_z >= 0，确保帧间 plane_eq 符号一致
+    if norm[2] < 0.0 {
+        norm = [-norm[0], -norm[1], -norm[2]];
+        d = -d;
+    }
+
     (norm, d)
 }

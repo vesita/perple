@@ -4,7 +4,7 @@
 //!   Era 1a (RawFull)   : 原始全量点云 → DBSCAN — 全量无降采样，标注"不可行"
 //!   Era 1b (RawDown)   : 原始点云 + 体素降采样 → DBSCAN — 朴素但噪声大
 //!   Era 2  (GroundDown): 去地面 + 体素降采样 → DBSCAN — 提速有限，残留墙体干扰
-//!   Era 3  (WallClean) : 去地面 + 去墙体 → DBSCAN — 三层管线，又快又稳
+//!   Era 3  (WallClean) : 去地面 + 去墙体 + 降采样+降噪 → DBSCAN — 三层管线
 //!
 //! 用法：
 //!   cargo run --example pipeline_evolution_bench
@@ -16,6 +16,7 @@ use perple::bench::{
     BenchStrategy, BenchStats, BenchHarness, BenchRecorder, FrameData, WallPreprocessor,
 };
 use perple::cloud::classify::strategy::DbscanStrategy;
+use perple::cloud::denoise::{DenoiseStrategy, RadiusOutlierRemoval};
 
 /// 输入数据源 — 决定聚类拿到的点集。
 #[derive(Clone, Copy, PartialEq)]
@@ -32,8 +33,11 @@ struct EvolutionCase {
     name: &'static str,
     era_label: &'static str,
     input_source: InputSource,
-    /// DbscanStrategy voxel_size（内部降采样）。全量用 0.1 降采样，三层管线用 0.0 跳过
+    /// DbscanStrategy 内部体素降采样（0.0 = 跳过）
     voxel_size: f32,
+    /// 聚类前降噪半径（0.0 = 跳过）
+    denoise_radius: f32,
+    denoise_min_pts: usize,
     // 累计统计
     total_ms: f64,
     frame_count: usize,
@@ -44,9 +48,14 @@ struct EvolutionCase {
 }
 
 impl EvolutionCase {
-    fn new(name: &'static str, era_label: &'static str, input_source: InputSource, voxel_size: f32) -> Self {
+    fn new(
+        name: &'static str, era_label: &'static str,
+        input_source: InputSource, voxel_size: f32,
+        denoise_radius: f32, denoise_min_pts: usize,
+    ) -> Self {
         Self {
             name, era_label, input_source, voxel_size,
+            denoise_radius, denoise_min_pts,
             total_ms: 0.0, frame_count: 0,
             acc_input: 0, acc_clusters: 0, acc_noise: 0,
             frame_times: Vec::new(),
@@ -64,12 +73,20 @@ impl BenchStrategy for EvolutionCase {
             InputSource::NonWall => frame.non_wall().to_vec(),
         };
 
+        // 聚类前降噪（可选）
+        let cleaned = if self.denoise_radius > 0.0 {
+            let mut denoiser = RadiusOutlierRemoval::new(self.denoise_radius, self.denoise_min_pts);
+            let (denoised, _) = denoiser.denoise(&input);
+            denoised
+        } else {
+            input
+        };
+
         // 统一 DBSCAN：固定 eps=0.20, min_pts=5, Sloc=0 (禁用自适应 eps)
-        // voxel_size 按 Era 区分：全量管线用降采样控制点数，三层管线无需额外降采样
         let mut dbscan = DbscanStrategy::with_params(0.20, 0.0, 5, 50, 10, self.voxel_size);
 
         let start = Instant::now();
-        let (sampled, objects) = dbscan.run(&input);
+        let (sampled, objects) = dbscan.run(&cleaned);
         let elapsed = start.elapsed();
 
         let total_cluster_pts: usize = objects.iter().map(|c| c.len()).sum();
@@ -79,14 +96,14 @@ impl BenchStrategy for EvolutionCase {
         self.total_ms += ms;
         self.frame_count += 1;
         self.frame_times.push(ms);
-        self.acc_input += input.len();
+        self.acc_input += cleaned.len();
         self.acc_clusters += objects.len();
         self.acc_noise += noise;
 
-        // 每帧进度（仅 Era 最慢那个全量打日志，减少输出）
-        if self.name == "Era1a_RawFull" || (self.name == "Era3_WallClean" && self.frame_count % 10 == 0) {
+        // 仅 Era1a（最慢的全量）打日志
+        if self.name == "Era1a_RawFull" {
             println!("  [{:15}] 帧{:2} 入{} 簇{} 噪{} | {:>6.1}ms",
-                self.name, self.frame_count, input.len(), objects.len(), noise, ms);
+                self.name, self.frame_count, cleaned.len(), objects.len(), noise, ms);
         }
 
         elapsed
@@ -100,7 +117,7 @@ impl BenchStrategy for EvolutionCase {
     fn summarize(&self) {
         let n = self.frame_count.max(1) as f64;
         let avg_ms = self.total_ms / n;
-        let tag = if avg_ms > 5000.0 { " [不可行]" } else if avg_ms > 1000.0 { " [偏慢]" } else { "" };
+        let tag = if avg_ms > 5000.0 { " [不可行]" } else { "" };
         println!(
             "  {:16} {:6} | {:>6.0} pts | {:>4.1} cls | {:>5.0} noise | {:>7.1}ms{}",
             self.name, self.era_label,
@@ -149,14 +166,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Era1a [RawFull]   : 原始点云 → DBSCAN (无降采样, 无预处理)");
     println!("  Era1b [RawDown]   : 原始点云+体素0.10 → DBSCAN (朴素降采样)");
     println!("  Era2  [GroundDown]: 去地面+体素0.10 → DBSCAN (旧管线)");
-    println!("  Era3  [WallClean] : 去地面+去墙体 → DBSCAN (三层管线, 无额外降采样)");
+    println!("  Era3  [WallClean] : 去地面+去墙体+降噪降采样 → DBSCAN (三层管线)");
     println!();
 
     let mut strategies: Vec<Box<dyn BenchStrategy>> = vec![
-        Box::new(EvolutionCase::new("Era1a_RawFull",   "[不可行]", InputSource::Raw,       0.0)),
-        Box::new(EvolutionCase::new("Era1b_RawDown",   "[朴素]",   InputSource::Raw,       0.10)),
-        Box::new(EvolutionCase::new("Era2_GroundDown",  "[旧管线]",  InputSource::NonGround, 0.10)),
-        Box::new(EvolutionCase::new("Era3_WallClean",   "[三层]",   InputSource::NonWall,   0.0)),
+        Box::new(EvolutionCase::new("Era1a_RawFull",   "[不可行]", InputSource::Raw,       0.0,  0.0, 0)),
+        Box::new(EvolutionCase::new("Era1b_RawDown",   "[朴素]",   InputSource::Raw,       0.10, 0.0, 0)),
+        Box::new(EvolutionCase::new("Era2_GroundDown",  "[旧管线]",  InputSource::NonGround, 0.10, 0.0, 0)),
+        Box::new(EvolutionCase::new("Era3_WallClean",   "[三层]",   InputSource::NonWall,   0.10, 0.20, 3)),
     ];
 
     let tmp = std::env::temp_dir().join("evolution_bench");

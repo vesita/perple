@@ -1,0 +1,33 @@
+name = "RANSAC 线聚类 (ransac)"
+type = "ransac"
+preprocessor = "ground+wall"
+
+[quick]
+frames = 1
+params = [
+  { distance = 0.05, iterations = 50, min_pts = 10, denoise_radius = 0.20, denoise_min_pts = 3 },
+  { distance = 0.05, iterations = 100, min_pts = 15, denoise_radius = 0.20, denoise_min_pts = 3 },
+  { distance = 0.08, iterations = 50, min_pts = 10, denoise_radius = 0.20, denoise_min_pts = 3 },
+  { distance = 0.08, iterations = 100, min_pts = 15, denoise_radius = 0.20, denoise_min_pts = 3 },
+]
+
+[full]
+frames = 10
+params = [
+  { distance = 0.03, iterations = 50, min_pts = 10, denoise_radius = 0.20, denoise_min_pts = 3 },
+  { distance = 0.03, iterations = 100, min_pts = 15, denoise_radius = 0.15, denoise_min_pts = 3 },
+  { distance = 0.05, iterations = 50, min_pts = 10, denoise_radius = 0.20, denoise_min_pts = 5 },
+  { distance = 0.05, iterations = 100, min_pts = 15, denoise_radius = 0.20, denoise_min_pts = 3 },
+  { distance = 0.05, iterations = 200, min_pts = 10, denoise_radius = 0.15, denoise_min_pts = 3 },
+  { distance = 0.08, iterations = 50, min_pts = 15, denoise_radius = 0.20, denoise_min_pts = 3 },
+  { distance = 0.08, iterations = 100, min_pts = 10, denoise_radius = 0.20, denoise_min_pts = 5 },
+  { distance = 0.08, iterations = 200, min_pts = 20, denoise_radius = 0.15, denoise_min_pts = 3 },
+  { distance = 0.10, iterations = 50, min_pts = 15, denoise_radius = 0.20, denoise_min_pts = 3 },
+  { distance = 0.10, iterations = 100, min_pts = 10, denoise_radius = 0.20, denoise_min_pts = 3 },
+]
+[stats]
+fastest_ms = 372.1735
+slowest_ms = 384.82129999999995
+avg_ms = 379.365275
+median_ms = 380.23315
+last_run = "1778762079"

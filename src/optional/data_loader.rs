@@ -431,11 +431,11 @@ impl DataLoader {
         self.current_index += 1;
 
         // 从内存写入流（无 I/O 等待）
-        let mut clr_stream = self.clr_stream.lock().await;
+        let mut clr_stream = self.clr_stream.lock().unwrap();
         let _ = clr_stream.write(self.images[idx].clone());
         drop(clr_stream);
 
-        let mut cld_stream = self.cld_stream.lock().await;
+        let mut cld_stream = self.cld_stream.lock().unwrap();
         let _ = cld_stream.write(self.clouds[idx].clone());
 
         Ok(true)
@@ -490,7 +490,7 @@ impl DataLoader {
 
                 // 先检查流是否还能写入
                 {
-                    let mut clr_stream = self.clr_stream.lock().await;
+                    let mut clr_stream = self.clr_stream.lock().unwrap();
                     if clr_stream.get_write_mut().is_err() {
                         thread::sleep(Duration::from_millis(5));
                         continue;
@@ -504,7 +504,7 @@ impl DataLoader {
 
                 // 然后获取锁并快速写入数据
                 {
-                    let mut clr_stream = self.clr_stream.lock().await;
+                    let mut clr_stream = self.clr_stream.lock().unwrap();
                     match image_result {
                         Ok(image) => { let _ = clr_stream.write(image); }
                         Err(e) => {
@@ -515,7 +515,7 @@ impl DataLoader {
                 }
 
                 {
-                    let mut cld_stream = self.cld_stream.lock().await;
+                    let mut cld_stream = self.cld_stream.lock().unwrap();
                     match cloud_result {
                         Ok(lifra) => { let _ = cld_stream.write(lifra); }
                         Err(e) => {

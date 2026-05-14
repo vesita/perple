@@ -2,23 +2,20 @@
 
 ## 整体架构
 
-点云处理管线分五级串联，每层通过 trait 解耦：
+点云处理管线分三级串联：
 
 ```
 原始点云 (raw cloud)
   ↓ GroundPickStrategy::pick()
 非地面点 (non_ground)
-  ↓ DenoiseStrategy::denoise()  —— 预处理降噪 (gentle, r=0.30 m=3)
-降噪后非地面点 (denoised_non_ground)
   ↓ WallPickStrategy::pick()
 非墙面点 (non_wall)
-  ↓ DenoiseStrategy::denoise()  —— 后处理降噪 (standard, r=0.20 m=3)
-降噪后点 (denoised)
-  ↓ ClusteringStrategy::run()
+  ↓ ClusteringStrategy::run()  [含内部可选降噪]
 障碍物簇 (clusters)
 ```
 
-Benchmark 框架在此基础上增加 Preprocessor 层，用于共享前序处理结果。
+降噪已内聚至各 ClusteringStrategy 内部，不再作为管线固定环节。
+墙体提取当前仅使用 bev_edlines（图像边缘检测），保留 bev_hough 和 LSD 接口。
 
 ## 各模块输入输出契约
 
@@ -139,10 +136,8 @@ Preprocessed 枚举:
 
 | 策略 | 特性 | 限制 |
 |------|------|------|
-| XYRansacWall | TLS 精化 + 确定性种子 | 设为默认墙体策略 |
-| TopDownCluster | 网格自顶向下聚类 | cell_size 控制过分割 |
-| QuadtreeWall | 四叉树递归分割 | 较慢，p 值控制分割深度 |
-| seq_fit | 顺序平面拟合 | **当前所有参数都检测到 0 墙面点，待排查** |
+| bev_edlines（默认） | BEV 图像 + OpenCV EDLines 边缘检测 | 依赖 OpenCV，图像分辨率影响精度 |
+| bev_hough | BEV 图像 + Hough 变换备选 | 保留接口，当前未激活 |
 
 ### DenoiseStrategy 各实现
 

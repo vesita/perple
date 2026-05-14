@@ -34,7 +34,7 @@ impl EgoMotion {
     /// 在 async 上下文中请使用 [`update_async`] 或直接提供平面数据调用 [`advance`]。
     pub fn update(&mut self) -> [f32; 3] {
         let current = {
-            let stream = self.ground_plane_stream.blocking_lock();
+            let stream = self.ground_plane_stream.lock().unwrap();
             stream.peek_latest()
         };
         self.advance(current)
@@ -43,7 +43,7 @@ impl EgoMotion {
     /// async 版本：适用于 tokio 运行时内部调用
     pub async fn update_async(&mut self) -> [f32; 3] {
         let current = {
-            let stream = self.ground_plane_stream.lock().await;
+            let stream = self.ground_plane_stream.lock().unwrap();
             stream.peek_latest()
         };
         self.advance(current)
