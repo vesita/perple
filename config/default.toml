@@ -3,6 +3,7 @@ detections_capacity = 16
 person_class_label = "person"
 points_capacity = 16384
 max_range = 12.0
+min_range = 0.10
 
 # 目标检测超参数配置
 default_input_width = 640
@@ -41,7 +42,7 @@ voxel_size = 0.10
 # DBSCAN 核心点最少邻居数，低于此数的点被视为噪声
 min_points_per_cluster = 10
 # 自适应 eps 斜率，值越大远处邻域半径越大；设为 0 则退化为固定 eps 模式
-eps_slope = 0.2
+eps_slope = 0.05
 # 四叉树节点最大点数，超过则分裂（空间索引加速邻域查询）
 max_points_per_node = 50
 # 四叉树最大深度
@@ -56,6 +57,9 @@ max_range = 12.0
 # 天花板过滤：剔除 Z > ceiling_height 的点，减少天花板附近杂点产生的无效簇
 ceiling_filter = true
 ceiling_height = 2.5
+# 框架级降噪：聚类前半径离群点剔除（替代策略内部噪声过滤）
+denoise_radius = 0.20
+denoise_min_pts = 3
 # 密度感知质心加权：用 1/r^α 补偿 LiDAR 近密远疏导致的质心偏向传感器偏差
 # 0 = 禁用（算术平均），1 = 1/r 补偿，2 = 1/r² 补偿
 density_weight_alpha = 2.0
@@ -67,7 +71,7 @@ cluster_threshold = 1.0    # 相邻像素深度差阈值（米），超过则视
 
 [tracker]
 # 目标连续未匹配帧数超过此值则永久删除轨迹
-max_disappeared = 8
+max_disappeared = 12
 # 聚类结果置信度低于此值的检测被过滤，不参与匹配
 min_confidence = 0.5
 # 轨迹累计出现次数低于此值不输出（过滤一次性噪声目标）
@@ -87,7 +91,7 @@ fix_size_frames = 10
 # 尺寸变化率阈值：三维尺寸变化率均低于此值则冻结，否则更新参考
 fix_size_dim_thresh = 0.4
 # Kalman 滤波器平滑窗口：用最近 K 帧的位置均值修正状态
-kf_avg_frames = 10
+kf_avg_frames = 5
 # 漂浮→静态 回归所需连续帧数（在静态簇中持续 N 帧才确认为静态）
 floating_to_static_frames = 30
 # 运动速度阈值（m/s）：自运动补偿后速度高于此值判定为 Moving，低于为 Movable
@@ -109,6 +113,18 @@ box_smoothing_alpha = 0.25
 vel_smoothing_alpha = 0.25
 # 分类转换冷却帧数（Moving↔Movable 迟滞）
 class_cooldown_frames = 15
+
+# 航迹分级管理
+confirmation_frames = 5        # Tentative→Confirmed 所需连续匹配帧数
+tentative_max_missed = 3       # Tentative 轨迹最大丢失帧数（之后立即删除）
+
+# Track Score（代替纯阈值生灭）
+track_score_match_bonus = 3.0       # 匹配一次加分
+track_score_miss_penalty = 1.5      # 丢失一次扣分
+track_score_confirm_threshold = 5.0 # score ≥ 此值 → Tentative→Confirmed
+track_score_delete_threshold = 0.0  # score ≤ 此值 + 超时 → 删除
+track_score_output_threshold = 2.0  # score < 此值 → 不输出
+track_score_max = 20.0              # score 上限
 
 [camera]
 intrinsic = [

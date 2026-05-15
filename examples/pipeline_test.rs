@@ -106,6 +106,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .position(|a| a == "--frames")
         .and_then(|i| args.get(i + 1))
         .and_then(|s| s.parse().ok());
+    let skip_frames: usize = args.iter()
+        .position(|a| a == "--skip")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
     let _wall_strategy: Option<String> = args.iter()
         .position(|a| a == "--wall" || a.starts_with("--wall="))
         .and_then(|i| {
@@ -129,10 +134,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ─── 初始化数据加载器 ─────────────────────────────────────────────────
     let mut data_loader = DataLoader::new("./data/cloud".to_string());
     data_loader.load().await?;
+    info!("数据目录：{} 帧可用", data_loader.frame_count());
+
+    if skip_frames > 0 {
+        info!("跳过前 {} 帧", skip_frames);
+        for _ in 0..skip_frames {
+            data_loader.load_next().await?;
+        }
+    }
+
+    let total_available = data_loader.frame_count().saturating_sub(skip_frames);
     let n_frames = n_frames_limit
-        .map(|n| n.min(data_loader.frame_count()))
-        .unwrap_or(data_loader.frame_count());
-    info!("数据目录：{} 帧可用（已预加载）", n_frames);
+        .map(|n| n.min(total_available))
+        .unwrap_or(total_available);
+    info!("将处理 {} 帧（从第 {} 帧开始）", n_frames, skip_frames);
 
     // ─── 初始化模块 ──────────────────────────────────────────────────────
     let mut lidar = {

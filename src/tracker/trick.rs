@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use super::core::{TargetClass, TrackedObject};
+use super::object::{TargetClass, TrackedObject};
 
 /// 将正在移动的目标标记为行人（小技巧）。
 ///

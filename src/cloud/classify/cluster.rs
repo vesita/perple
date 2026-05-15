@@ -49,8 +49,8 @@ impl Cluster {
     }
 
     /// 从聚类索引同时计算 Box3D 和质心
-    fn cluster_box_and_centroid(&self, indices: &[usize], alpha: f32) -> (Box3D, [f32; 3]) {
-        let pts: Vec<[f32; 3]> = indices.iter().map(|&idx| self.all_points[idx]).collect();
+    fn cluster_box_and_centroid(all_points: &[[f32; 3]], indices: &[usize], alpha: f32) -> (Box3D, [f32; 3]) {
+        let pts: Vec<[f32; 3]> = indices.iter().map(|&idx| all_points[idx]).collect();
         let box3d = Box3D::from_cloud_aabb(&pts, 0.0);
 
         let centroid = if alpha > 0.0 {
@@ -86,33 +86,42 @@ impl Cluster {
 
     /// 输出为 CldBud 向量，过滤掉明显无效的簇
     pub fn to_cldbuds(&self) -> Vec<CldBud> {
-        let cfg = crate::config::fixif().cluster.clone();
-        let alpha = cfg.density_weight_alpha;
-        self.objects
-            .iter()
-            .filter(|cluster| !cluster.is_empty())
-            .enumerate()
-            .filter_map(|(idx, cluster)| {
-                let (box3d, centroid) = self.cluster_box_and_centroid(cluster, alpha);
-                let w = box3d.length.max(box3d.width);
-                let h = box3d.height;
-                // 排除超小噪点 + 扁度/体积过滤
-                if w <= 0.25 || h <= 0.5 { return None; }
-                if h < 0.15 * w { return None; }
-                if box3d.length * box3d.width * h < 0.03 { return None; }
-
-                // box 过大过滤（室内场景物体不应过大）
-                if w > 3.0 { return None; }
-                // 点云稀疏度过滤：大体积内点数过少 → 离群噪点
-                let n_pts = cluster.len() as f32;
-                let volume = box3d.length * box3d.width * h;
-                if volume > 0.5 && n_pts / volume < 20.0 { return None; }
-
-                Some(CldBud::with_centroid(box3d, 1, format!("cluster_{}", idx), 1.0, centroid))
-            })
-            .collect()
+        clusters_to_cldbuds(&self.all_points, &self.objects)
     }
+}
 
+/// 将聚类索引结果转为 CldBud 向量（供 bench 等外部复用）。
+///
+/// 过滤逻辑与 `Cluster::to_cldbuds()` 完全一致。
+pub fn clusters_to_cldbuds(all_points: &[[f32; 3]], objects: &[Vec<usize>]) -> Vec<CldBud> {
+    let cfg = crate::config::fixif().cluster.clone();
+    let alpha = cfg.density_weight_alpha;
+    objects
+        .iter()
+        .filter(|c| !c.is_empty())
+        .enumerate()
+        .filter_map(|(idx, cluster)| {
+            let (box3d, centroid) = Cluster::cluster_box_and_centroid(all_points, cluster, alpha);
+            let w = box3d.length.max(box3d.width);
+            let h = box3d.height;
+            // 排除超小噪点 + 扁度/体积过滤
+            if w <= 0.2 || h <= 0.3 { return None; }
+            if h < 0.15 * w { return None; }
+            if box3d.length * box3d.width * h < 0.03 { return None; }
+
+            // box 过大过滤（室内场景物体不应过大）
+            if w > 3.0 { return None; }
+            // 点云稀疏度过滤：大体积内点数过少 → 离群噪点
+            let n_pts = cluster.len() as f32;
+            let volume = box3d.length * box3d.width * h;
+            if volume > 0.5 && n_pts / volume < 20.0 { return None; }
+
+            Some(CldBud::with_centroid(box3d, 1, format!("cluster_{}", idx), 1.0, centroid))
+        })
+        .collect()
+}
+
+impl Cluster {
     /// YOLO 辅助簇分裂（Phase 2）
     ///
     /// 对每个簇，将簇内点投影到 2D，按落在哪个 YOLO 框分组。

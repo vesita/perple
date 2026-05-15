@@ -48,9 +48,13 @@ impl Fuse {
         let clr_buds: Vec<ClrBud> = swapl.clr_objs.consumer().lock().unwrap().clone();
         if clr_buds.is_empty() {
             // 无 YOLO 数据：将原始聚类结果透传到 cld_objs
+            if !cld_buds.is_empty() {
+                log::info!("Fuse: 无 YOLO 检测，透传 {} 个聚类", cld_buds.len());
+            }
             let _ = swapl.cld_objs.lock().unwrap().write(cld_buds);
             return;
         }
+        log::info!("Fuse: YOLO {} 个检测, 聚类 {} 个", clr_buds.len(), cld_buds.len());
 
         let fx = self.intrinsic[(0, 0)];
         let fy = self.intrinsic[(1, 1)];
@@ -179,8 +183,9 @@ impl Fuse {
 
         // Step 4: 保留未合并的 + 标注类别
         let merged_count = merged_buds.len();
-        if merged_count > 0 {
-            log::info!("Fuse 合并了 {} 组 3D 簇", merged_count);
+        let matched_count = proj.iter().filter(|pm| pm.is_some()).count();
+        if merged_count > 0 || matched_count > 0 {
+            log::info!("Fuse 统计: {} 聚类匹配 YOLO, 合并了 {} 组", matched_count, merged_count);
         }
 
         let mut result: Vec<CldBud> = Vec::new();

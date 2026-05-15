@@ -2,7 +2,8 @@ use crate::{
     cloud::{
         CldBud,
         classify::cluster::Cluster,
-        classify::strategy::XYGridDBSCAN,
+        classify::strategy::{LvdotClusterStrategy, LvdotQt, XYGridDBSCAN},
+        denoise::{DenoiseStrategy, RadiusOutlierRemoval},
         ground::{GroundPickStrategy, create_ground_strategy},
         wall::{WallPickStrategy, XYGrid, BevEdLines, BevHough},
     },
@@ -91,12 +92,15 @@ impl Classify {
         // ═══════════════════════════════════════════════════════════════════
         let cfg = crate::config::fixif();
 
-        // ─── 0. 初始远点弃置 ──────────────────────────────────────────────
-        if cfg.max_range > 0.0 {
+        // ─── 0. 距离过滤（近点弃置 + 远点弃置） ──────────────────────────
+        {
             let before = target.len();
-            target.retain(|p| (p[0] * p[0] + p[1] * p[1]).sqrt() <= cfg.max_range);
+            target.retain(|p| {
+                let d = (p[0] * p[0] + p[1] * p[1]).sqrt();
+                d >= cfg.min_range && d <= cfg.max_range
+            });
             if before != target.len() {
-                println!("初始远点弃置：{} → {} 点 (max_range={}m)", before, target.len(), cfg.max_range);
+                println!("距离过滤：{} → {} 点 (min={}m max={}m)", before, target.len(), cfg.min_range, cfg.max_range);
             }
         }
 
@@ -171,7 +175,22 @@ impl Classify {
 
         let remaining_start = n_ground + n_wall;
 
-        // ─── 3a. 体素占用过滤（仅用于 clouds_filtered 跟踪器投票） ────────
+        // ─── 3a. 框架级降噪（RadiusOutlierRemoval） ────────────────────
+        let cluster_input: Vec<[f32; 3]> = if remaining_start < target.len() {
+            let raw = &target[remaining_start..];
+            if cfg.cluster.denoise_radius > 0.0 {
+                let mut denoiser = RadiusOutlierRemoval::new(cfg.cluster.denoise_radius, cfg.cluster.denoise_min_pts);
+                let (denoised, _) = denoiser.denoise(raw);
+                println!("降噪：{} → {} 点 (半径={}m min={})", raw.len(), denoised.len(), cfg.cluster.denoise_radius, cfg.cluster.denoise_min_pts);
+                denoised
+            } else {
+                raw.to_vec()
+            }
+        } else {
+            Vec::new()
+        };
+
+        // ─── 3b. 体素占用过滤（仅用于 clouds_filtered 跟踪器投票） ────────
         let t4 = std::time::Instant::now();
         let (filtered_pts, _map) = if remaining_start < target.len() {
             XYGrid::voxel_occupancy_filter(&target[remaining_start..], 0.10, 3)
@@ -184,12 +203,7 @@ impl Classify {
         // 检测阶段写 DualBuf producer（后融合阶段通过 consumer 读）
         *self.clouds_filtered.producer().lock().unwrap() = filtered_pts;
 
-        // ─── 3b. 后聚类（从配置读取参数） ──────────────────────────────────
-        let cluster_input: Vec<[f32; 3]> = if remaining_start < target.len() {
-            target[remaining_start..].to_vec()
-        } else {
-            Vec::new()
-        };
+        // ─── 3c. 后聚类（从配置读取参数） ──────────────────────────────────
         match cfg.cluster.strategy.as_str() {
             "xy_grid_dbscan" => {
                 let cell = cfg.cluster.voxel_size.max(0.05);
@@ -200,11 +214,21 @@ impl Classify {
                     .with_pre_extracted_wall();
                 self.cluster.set_strategy(Box::new(pre_extracted));
             }
+            "lvdot_grid" | "lvdot" => {
+                self.cluster.set_strategy(Box::new(
+                    LvdotClusterStrategy::new().with_pre_extracted_wall(),
+                ));
+            }
+            "lvdot_qt" => {
+                self.cluster.set_strategy(Box::new(
+                    LvdotQt::new().with_pre_extracted_wall(),
+                ));
+            }
             _ => {}
         }
         let _ = self.cluster.cluster(&cluster_input);
 
-        // ─── 7. YOLO 辅助簇分裂 ───────────────────────────────────────────
+        // ─── 4. YOLO 辅助簇分裂 ────────────────────────────────────────────
         // 检测阶段读 DualBuf producer（Camera 写入同一 producer，无跨阶段竞争）
         {
             let guard = self.clr_objs.producer().lock().unwrap();
@@ -216,7 +240,7 @@ impl Classify {
             }
         }
 
-        // ─── 8. 输出 cld_buds_raw（仅障碍物簇，不含地面/墙体） ──────────
+        // ─── 5. 输出 cld_buds_raw（仅障碍物簇，不含地面/墙体） ────────────
         // 检测阶段写 DualBuf producer（后融合阶段通过 consumer 读）
         *self.cld_buds_raw.producer().lock().unwrap() = self.cluster.to_cldbuds();
         Ok(())

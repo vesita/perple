@@ -1,7 +1,5 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::time::{Instant, SystemTime};
-
-use nalgebra::{Point3, Vector3, Vector6};
 
 use crate::{
     cloud::CldBud,
@@ -9,8 +7,10 @@ use crate::{
     config::fixif,
     swapl::global_swapl,
     tracker::{
-        hungarian::hungarian,
-        kalman::{KalmanConfig, KalmanFilterWrapper},
+        analysis::{analyze_point_cloud_voting_direct, analyze_velocity_clusters_from_snapshot},
+        association::{associate, update_object_point_clouds},
+        lifecycle::apply_state_machine,
+        object::{TargetClass, TrackStatus, TrackedObject},
         output::Target,
         trick,
     },
@@ -60,320 +60,6 @@ impl std::fmt::Display for TrackerError {
 
 impl std::error::Error for TrackerError {}
 
-/// 目标分类（状态机）
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum TargetClass {
-    Floating, // 待定——新对象或未确认运动能力
-    Static,   // 背景/地面——confirmed 不可移动
-    Moving,   // 运动中（confirmed）
-    Movable,  // 可运动——曾确认运动，当前静止
-}
-
-/// 跟踪目标信息（包含卡尔曼滤波器）
-pub(crate) struct TrackedObject {
-    pub(crate) id: usize,
-    pub(crate) class_type: String,
-    last_seen: SystemTime,
-    disappeared_count: u32,
-    appearance_count: u32,
-    confidence: f32,
-    kalman_filter: KalmanFilterWrapper,
-    velocity_history: VecDeque<[f32; 3]>,
-    pub(crate) classification: TargetClass,
-    /// 一旦为 true，永不回到 Static/Floating
-    confirmed_moving: bool,
-    /// 连续点云投票通过帧数（Floating→Moving 用）
-    voting_streak: u32,
-    /// 连续处于静态簇帧数（Floating→Static 用）
-    floating_static_count: u32,
-    /// 关联时缓存最近的检测框，避免输出阶段二次搜索
-    last_box: Option<Box3D>,
-    /// 冻结的箱体尺寸（fix_size 稳定用）
-    fixed_box: Option<Box3D>,
-    /// 点云历史（环形缓冲区，用于点云投票）
-    point_cloud_history: VecDeque<Vec<[f32; 3]>>,
-    /// k 帧位置历史（用于 LV-DOT 风格的 k 帧速度观测）
-    position_history: VecDeque<[f64; 3]>,
-    /// k 帧速度观测平均帧数
-    kf_avg_frames: usize,
-    /// 1€ Filter 低通滤波质心（Option = 未初始化）
-    centroid_lpf: Option<[f64; 3]>,
-    /// 上一帧速度大小（用于自适应截止频率）
-    centroid_prev_vel_mag: f64,
-    /// EMA 平滑后的箱体（替代 fix_size 硬锁定）
-    smoothed_box: Option<Box3D>,
-    /// 分类转换冷却计数器（Moving↔Movable 迟滞）
-    class_cooldown: u32,
-    /// 速度 EMA 系数（0=自适应置信度）
-    vel_smoothing_alpha: f32,
-    /// 静态簇缺失连续计数（Static→Floating 迟滞用）
-    static_miss_count: u32,
-}
-
-impl TrackedObject {
-    fn new(
-        id: usize,
-        initial_box: &Box3D,
-        class_type: String,
-        confidence: f32,
-        centroid: [f32; 3],
-        kf_avg_frames: usize,
-        vel_smoothing_alpha: f32,
-    ) -> Result<Self, adskalman::Error> {
-        let mut kalman_filter = KalmanFilterWrapper::new(KalmanConfig::default())?;
-        // 初始状态：[x, y, z, 0, 0, 0]
-        kalman_filter.init_with_state(Vector6::new(
-            centroid[0] as f64, centroid[1] as f64, centroid[2] as f64,
-            0.0, 0.0, 0.0,
-        ));
-        Ok(Self {
-            id,
-            class_type,
-            last_seen: SystemTime::now(),
-            disappeared_count: 0,
-            appearance_count: 1, // 创建即计为第一次出现
-            confidence,
-            kalman_filter,
-            velocity_history: VecDeque::with_capacity(10),
-            classification: TargetClass::Floating,
-            confirmed_moving: false,
-            voting_streak: 0,
-            floating_static_count: 0,
-            last_box: Some(initial_box.clone()),
-            fixed_box: None,
-            point_cloud_history: VecDeque::with_capacity(16),
-            position_history: VecDeque::with_capacity(kf_avg_frames + 2),
-            kf_avg_frames,
-            centroid_lpf: None,
-            centroid_prev_vel_mag: 0.0,
-            smoothed_box: None,
-            class_cooldown: 0,
-            vel_smoothing_alpha,
-            static_miss_count: 0,
-        })
-    }
-
-    /// 预测：将状态前推 dt 秒
-    fn predict(&mut self, dt: f64) -> Result<(), adskalman::Error> {
-        self.kalman_filter.predict(dt)
-    }
-
-    /// 修正（LV-DOT 风格）：用 [x,y,z,vx,vy,vz] 校正
-    ///
-    /// - 位置来自当前帧点云质心 centroid
-    /// - 速度通过 k 帧位置差计算：(pos_t - pos_{t-k}) / (k * dt)
-    ///   k = kf_avg_frames，dt 从上次修正到现在的实际时间
-    fn correct(
-        &mut self,
-        new_box: &Box3D,
-        new_class_type: String,
-        new_confidence: f32,
-        centroid: [f32; 3],
-    ) -> Result<(), adskalman::Error> {
-        let now = SystemTime::now();
-        let dt_since_last = now.duration_since(self.last_seen)
-            .unwrap_or_default().as_secs_f64().clamp(0.001, 1.0);
-
-        // 记录位置历史（环形缓冲）
-        self.position_history.push_back([
-            centroid[0] as f64,
-            centroid[1] as f64,
-            centroid[2] as f64,
-        ]);
-        if self.position_history.len() > self.kf_avg_frames + 2 {
-            self.position_history.pop_front();
-        }
-
-        // LV-DOT：v = (pos_t - pos_{t-k}) / (k * dt)
-        let hist_len = self.position_history.len();
-        let k = self.kf_avg_frames.min(hist_len.saturating_sub(1));
-        const MIN_K_FOR_VELOCITY: usize = 3;
-        if k >= MIN_K_FOR_VELOCITY {
-            let old = self.position_history[hist_len - 1 - k];
-            let curr = *self.position_history.back().unwrap();
-            let dt_k = (k as f64 * dt_since_last).max(0.001);
-            let meas_vx = (curr[0] - old[0]) / dt_k;
-            let meas_vy = (curr[1] - old[1]) / dt_k;
-            let meas_vz = (curr[2] - old[2]) / dt_k;
-            let measurement = Vector6::new(
-                centroid[0] as f64, centroid[1] as f64, centroid[2] as f64,
-                meas_vx, meas_vy, meas_vz,
-            );
-            self.kalman_filter.correct(measurement)?;
-        } else {
-            // 历史不足，位置-only 修正（避免 0 速度观测污染状态）
-            self.kalman_filter.correct_position(Vector3::new(
-                centroid[0] as f64,
-                centroid[1] as f64,
-                centroid[2] as f64,
-            ))?;
-        }
-
-        // 限幅：防止关联错误导致单帧速度尖峰
-        self.kalman_filter.clamp_velocity(10.0);
-
-        // 记录速度用于聚类
-        let v = self.kalman_filter.get_velocity();
-        if self.velocity_history.len() >= 10 {
-            self.velocity_history.pop_front();
-        }
-        self.velocity_history.push_back([v.x as f32, v.y as f32, v.z as f32]);
-
-        self.appearance_count += 1;
-        // 保留 person 标签：避免 YOLO 间歇性漏检导致标签闪烁
-        if !(self.class_type == "person" && new_class_type != "person") {
-            self.class_type = new_class_type;
-        }
-        self.confidence = new_confidence;
-        self.last_seen = SystemTime::now();
-        self.disappeared_count = 0;
-        self.last_box = Some(new_box.clone());
-        Ok(())
-    }
-
-    /// 帧增长（未匹配时调用）
-    fn on_missed(&mut self) {
-        self.disappeared_count += 1;
-    }
-
-    /// 1€ Filter 质心低通滤波
-    ///
-    /// 静止时 fc=fc_min → 强平滑；运动时 fc↑ → 低延迟。
-    /// 用 KF 速度大小自适应截止频率。
-    fn apply_centroid_lpf(&mut self, centroid: &mut [f32; 3], fc_min: f64, beta: f64) {
-        let now = SystemTime::now();
-        let dt = now.duration_since(self.last_seen)
-            .unwrap_or_default().as_secs_f64().clamp(0.001, 1.0);
-
-        let vel_mag = self.kalman_filter.get_velocity().norm() as f64;
-        let fc = (fc_min + beta * vel_mag).min(5.0); // fc_max = 5Hz
-        let tau = 1.0 / (2.0 * std::f64::consts::PI * fc);
-        let alpha = 1.0 / (1.0 + tau / dt);
-
-        if let Some(prev) = self.centroid_lpf {
-            centroid[0] = (alpha * centroid[0] as f64 + (1.0 - alpha) * prev[0]) as f32;
-            centroid[1] = (alpha * centroid[1] as f64 + (1.0 - alpha) * prev[1]) as f32;
-            centroid[2] = (alpha * centroid[2] as f64 + (1.0 - alpha) * prev[2]) as f32;
-        }
-        self.centroid_lpf = Some([centroid[0] as f64, centroid[1] as f64, centroid[2] as f64]);
-        self.centroid_prev_vel_mag = vel_mag;
-    }
-
-    fn is_permanently_lost(&self, max_disappeared: u32) -> bool {
-        self.disappeared_count >= max_disappeared
-    }
-
-    /// 获取 Kalman 估计速度（自适应 EMA 平滑）
-    ///
-    /// alpha 按置信度自适应：高置信度快速跟踪，低置信度强平滑。
-    /// 可通过 `vel_smoothing_alpha` 固定覆盖。
-    fn smoothed_velocity(&self) -> [f32; 3] {
-        let v = self.kalman_filter.get_velocity();
-        // 自适应 alpha：固定值 > 0 则使用固定值，否则按置信度调整
-        let alpha = if self.vel_smoothing_alpha > 0.0 {
-            self.vel_smoothing_alpha
-        } else {
-            match self.confidence {
-                c if c > 0.9 => 0.4,
-                c if c > 0.7 => 0.25,
-                _ => 0.15,
-            }
-        };
-        if self.velocity_history.is_empty() {
-            return [v.x as f32, v.y as f32, v.z as f32];
-        }
-        // 历史均值
-        let mut avg = [0.0f32; 3];
-        for hv in &self.velocity_history {
-            avg[0] += hv[0];
-            avg[1] += hv[1];
-            avg[2] += hv[2];
-        }
-        let n = self.velocity_history.len() as f32;
-        let hist_avg = [avg[0] / n, avg[1] / n, avg[2] / n];
-        // EMA: alpha * KF 速度 + (1-alpha) * 历史均值
-        [
-            alpha * (v.x as f32) + (1.0 - alpha) * hist_avg[0],
-            alpha * (v.y as f32) + (1.0 - alpha) * hist_avg[1],
-            alpha * (v.z as f32) + (1.0 - alpha) * hist_avg[2],
-        ]
-    }
-
-    fn speed(&self) -> f32 {
-        let v = self.smoothed_velocity();
-        (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
-    }
-
-    /// 箱体尺寸 EMA 平滑（替代 fix_size 硬锁定）
-    ///
-    /// alpha 按置信度自适应：高置信度快速跟踪，低置信度强平滑。
-    fn apply_box_smoothing(&mut self, base_alpha: f32) {
-        let current = match self.last_box {
-            Some(ref b) => b.clone(),
-            None => return,
-        };
-        // 置信度自适应 alpha
-        let alpha = if self.confidence > 0.9 {
-            base_alpha.max(0.4).min(0.5)
-        } else if self.confidence > 0.7 {
-            base_alpha.max(0.15).min(0.5)
-        } else {
-            base_alpha.max(0.05).min(0.3)
-        };
-        let smoothed = match self.smoothed_box {
-            Some(ref prev) => {
-                let mut b = current.clone();
-                b.length = alpha * current.length + (1.0 - alpha) * prev.length;
-                b.width  = alpha * current.width  + (1.0 - alpha) * prev.width;
-                b.height = alpha * current.height + (1.0 - alpha) * prev.height;
-                b
-            }
-            None => current.clone(),
-        };
-        self.smoothed_box = Some(smoothed.clone());
-        self.last_box = Some(smoothed);
-    }
-
-    /// 箱体尺寸锁定：跟踪稳定后如果尺寸变化小则冻结
-    fn apply_fix_size(&mut self, min_frames: usize, dim_thresh: f32) {
-        if self.appearance_count <= min_frames as u32 {
-            return;
-        }
-        let current = match self.last_box {
-            Some(ref b) => b.clone(),
-            None => return,
-        };
-        let fixed = match self.fixed_box {
-            Some(ref f) => f.clone(),
-            None => {
-                self.fixed_box = Some(current);
-                return;
-            }
-        };
-        // 计算三维尺寸变化率的最大值
-        let ratio = [
-            (current.length - fixed.length).abs() / fixed.length.max(1e-6),
-            (current.width - fixed.width).abs() / fixed.width.max(1e-6),
-            (current.height - fixed.height).abs() / fixed.height.max(1e-6),
-        ]
-        .iter()
-        .cloned()
-        .fold(0.0f32, f32::max);
-
-        if ratio < dim_thresh {
-            // 变化小 → 冻结尺寸
-            let mut locked = current;
-            locked.length = fixed.length;
-            locked.width = fixed.width;
-            locked.height = fixed.height;
-            self.last_box = Some(locked);
-        } else {
-            // 变化大 → 更新参考
-            self.fixed_box = Some(current);
-        }
-    }
-}
-
 /// 主跟踪器
 pub struct Tracker {
     tar3d: Eap<Stream<Vec<CldBud>>>,
@@ -414,6 +100,16 @@ pub struct Tracker {
     cost_buf: Vec<Vec<f64>>,
     /// 匈牙利算法方阵缓冲区（避免每帧堆分配）
     sq_buf: Vec<Vec<f64>>,
+    // ─── 航迹分级管理 ────────────────────────────────────────────────────
+    confirmation_frames: usize,
+    tentative_max_missed: usize,
+    // ─── 轨迹评分 ──────────────────────────────────────────────────────────
+    track_score_match_bonus: f64,
+    track_score_miss_penalty: f64,
+    track_score_confirm_threshold: f64,
+    track_score_delete_threshold: f64,
+    track_score_output_threshold: f64,
+    track_score_max: f64,
 }
 
 impl Tracker {
@@ -423,7 +119,7 @@ impl Tracker {
         Self {
             tar3d: swapl.cld_objs.clone(),
             target: swapl.targets.clone(),
-            clouds_filtered: swapl.clouds_filtered.clone(), // DualBuf clone
+            clouds_filtered: swapl.clouds_filtered.clone(),
             next_id: 1,
             tracked_objects: HashMap::new(),
             max_disappeared: cfg.max_disappeared,
@@ -451,6 +147,15 @@ impl Tracker {
             ego_motion: EgoMotion::new(),
             cost_buf: Vec::new(),
             sq_buf: Vec::new(),
+            // ─── 航迹分级管理 ────────────────────────────────────────────
+            confirmation_frames: cfg.confirmation_frames,
+            tentative_max_missed: cfg.tentative_max_missed,
+            track_score_match_bonus: cfg.track_score_match_bonus,
+            track_score_miss_penalty: cfg.track_score_miss_penalty,
+            track_score_confirm_threshold: cfg.track_score_confirm_threshold,
+            track_score_delete_threshold: cfg.track_score_delete_threshold,
+            track_score_output_threshold: cfg.track_score_output_threshold,
+            track_score_max: cfg.track_score_max,
         }
     }
 
@@ -466,315 +171,19 @@ impl Tracker {
         self.min_appearances = n;
     }
 
-    /// 马氏距离门控阈值
-    ///
-    /// χ²(3) 在 α=0.05 时阈值为 7.815
-    /// sqrt(7.815) ≈ 2.795 用于距离比较
-    const MAHALANOBIS_THRESHOLD: f64 = 2.796;
-
-    /// 马氏距离关联（匈牙利算法最优指派）
-    ///
-    /// `cost_buf` / `sq_buf` 复用缓冲区，避免每帧堆分配。
-    fn associate(
-        objects: &HashMap<usize, TrackedObject>,
-        detections: &[CldBud],
-        cost_buf: &mut Vec<Vec<f64>>,
-        sq_buf: &mut Vec<Vec<f64>>,
-    ) -> (Vec<(usize, usize)>, Vec<usize>) {
-        let n_objects = objects.len();
-        let n_detections = detections.len();
-
-        if n_objects == 0 || n_detections == 0 {
-            return (Vec::new(), (0..n_detections).collect());
-        }
-
-        let obj_ids: Vec<usize> = objects.keys().copied().collect();
-
-        // 构建代价矩阵（复用缓冲区）
-        cost_buf.clear();
-        cost_buf.resize(n_objects, Vec::with_capacity(n_detections));
-        for row in cost_buf.iter_mut() {
-            row.clear();
-            row.resize(n_detections, f64::MAX);
-        }
-        for (obj_idx, &obj_id) in obj_ids.iter().enumerate() {
-            let obj = &objects[&obj_id];
-            for (det_idx, det) in detections.iter().enumerate() {
-                let center = det.the_box.center();
-                let meas = Vector3::new(center.x as f64, center.y as f64, center.z as f64);
-                let dist = obj.kalman_filter.mahalanobis_distance(meas);
-                if dist < Self::MAHALANOBIS_THRESHOLD {
-                    // 尺寸一致性惩罚：归一化尺寸差越大，代价越高
-                    let size_penalty = if let Some(ref lb) = obj.last_box {
-                        let dl = (lb.length - det.the_box.length).abs();
-                        let dw = (lb.width  - det.the_box.width ).abs();
-                        let dh = (lb.height - det.the_box.height).abs();
-                        let al = (lb.length + det.the_box.length).max(1e-6);
-                        let aw = (lb.width  + det.the_box.width ).max(1e-6);
-                        let ah = (lb.height + det.the_box.height).max(1e-6);
-                        // 取三维中最大相对差，>1.0 表示尺寸翻倍
-                        (dl / al).max(dw / aw).max(dh / ah) * 2.0
-                    } else {
-                        0.0
-                    };
-                    cost_buf[obj_idx][det_idx] = dist + size_penalty as f64;
-                }
+    pub async fn run(&mut self) -> Result<(), TrackerError> {
+        let _t0 = Instant::now();
+        let current_detections = {
+            let mut tar3d_guard = self.tar3d.lock().unwrap();
+            match tar3d_guard.read() {
+                Some(data) => data.into_iter()
+                    .filter(|d| d.confidence >= self.min_confidence && d.class_name != "ground" && d.class_name != "wall")
+                    .collect::<Vec<_>>(),
+                None => Vec::new(),
             }
-        }
+        };
 
-        // 匈牙利最优指派（复用 sq_buf）
-        let assignment = hungarian(cost_buf, sq_buf);
-
-        // 提取匹配结果
-        let mut used_det = vec![false; n_detections];
-        let mut matches = Vec::new();
-
-        for (obj_idx, &det_idx) in assignment.iter().enumerate() {
-            if det_idx < n_detections && cost_buf[obj_idx][det_idx] < f64::MAX / 2.0 {
-                matches.push((obj_idx, det_idx));
-                used_det[det_idx] = true;
-            }
-        }
-
-        let unmatched: Vec<usize> = (0..n_detections)
-            .filter(|&i| !used_det[i])
-            .collect();
-
-        (matches, unmatched)
-    }
-
-    /// 提取包围盒内的点（AABB 快速过滤），最多取 `max_out` 个点
-    /// 超出的部分步长抽样，保证 O(N²) 投票可控
-    fn extract_points_in_box(points: &[[f32; 3]], box3d: &Box3D, max_out: usize) -> Vec<[f32; 3]> {
-        // 先用 AABB 粗略过滤
-        let verts = box3d.vertices();
-        let (mut x_min, mut x_max) = (verts[0].x, verts[0].x);
-        let (mut y_min, mut y_max) = (verts[0].y, verts[0].y);
-        let (mut z_min, mut z_max) = (verts[0].z, verts[0].z);
-        for v in &verts {
-            x_min = x_min.min(v.x);
-            x_max = x_max.max(v.x);
-            y_min = y_min.min(v.y);
-            y_max = y_max.max(v.y);
-            z_min = z_min.min(v.z);
-            z_max = z_max.max(v.z);
-        }
-
-        // 预计算逆矩阵（避免每点重复求逆）
-        let inv_pose = box3d.pose.try_inverse().unwrap_or_else(|| panic!("矩阵不可求逆: {}", box3d.pose));
-        let hl = box3d.length / 2.0;
-        let hw = box3d.width / 2.0;
-        let hh = box3d.height / 2.0;
-
-        let candidates: Vec<[f32; 3]> = points.iter()
-            .filter(|p| {
-                p[0] >= x_min && p[0] <= x_max
-                    && p[1] >= y_min && p[1] <= y_max
-                    && p[2] >= z_min && p[2] <= z_max
-                    && {
-                        let local = inv_pose.transform_point(&Point3::new(p[0], p[1], p[2]));
-                        local.x >= -hl && local.x <= hl
-                            && local.y >= -hw && local.y <= hw
-                            && local.z >= -hh && local.z <= hh
-                    }
-            })
-            .copied()
-            .collect();
-
-        if candidates.len() <= max_out {
-            candidates
-        } else {
-            // 均匀步长下采样到 max_out 个点
-            let step = candidates.len() / max_out;
-            candidates.into_iter().step_by(step).take(max_out).collect()
-        }
-    }
-
-    /// 更新所有活跃轨迹的点云历史
-    ///
-    /// 先计算所有目标 AABB 的并集，快速过滤非目标区域点云，
-    /// 再逐目标精确过滤，避免对每个目标扫描整个点云。
-    fn update_object_point_clouds(
-        objects: &mut HashMap<usize, TrackedObject>,
-        filter_points: &[[f32; 3]],
-        max_history: usize,
-        max_points_per_obj: usize,
-    ) {
-        // Step 1: 收集所有目标 box AABB 并集
-        let boxes: Vec<&Box3D> = objects.values()
-            .filter_map(|obj| obj.last_box.as_ref())
-            .collect();
-
-        if boxes.is_empty() {
-            return;
-        }
-
-        let (mut ax_min, mut ax_max) = (f32::MAX, f32::NEG_INFINITY);
-        let (mut ay_min, mut ay_max) = (f32::MAX, f32::NEG_INFINITY);
-        let (mut az_min, mut az_max) = (f32::MAX, f32::NEG_INFINITY);
-        for b in &boxes {
-            let v = b.vertices();
-            for p in &v {
-                ax_min = ax_min.min(p.x); ax_max = ax_max.max(p.x);
-                ay_min = ay_min.min(p.y); ay_max = ay_max.max(p.y);
-                az_min = az_min.min(p.z); az_max = az_max.max(p.z);
-            }
-        }
-
-        // Step 2: 一次扫描，得到落在联合 AABB 内的候选点
-        let candidates: Vec<[f32; 3]> = filter_points.iter()
-            .filter(|p| {
-                p[0] >= ax_min && p[0] <= ax_max
-                    && p[1] >= ay_min && p[1] <= ay_max
-                    && p[2] >= az_min && p[2] <= az_max
-            })
-            .copied()
-            .collect();
-
-        // Step 3: 逐目标精确过滤（仅对候选点操作）
-        for obj in objects.values_mut() {
-            if let Some(ref last_box) = obj.last_box {
-                let pts = if candidates.is_empty() {
-                    Self::extract_points_in_box(filter_points, last_box, max_points_per_obj)
-                } else {
-                    let verts = last_box.vertices();
-                    let (mut x_min, mut x_max) = (verts[0].x, verts[0].x);
-                    let (mut y_min, mut y_max) = (verts[0].y, verts[0].y);
-                    let (mut z_min, mut z_max) = (verts[0].z, verts[0].z);
-                    for v in &verts {
-                        x_min = x_min.min(v.x); x_max = x_max.max(v.x);
-                        y_min = y_min.min(v.y); y_max = y_max.max(v.y);
-                        z_min = z_min.min(v.z); z_max = z_max.max(v.z);
-                    }
-                    // 预计算逆矩阵（避免每点重复求逆）
-                    let inv_pose = last_box.pose.try_inverse().unwrap_or_else(|| panic!("矩阵不可求逆"));
-                    let hl = last_box.length / 2.0;
-                    let hw = last_box.width / 2.0;
-                    let hh = last_box.height / 2.0;
-                    let c: Vec<[f32; 3]> = candidates.iter()
-                        .filter(|p| {
-                            p[0] >= x_min && p[0] <= x_max
-                                && p[1] >= y_min && p[1] <= y_max
-                                && p[2] >= z_min && p[2] <= z_max
-                                && {
-                                    let local = inv_pose.transform_point(&Point3::new(p[0], p[1], p[2]));
-                                    local.x >= -hl && local.x <= hl
-                                        && local.y >= -hw && local.y <= hw
-                                        && local.z >= -hh && local.z <= hh
-                                }
-                        })
-                        .copied()
-                        .collect();
-                    if c.len() <= max_points_per_obj {
-                        c
-                    } else {
-                        let step = c.len() / max_points_per_obj;
-                        c.into_iter().step_by(step).take(max_points_per_obj).collect()
-                    }
-                };
-                if pts.is_empty() {
-                    continue;
-                }
-                if obj.point_cloud_history.len() >= max_history {
-                    obj.point_cloud_history.pop_front();
-                }
-                obj.point_cloud_history.push_back(pts);
-            }
-        }
-    }
-
-    /// 点云投票分析（信号产生，不修改分类）
-    ///
-    /// 对每个轨迹：当前帧点云 vs skip_frames 帧前点云
-    /// 分类状态机
-    ///
-    /// 变迁规则：
-    ///   Static ←→ Floating（滞后：上浮无门槛，沉淀需 30 帧）
-    ///   Floating ──> Moving（点云投票 + 速度 + 连续帧）
-    ///   Moving ←──→ Movable（同层往返，速度决定）
-    ///   一旦 confirmed_moving=true，永不回到 Static/Floating
-    fn apply_state_machine(
-        obj: &mut TrackedObject,
-        in_static_cluster: bool,
-        voting_active: bool,
-        speed: f32,
-        moving_speed_threshold: f32,
-        floating_to_static_frames: usize,
-        voting_consistency_frames: usize,
-        class_cooldown_frames: u32,
-    ) {
-        match obj.classification {
-            TargetClass::Static => {
-                if !in_static_cluster {
-                    // Static → Floating：带迟滞，连续 N 帧偏离静态簇后才转换
-                    obj.static_miss_count += 1;
-                    if obj.static_miss_count >= 10 {
-                        obj.classification = TargetClass::Floating;
-                        obj.floating_static_count = 0;
-                        obj.static_miss_count = 0;
-                    }
-                } else {
-                    obj.static_miss_count = 0;
-                }
-            }
-            TargetClass::Floating => {
-                if in_static_cluster {
-                    // 持续在静态簇中 → 累积计数
-                    obj.floating_static_count += 1;
-                    if obj.floating_static_count >= floating_to_static_frames as u32 {
-                        obj.classification = TargetClass::Static;
-                        obj.floating_static_count = 0;
-                    }
-                } else {
-                    obj.floating_static_count = 0;
-                }
-
-                // 点云投票 → Floating → Moving
-                if voting_active && speed >= 0.2 {
-                    obj.voting_streak += 1;
-                    if obj.voting_streak >= voting_consistency_frames as u32 {
-                        obj.classification = TargetClass::Moving;
-                        obj.confirmed_moving = true;
-                        obj.voting_streak = 0;
-                    }
-                } else {
-                    obj.voting_streak = 0;
-                }
-            }
-            TargetClass::Moving | TargetClass::Movable => {
-                obj.confirmed_moving = true;
-                // Moving ↔ Movable：带冷却的迟滞转换
-                let want_move = speed > moving_speed_threshold;
-                let is_move = obj.classification == TargetClass::Moving;
-
-                if want_move == is_move {
-                    // 已在目标状态，重置冷却
-                    obj.class_cooldown = 0;
-                } else {
-                    // 需要切换状态，累积冷却
-                    obj.class_cooldown += 1;
-                    if obj.class_cooldown >= class_cooldown_frames {
-                        obj.classification = if want_move { TargetClass::Moving } else { TargetClass::Movable };
-                        obj.class_cooldown = 0;
-                    }
-                }
-            }
-        }
-    }
-
-	    pub async fn run(&mut self) -> Result<(), TrackerError> {
-	        let _t0 = Instant::now();
-	        let current_detections = {
-	            let mut tar3d_guard = self.tar3d.lock().unwrap();
-	            match tar3d_guard.read() {
-	                Some(data) => data.into_iter()
-	                    .filter(|d| d.confidence >= self.min_confidence && d.class_name != "ground" && d.class_name != "wall")
-	                    .collect::<Vec<_>>(),
-	                None => Vec::new(),
-	            }
-	        };
-
-	        let now = SystemTime::now();
+        let now = SystemTime::now();
 
         // 步骤 1: 对所有轨迹做预测
         let _t_pred = Instant::now();
@@ -788,20 +197,19 @@ impl Tracker {
 
         // 步骤 2: 关联（复用代价矩阵缓冲区）
         let _t_assoc = Instant::now();
-        let (matches, unmatched_detections) = Self::associate(
+        let (matches, unmatched_detections) = associate(
             &self.tracked_objects,
             &current_detections,
             &mut self.cost_buf,
             &mut self.sq_buf,
         );
 
-        // 步骤 3: 更新匹配的轨迹
+        // 步骤 3: 更新匹配的轨迹（matches 内含实际 obj_id）
         let _t_update = Instant::now();
         let mut updated_ids: Vec<usize> = Vec::new();
-        for (obj_idx, det_idx) in &matches {
-            let obj_id: usize = self.tracked_objects.keys().nth(*obj_idx).copied().unwrap();
+        for (obj_id, det_idx) in &matches {
             let detection = &current_detections[*det_idx];
-            if let Some(obj) = self.tracked_objects.get_mut(&obj_id) {
+            if let Some(obj) = self.tracked_objects.get_mut(obj_id) {
                 // 1€ 质心低通滤波（静止强平滑，运动低延迟）
                 let mut centroid = detection.centroid;
                 if self.use_centroid_smoothing {
@@ -817,12 +225,13 @@ impl Tracker {
                 let dist = (centroid[0] as f64).powi(2)
                     + (centroid[1] as f64).powi(2)
                     + (centroid[2] as f64).powi(2);
-                obj.kalman_filter.adjust_noise_for_distance(dist.sqrt());
-                updated_ids.push(obj_id);
+                obj.kalman_filter.adjust_noise_for_confidence(dist.sqrt(), detection.confidence);
+                obj.update_score_on_match(self.track_score_match_bonus, self.track_score_max);
+                updated_ids.push(*obj_id);
             }
         }
 
-        // 步骤 4: 创建新轨迹
+        // 步骤 4: 创建新轨迹（仍无法匹配的检测）
         for det_idx in unmatched_detections {
             let detection = &current_detections[det_idx];
             let new_id = self.next_id;
@@ -846,26 +255,49 @@ impl Tracker {
             }
         }
 
-        // 步骤 5: 未匹配的轨迹标记丢失
-        let matched_obj_indices: std::collections::HashSet<usize> =
-            matches.iter().map(|(oi, _)| *oi).collect();
-        let all_ids: Vec<usize> = self.tracked_objects.keys().copied().collect();
-        for (idx, obj_id) in all_ids.iter().enumerate() {
-            if !matched_obj_indices.contains(&idx) {
-                if let Some(obj) = self.tracked_objects.get_mut(obj_id) {
-                    obj.on_missed();
-                }
+        // 步骤 5: 未匹配的轨迹标记丢失（用 matched_ids 直接查找，不依赖 HashMap 顺序）
+        let matched_ids: std::collections::HashSet<usize> =
+            matches.iter().map(|(id, _)| *id).collect();
+        for (id, obj) in &mut self.tracked_objects {
+            if !matched_ids.contains(id) {
+                obj.on_missed();
+                obj.update_score_on_miss(self.track_score_miss_penalty);
             }
         }
 
-        // 步骤 6: 移除永久丢失的轨迹
-        self.tracked_objects.retain(|id, obj| {
-            if obj.is_permanently_lost(self.max_disappeared) {
-                eprintln!("移除消失的目标 ID: {}, 丢失帧数：{}", id, obj.disappeared_count);
-                false
-            } else {
-                true
+        // 步骤 5a: 航迹分级生命周期管理（基于 Track Score）
+        {
+            let mut promote_ids = Vec::new();
+            let mut tentative_prune = Vec::new();
+            for (id, obj) in &self.tracked_objects {
+                match obj.status {
+                    TrackStatus::Tentative => {
+                        if obj.score >= self.track_score_confirm_threshold {
+                            promote_ids.push(*id);
+                        } else if obj.score <= self.track_score_delete_threshold
+                            && obj.disappeared_count >= self.tentative_max_missed as u32
+                        {
+                            tentative_prune.push(*id);
+                        }
+                    }
+                    TrackStatus::Confirmed => {}
+                }
             }
+            for id in &promote_ids {
+                if let Some(obj) = self.tracked_objects.get_mut(id) {
+                    log::info!("轨迹 {} 晋级: Tentative → Confirmed (score={:.1})", id, obj.score);
+                    obj.status = TrackStatus::Confirmed;
+                }
+            }
+            for id in &tentative_prune {
+                self.tracked_objects.remove(id);
+                log::info!("Tentative 轨迹 {} 因低分被移除 (score=0)", id);
+            }
+        }
+
+        // 步骤 6: 移除丢失超时的轨迹
+        self.tracked_objects.retain(|_id, obj| {
+            obj.disappeared_count < self.max_disappeared
         });
 
         // 步骤 7+8: 并行分析（速度聚类 + 点云投票）
@@ -874,7 +306,7 @@ impl Tracker {
         if self.use_point_cloud_voting {
             let filter_points = self.clouds_filtered.consumer().lock().unwrap().clone();
             if !filter_points.is_empty() {
-                Self::update_object_point_clouds(
+                update_object_point_clouds(
                     &mut self.tracked_objects,
                     &filter_points,
                     self.point_cloud_history_len,
@@ -919,7 +351,7 @@ impl Tracker {
             } else {
                 obj.speed()
             };
-            Self::apply_state_machine(
+            apply_state_machine(
                 obj, in_static, voting_on, spd,
                 self.moving_speed_threshold,
                 self.floating_to_static_frames,
@@ -955,17 +387,18 @@ impl Tracker {
             }
         }
 
-        // 步骤 11: 生成输出（过滤短命目标）
+        // 步骤 11: 生成输出（基于 Track Score 过滤低分轨迹）
         let _t_out = Instant::now();
         let mut output_targets = Vec::new();
         for tracked_id in &updated_ids {
             if let Some(obj) = self.tracked_objects.get(tracked_id) {
-                if obj.appearance_count < self.min_appearances {
+                if obj.score < self.track_score_output_threshold {
                     continue;
                 }
                 let pos = obj.kalman_filter.get_position();
                 let vel = obj.smoothed_velocity();
                 let spd = obj.speed();
+                let z_out = obj.z_ema as f32;
 
                 // 短暂丢失时优先用平滑箱体（更稳定）
                 let ref_box = if obj.disappeared_count > 0 {
@@ -979,7 +412,7 @@ impl Tracker {
                 let mut predicted_box = Box3D::from_position_and_angles(
                     pos.x as f32,
                     pos.y as f32,
-                    pos.z as f32,
+                    z_out,
                     0.0, 0.0, 0.0,
                     ref_box.length,
                     ref_box.width,
@@ -1058,6 +491,296 @@ impl Tracker {
 
         Ok(())
     }
+    /// 直接接收检测数据运行跟踪器（bench 用，绕过 swapl）。
+    ///
+    /// 与 `run()` 逻辑完全一致，但：
+    /// - `detections` 直接传入（从 swapl 读取改为参数传递）
+    /// - `filtered_points` 用于点云投票（非必须，可传空切片）
+    /// - 不自车运动补偿（bench 场景传感器静止）
+    /// - 返回 `Vec<Target>` 而非写入 swapl
+    pub fn run_with_detections(
+        &mut self,
+        detections: &[CldBud],
+        filtered_points: &[[f32; 3]],
+    ) -> Vec<Target> {
+        let _t0 = Instant::now();
+        let current_detections: Vec<CldBud> = detections
+            .iter()
+            .filter(|d| {
+                d.confidence >= self.min_confidence
+                    && d.class_name != "ground"
+                    && d.class_name != "wall"
+            })
+            .cloned()
+            .collect();
+
+        let now = SystemTime::now();
+
+        // 步骤 1: 预测
+        let _t_pred = Instant::now();
+        for obj in self.tracked_objects.values_mut() {
+            let dt = now
+                .duration_since(obj.last_seen)
+                .unwrap_or_default()
+                .as_secs_f64();
+            let dt = dt.clamp(0.001, 1.0);
+            if let Err(e) = obj.predict(dt) {
+                eprintln!("预测失败：{:?}", e);
+            }
+        }
+
+        // 步骤 2: 关联
+        let _t_assoc = Instant::now();
+        let (matches, unmatched_detections) = associate(
+            &self.tracked_objects,
+            &current_detections,
+            &mut self.cost_buf,
+            &mut self.sq_buf,
+        );
+
+        // 步骤 3: 修正匹配的轨迹（matches 内含实际 obj_id，修复 HashMap 顺序 Bug）
+        let _t_update = Instant::now();
+        let mut updated_ids: Vec<usize> = Vec::new();
+        for (obj_id, det_idx) in &matches {
+            let detection = &current_detections[*det_idx];
+            if let Some(obj) = self.tracked_objects.get_mut(obj_id) {
+                let mut centroid = detection.centroid;
+                if self.use_centroid_smoothing {
+                    obj.apply_centroid_lpf(
+                        &mut centroid,
+                        self.centroid_fc_min,
+                        self.centroid_beta,
+                    );
+                }
+                if let Err(e) = obj.correct(
+                    &detection.the_box,
+                    detection.class_name.clone(),
+                    detection.confidence,
+                    centroid,
+                ) {
+                    eprintln!("修正失败：{:?}", e);
+                    continue;
+                }
+                let dist = (centroid[0] as f64).powi(2)
+                    + (centroid[1] as f64).powi(2)
+                    + (centroid[2] as f64).powi(2);
+                obj.kalman_filter.adjust_noise_for_distance(dist.sqrt());
+                obj.update_score_on_match(self.track_score_match_bonus, self.track_score_max);
+                updated_ids.push(*obj_id);
+            }
+        }
+
+        // 步骤 4: 创建新轨迹
+        for det_idx in unmatched_detections {
+            let detection = &current_detections[det_idx];
+            let new_id = self.next_id;
+            self.next_id += 1;
+            match TrackedObject::new(
+                new_id,
+                &detection.the_box,
+                detection.class_name.clone(),
+                detection.confidence,
+                detection.centroid,
+                self.kf_avg_frames,
+                self.vel_smoothing_alpha,
+            ) {
+                Ok(obj) => {
+                    self.tracked_objects.insert(new_id, obj);
+                    updated_ids.push(new_id);
+                }
+                Err(e) => {
+                    eprintln!("创建新跟踪对象失败：{:?}", e);
+                }
+            }
+        }
+
+        // 步骤 5: 未匹配的轨迹标记丢失（用 matched_ids 直接查找 + 补齐 miss penalty）
+        let matched_ids: std::collections::HashSet<usize> =
+            matches.iter().map(|(id, _)| *id).collect();
+        for (id, obj) in &mut self.tracked_objects {
+            if !matched_ids.contains(id) {
+                obj.on_missed();
+                obj.update_score_on_miss(self.track_score_miss_penalty);
+            }
+        }
+
+        // 步骤 5a: 航迹分级
+        {
+            let mut promote_ids = Vec::new();
+            let mut tentative_prune = Vec::new();
+            for (id, obj) in &self.tracked_objects {
+                match obj.status {
+                    TrackStatus::Tentative => {
+                        if obj.consecutive_matches >= self.confirmation_frames as u32 {
+                            promote_ids.push(*id);
+                        } else if obj.disappeared_count >= self.tentative_max_missed as u32 {
+                            tentative_prune.push(*id);
+                        }
+                    }
+                    TrackStatus::Confirmed => {}
+                }
+            }
+            for id in &promote_ids {
+                if let Some(obj) = self.tracked_objects.get_mut(id) {
+                    obj.status = TrackStatus::Confirmed;
+                }
+            }
+            for id in &tentative_prune {
+                self.tracked_objects.remove(id);
+            }
+        }
+
+        // 步骤 6: 移除永久丢失的轨迹
+        self.tracked_objects
+            .retain(|_id, obj| !obj.is_permanently_lost(self.max_disappeared));
+
+        // 步骤 7+8: 点云投票
+        let _t_pc = Instant::now();
+        if self.use_point_cloud_voting && !filtered_points.is_empty() {
+            update_object_point_clouds(
+                &mut self.tracked_objects,
+                filtered_points,
+                self.point_cloud_history_len,
+                200,
+            );
+        }
+
+        // 步骤 7: 速度聚类
+        let _t_vel = Instant::now();
+        let vel_snapshot: Vec<(usize, [f32; 3])> = self
+            .tracked_objects
+            .iter()
+            .map(|(id, obj)| (*id, obj.smoothed_velocity()))
+            .collect();
+        let static_ids = analyze_velocity_clusters_from_snapshot(&vel_snapshot);
+
+        // 步骤 8: 点云投票
+        let _t_vote = Instant::now();
+        let voting_ids: Vec<usize> = if self.use_point_cloud_voting {
+            analyze_point_cloud_voting_direct(
+                &self.tracked_objects,
+                self.point_cloud_vote_threshold,
+                self.point_cloud_skip_frames,
+            )
+        } else {
+            Vec::new()
+        };
+
+        // 步骤 9: 状态机（bench 模式下无自车运动补偿）
+        let _t_sm = Instant::now();
+        for (_, obj) in &mut self.tracked_objects {
+            let in_static = static_ids.contains(&obj.id);
+            let voting_on = voting_ids.contains(&obj.id);
+            let spd = obj.speed();
+            apply_state_machine(
+                obj,
+                in_static,
+                voting_on,
+                spd,
+                self.moving_speed_threshold,
+                self.floating_to_static_frames,
+                self.voting_consistency_frames,
+                self.class_cooldown_frames,
+            );
+        }
+
+        // 步骤 9b: 人物强制 moving
+        for (_, obj) in &mut self.tracked_objects {
+            if obj.class_type == "person" && obj.classification != TargetClass::Moving {
+                obj.classification = TargetClass::Moving;
+                obj.confirmed_moving = true;
+                obj.voting_streak = 0;
+            }
+        }
+
+        // 步骤 9c: trick
+        trick::apply(&mut self.tracked_objects);
+
+        // 步骤 10: 箱体尺寸平滑
+        let _t_fix = Instant::now();
+        if self.use_box_smoothing {
+            for obj in self.tracked_objects.values_mut() {
+                if obj.disappeared_count == 0 {
+                    obj.apply_box_smoothing(self.box_smoothing_alpha);
+                }
+            }
+        } else if self.use_fix_size {
+            for obj in self.tracked_objects.values_mut() {
+                obj.apply_fix_size(self.fix_size_frames, self.fix_size_dim_thresh);
+            }
+        }
+
+        // 步骤 11: 生成输出（与 run() 一致的 score 阈值过滤）
+        let _t_out = Instant::now();
+        let mut output_targets = Vec::new();
+        for tracked_id in &updated_ids {
+            if let Some(obj) = self.tracked_objects.get(tracked_id) {
+                if obj.score < self.track_score_output_threshold {
+                    continue;
+                }
+                let pos = obj.kalman_filter.get_position();
+                let vel = obj.smoothed_velocity();
+                let spd = obj.speed();
+                let z_out = obj.z_ema as f32;
+
+                let ref_box = if obj.disappeared_count > 0 {
+                    obj.smoothed_box
+                        .as_ref()
+                        .or(obj.last_box.as_ref())
+                        .cloned()
+                        .unwrap_or_else(Box3D::empty_box)
+                } else {
+                    obj.last_box
+                        .as_ref()
+                        .cloned()
+                        .unwrap_or_else(Box3D::empty_box)
+                };
+                let mut predicted_box = Box3D::from_position_and_angles(
+                    pos.x as f32,
+                    pos.y as f32,
+                    z_out,
+                    0.0,
+                    0.0,
+                    0.0,
+                    ref_box.length,
+                    ref_box.width,
+                    ref_box.height,
+                );
+                predicted_box.pose = ref_box.pose;
+
+                let class_str = match obj.classification {
+                    TargetClass::Static => "static",
+                    TargetClass::Floating => "floating",
+                    TargetClass::Moving => "moving",
+                    TargetClass::Movable => "movable",
+                };
+
+                let mut target = Target {
+                    the_box: predicted_box,
+                    class_type: obj.class_type.clone(),
+                    id: *tracked_id,
+                    velocity: vel,
+                    speed: spd,
+                    is_dynamic: obj.classification == TargetClass::Moving,
+                    classification: class_str.to_string(),
+                };
+
+                if target.class_type == "ground" {
+                    target.classification = "static".to_string();
+                    target.is_dynamic = false;
+                }
+
+                if obj.classification == TargetClass::Static {
+                    target.velocity = [0.0, 0.0, 0.0];
+                    target.speed = 0.0;
+                }
+
+                output_targets.push(target);
+            }
+        }
+
+        output_targets
+    }
 
     pub fn get_tracking_count(&self) -> usize {
         self.tracked_objects.len()
@@ -1076,138 +799,4 @@ impl Default for Tracker {
     fn default() -> Self {
         Self::new()
     }
-}
-
-// ─── 分析辅助函数 ──────────────────────────────────────────────────────────
-
-/// 基于 (id, vel) 快照的 DBSCAN 速度聚类
-fn analyze_velocity_clusters_from_snapshot(snapshot: &[(usize, [f32; 3])]) -> Vec<usize> {
-    let n = snapshot.len();
-    if n < 2 {
-        return Vec::new();
-    }
-
-    let ids: Vec<usize> = snapshot.iter().map(|(id, _)| *id).collect();
-    let velocities: Vec<[f32; 3]> = snapshot.iter().map(|(_, v)| *v).collect();
-
-    let eps = 0.3f32;
-    let min_pts = 2;
-    let mut neighbor_counts = vec![0; n];
-
-    for i in 0..n {
-        for j in 0..n {
-            if i == j {
-                continue;
-            }
-            let d = ((velocities[i][0] - velocities[j][0]).powi(2)
-                + (velocities[i][1] - velocities[j][1]).powi(2)
-                + (velocities[i][2] - velocities[j][2]).powi(2))
-            .sqrt();
-            if d < eps {
-                neighbor_counts[i] += 1;
-            }
-        }
-    }
-
-    let mut clusters: Vec<Vec<usize>> = Vec::new();
-    let mut assigned = vec![false; n];
-
-    for i in 0..n {
-        if assigned[i] || neighbor_counts[i] < min_pts {
-            continue;
-        }
-        let mut cluster = Vec::new();
-        let mut stack = vec![i];
-        assigned[i] = true;
-        while let Some(idx) = stack.pop() {
-            cluster.push(idx);
-            for j in 0..n {
-                if assigned[j] {
-                    continue;
-                }
-                let d = ((velocities[idx][0] - velocities[j][0]).powi(2)
-                    + (velocities[idx][1] - velocities[j][1]).powi(2)
-                    + (velocities[idx][2] - velocities[j][2]).powi(2))
-                .sqrt();
-                if d < eps {
-                    assigned[j] = true;
-                    stack.push(j);
-                }
-            }
-        }
-        clusters.push(cluster);
-    }
-
-    if let Some(largest) = clusters.iter().max_by_key(|c| c.len()) {
-        largest.iter().map(|&pos| ids[pos]).collect()
-    } else {
-        Vec::new()
-    }
-}
-
-/// 点云投票分析（直接引用 tracked_objects，无拷贝）
-fn analyze_point_cloud_voting_direct(
-    objects: &HashMap<usize, TrackedObject>,
-    vote_threshold: f32,
-    skip_frames: usize,
-) -> Vec<usize> {
-    let mut pass_ids = Vec::new();
-    let ids: Vec<usize> = objects.keys().copied().collect();
-
-    for id in &ids {
-        let obj = match objects.get(id) {
-            Some(obj) => obj,
-            None => continue,
-        };
-
-        let hist_len = obj.point_cloud_history.len();
-        if hist_len <= skip_frames {
-            continue;
-        }
-
-        let old_pts = &obj.point_cloud_history[hist_len - 1 - skip_frames];
-        let new_pts = &obj.point_cloud_history[hist_len - 1];
-
-        if old_pts.is_empty() || new_pts.is_empty() {
-            continue;
-        }
-
-        let speed = obj.speed();
-        if speed < 0.2 {
-            continue;
-        }
-
-        let vel = obj.kalman_filter.get_velocity();
-
-        let mut votes = 0usize;
-        let total = new_pts.len().min(old_pts.len());
-        if total == 0 {
-            continue;
-        }
-
-        for i in 0..total {
-            let np = new_pts[i];
-            let best_old = old_pts.iter().min_by(|a, b| {
-                let da = (np[0] - a[0]).powi(2) + (np[1] - a[1]).powi(2) + (np[2] - a[2]).powi(2);
-                let db = (np[0] - b[0]).powi(2) + (np[1] - b[1]).powi(2) + (np[2] - b[2]).powi(2);
-                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
-            });
-            if let Some(op) = best_old {
-                let dx = np[0] - op[0];
-                let dy = np[1] - op[1];
-                let dz = np[2] - op[2];
-                let dot = dx * vel.x as f32 + dy * vel.y as f32 + dz * vel.z as f32;
-                if dot > 0.0 {
-                    votes += 1;
-                }
-            }
-        }
-
-        let ratio = votes as f32 / total as f32;
-        if ratio >= vote_threshold {
-            pass_ids.push(*id);
-        }
-    }
-
-    pass_ids
 }

@@ -3,3 +3,8 @@ pub mod trick;
 pub mod output;
 pub mod kalman;
 pub mod hungarian;
+pub mod features;
+pub mod object;
+pub mod association;
+pub mod lifecycle;
+pub mod analysis;

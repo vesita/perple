@@ -15,6 +15,7 @@ pub struct Config {
     pub person_class_label: String,
     pub points_capacity: usize,
     pub max_range: f32,
+    pub min_range: f32,
 
     pub default_input_width: usize,
     pub default_input_height: usize,
@@ -68,6 +69,8 @@ pub struct ClusterConfig {
     pub max_range: f32,
     pub ceiling_filter: bool,
     pub ceiling_height: f32,
+    pub denoise_radius: f32,
+    pub denoise_min_pts: usize,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -102,6 +105,16 @@ pub struct TrackerConfig {
     pub box_smoothing_alpha: f32,
     pub vel_smoothing_alpha: f32,
     pub class_cooldown_frames: u32,
+    // ─── 航迹分级管理 ────────────────────────────────────────────────────
+    pub confirmation_frames: usize,
+    pub tentative_max_missed: usize,
+    // ─── 轨迹评分 ──────────────────────────────────────────────────────────
+    pub track_score_match_bonus: f64,
+    pub track_score_miss_penalty: f64,
+    pub track_score_confirm_threshold: f64,
+    pub track_score_delete_threshold: f64,
+    pub track_score_output_threshold: f64,
+    pub track_score_max: f64,
 }
 
 
@@ -167,6 +180,7 @@ impl Config {
         update_field!(person_class_label);
         update_field!(points_capacity);
         update_field!(max_range);
+        update_field!(min_range);
         update_field!(default_input_width);
         update_field!(default_input_height);
         update_field!(default_confidence_threshold);
@@ -202,6 +216,8 @@ impl Config {
         update_cluster_field!(max_range);
         update_cluster_field!(ceiling_filter);
         update_cluster_field!(ceiling_height);
+        update_cluster_field!(denoise_radius);
+        update_cluster_field!(denoise_min_pts);
 
         update_nested_field!(camera, intrinsic);
         update_nested_field!(camera, extrinsic);
@@ -241,6 +257,14 @@ impl Config {
             update_tracker!(box_smoothing_alpha);
             update_tracker!(vel_smoothing_alpha);
             update_tracker!(class_cooldown_frames);
+            update_tracker!(confirmation_frames);
+            update_tracker!(tentative_max_missed);
+            update_tracker!(track_score_match_bonus);
+            update_tracker!(track_score_miss_penalty);
+            update_tracker!(track_score_confirm_threshold);
+            update_tracker!(track_score_delete_threshold);
+            update_tracker!(track_score_output_threshold);
+            update_tracker!(track_score_max);
         }
 
         Ok(())
@@ -264,6 +288,7 @@ struct PartialConfig {
     pub person_class_label: Option<String>,
     pub points_capacity: Option<usize>,
     pub max_range: Option<f32>,
+    pub min_range: Option<f32>,
 
     pub default_input_width: Option<usize>,
     pub default_input_height: Option<usize>,
@@ -324,6 +349,14 @@ struct PartialTrackerConfig {
     pub box_smoothing_alpha: Option<f32>,
     pub vel_smoothing_alpha: Option<f32>,
     pub class_cooldown_frames: Option<u32>,
+    pub confirmation_frames: Option<usize>,
+    pub tentative_max_missed: Option<usize>,
+    pub track_score_match_bonus: Option<f64>,
+    pub track_score_miss_penalty: Option<f64>,
+    pub track_score_confirm_threshold: Option<f64>,
+    pub track_score_delete_threshold: Option<f64>,
+    pub track_score_output_threshold: Option<f64>,
+    pub track_score_max: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -344,4 +377,6 @@ struct PartialClusterConfig {
     pub max_range: Option<f32>,
     pub ceiling_filter: Option<bool>,
     pub ceiling_height: Option<f32>,
+    pub denoise_radius: Option<f32>,
+    pub denoise_min_pts: Option<usize>,
 }

@@ -68,8 +68,17 @@ pub fn create_strategy() -> Box<dyn ClusteringStrategy> {
             Box::new(DbscanStrategy::new_light())
         }
         "dbscan_qt" | "dbscan" | "dbscan_adaptive" => {
-            log::info!("聚类策略: dbscan_qt (eps_slope={})", cfg.cluster.eps_slope);
-            Box::new(DbscanStrategy::new())
+            let min_pts = cfg.cluster.min_points_per_cluster.unwrap_or(3) as usize;
+            log::info!("聚类策略: dbscan_qt (eps_slope={}, min_pts={})", cfg.cluster.eps_slope, min_pts);
+            // 框架层 RadiusOutlierRemoval 已做离群点剔除, 此处 min_points 控制 DBSCAN 核心点密度门槛
+            Box::new(DbscanStrategy::with_params(
+                cfg.cluster.merge_patience,
+                cfg.cluster.eps_slope,
+                min_pts,
+                cfg.cluster.max_points_per_node.unwrap_or(20),
+                cfg.cluster.max_tree_depth.unwrap_or(10),
+                cfg.cluster.voxel_size,
+            ))
         }
         "dbscan_grid" => {
             log::info!("聚类策略: dbscan_grid");
