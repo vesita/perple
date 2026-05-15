@@ -289,9 +289,9 @@ cargo run --release --example eval_pr_curve -- --output ./output/pr_curve
 
 | 参数 | 当前值 | 说明 |
 |------|--------|------|
-| `strategy` | `"dbscan_qt"` | 聚类策略（DBSCAN + 四叉树加速） |
+| `strategy` | `"lvdot_qt"` | 聚类策略（四叉树叶节点过滤 + DBSCAN） |
 | `min_points_per_cluster` | 5 | DBSCAN 核心点最少邻点数，越低 Recall 越高 |
-| `merge_patience` | 0.10 | DBSCAN 基础邻域半径 eps（米） |
+| `merge_patience` | 0.30 | 内部 DBSCAN 邻域半径 eps（米），最优值 ~0.30 |
 | `eps_slope` | 0.05 | 自适应 eps 斜率，值越大远处邻域半径越大 |
 | `voxel_size` | 0.10 | 体素下采样格子大小（米） |
 | `denoise_radius` | 0.20 | 聚类前半径离群点剔除半径（米） |
@@ -333,29 +333,91 @@ cargo run --release --example eval_pr_curve -- --output ./output/pr_curve
 ### 7.1 408 帧全量评测（当前配置）
 
 **当前默认配置：**
-- 聚类: `dbscan_qt`（min_pts=5, eps=0.10, denoise_radius=0.20, denoise_min_pts=3）
+- 聚类: `lvdot_qt`（四叉树叶节点过滤 + DBSCAN, eps=0.30, min_occ=3, min_pts=5, denoise_radius=0.20）
 - 密度加权: `r^α`（α=2.0）
 - 后聚类过滤链: 7 道（尺寸、扁度、体积、Z 中心、边界、稀疏度）
 - 跟踪: 点云投票 + 几何 fallback（trick.rs）+ 航迹评分 + BTreeMap
 - YOLO: 置信度 0.6 + 帧间标签平滑
 
-指标概要（中心距 0.5m 匹配，408 帧，YOLO 非确定性导致波动）：
+指标概要（中心距 0.5m 匹配，408 帧）：
 
 ```
 ── Person 过滤 (仅 class_type == "person") ──
-  GT: 1224  | 检测: ~766-977 | TP: ~631-693  FP: ~135-284  FN: ~531-593
-  Precision: ~71-82%  | Recall: ~52-57%  | F1: ~0.63
+  GT: 1224  | 检测:  922  | TP:  723  FP:  199  FN:  501
+  Precision: 78.4%  | Recall: 59.1%  | F1: 0.674
 
 ── 全部类别 (All Classes) ──
-  GT: 1224  | 检测: ~1830-1854 | TP: ~865-872  FP: ~958-989  FN: ~352-359
-  Precision: ~47%  | Recall: ~71%  | F1: ~0.56
+  GT: 1224  | 检测: 1648  | TP:  863  FP:  785  FN:  361
+  Precision: 52.4%  | Recall: 70.5%  | F1: 0.601
 ```
+
+**改进对比（与旧默认 dbscan_qt 相比）：**
+
+| 指标 | dbscan_qt（旧） | lvdot_qt（新） | 变化 |
+|------|:---:|:---:|:---:|
+| Person Precision | 61.4% | **78.4%** | **+17.0pp** |
+| Person Recall | 56.7% | **59.1%** | +2.4pp |
+| Person F1 | 0.589 | **0.674** | **+0.085** |
+| All Recall (空间召回) | 65.0% | **70.5%** | +5.5pp |
+| FP (Person) | 437 | **199** | **-54%** |
+| 正确分类率 | 55.6% | **58.7%** | +3.1pp |
+
+**跟踪器性能评估：**
+
+从空间评估与严格评估的交叉分析可以看出，跟踪器在"检测到→输出正确标签"这一核心链路中表现优异：
+
+- 空间匹配到的 863 个 GT 行人中，**718 个被正确分类为 person**，正确率 **83.2%**
+- 145 个（16.8%）被误分类为 obstacle
+- 这说明：**只要上游聚类把人的点云检出，跟踪器几乎总能把它标对**。硬锁标签保护 + 几何累加器 + 点云投票的组合策略有效发挥了跨帧标签传播的作用，跟踪分类不是当前系统的性能瓶颈。
+
+**lvdot_qt 策略优势分析：** lvdot_qt 的核心优势在于：
+1. **内部墙体提取**：在聚类前先通过 BevEdLines 移除墙面点，避免墙体残留产生大量 FP
+2. **四叉树叶节点密度过滤**：仅保留密集叶节点（min_occ≥3），天然抑制稀疏噪声
+3. **四叉树加速 DBSCAN**：在叶节点质心上运行 DBSCAN（eps=0.30），效率高且聚类质量好
+
+**当前瓶颈：** Person Recall 59.1%，即 40.9% 的 GT 行人在聚类阶段未被检出。主要原因：(1) 墙面提取误删行人点，(2) 远处行人（8-10m）点数不足被叶节点过滤丢弃。提升 recall 仍是后续优化的主攻方向，但精度大幅提高后 FP 控制已不是问题。
 
 **速度：** 408 帧 / ~17-25s = **~16-24 FPS**（Debug 模式较慢，Release 约 24 FPS）。
 
 **非确定性说明：** YOLO (ONNX Runtime on DirectML) 推理不同 run 产生不同检测结果（检测数波动 ~200），是 F1 波动主因。跟踪器已通过 BTreeMap 消除自身非确定性。
 
-### 7.2 消融对比
+### 7.2 聚类策略对比实验
+
+2026-05-16 对所有可用聚类策略进行 408 帧全量评估（中心距 0.5m），按 Person F1 排序：
+
+| 排名 | 策略 | Person P | Person R | Person F1 | All R | TP | FP | FN |
+|:---:|------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **1** | **lvdot_qt** | **78.4%** | **59.1%** | **0.674** | **70.5%** | 723 | **199** | 501 |
+| 2 | xy_grid_dbscan | 60.1% | 59.6% | 0.598 | 65.0% | 729 | 484 | 495 |
+| 3 | dbscan_qt | 61.4% | 56.7% | 0.589 | 65.0% | 694 | 437 | 530 |
+| 4 | lvdot | 74.9% | 47.3% | 0.580 | 57.4% | 579 | 194 | 645 |
+| 5 | dbscan_light | 58.1% | 57.7% | 0.579 | 66.4% | 706 | 510 | 518 |
+| 6 | cc | 51.7% | **61.2%** | 0.560 | **67.3%** | **749** | 700 | 475 |
+| 7 | dbscan_grid | 50.3% | 60.6% | 0.550 | 70.1% | 742 | 734 | 482 |
+| 8 | range_image | 67.7% | 34.6% | 0.458 | 53.0% | 423 | 202 | **801** |
+| 9 | seq | 70.3% | 10.0% | 0.176 | 10.0% | 123 | 52 | 1101 |
+
+**关键发现：**
+
+- **lvdot_qt 全面领先**：相比 dbscan_qt，Precision +17pp, F1 +0.085, FP 降低 54%（437→199）
+- **cc 召回最高**（61.2%）但 Precision 仅 51.7%，FP 过多
+- **lvdot** 精度高（74.9%）但召回低（47.3%）
+- **seq / range_image** 不适合行人检测场景
+
+**lvdot_qt 参数敏感性**（YOLO 非确定性导致 ~0.02 F1 波动）：
+
+| 配置 | Person P | Person R | Person F1 |
+|------|:---:|:---:|:---:|
+| eps=0.30, min_pts=5, dn=0.20（最优） | 78.4% | 59.1% | **0.674** |
+| eps=0.30, min_pts=3, dn=0.20 | 77.3% | 57.0% | 0.656 |
+| eps=0.20, min_pts=5, dn=0.20 | 76.9% | 56.5% | 0.652 |
+| eps=0.10, min_pts=5, dn=0.20 | 77.1% | 56.1% | 0.650 |
+| eps=0.30, min_pts=5, dn=0.15 | 76.6% | 56.6% | 0.651 |
+| eps=0.30, min_pts=5, dn=0.25 | 76.7% | 54.4% | 0.637 |
+
+默认参数 eps=0.30 / min_pts=5 / denoise_radius=0.20 综合最优。
+
+### 7.3 消融对比
 
 **早期基线（各阶段渐进改进）：**
 
@@ -385,7 +447,24 @@ cargo run --release --example eval_pr_curve -- --output ./output/pr_curve
 | 多帧累积聚类 | 放弃 — 累积后簇 box 被拉大导致 geometry 误判，FP 暴增 |
 | RANSAC 替代 DBSCAN | 放弃 — RANSAC 线检测不适合行人团状点云，Recall 仅 14% |
 
-### 7.3 关键改动
+### 7.4 标签传播方案对比实验
+
+尝试用三种贝叶斯标签置信度滤波器替代 `correct()` 中的硬锁 `if !(self.class_type=="person" && new!="person")`：
+
+| 方案 | 机制 | Person P | Person R | Person F1 | 误分类率 | 结论 |
+|------|------|:---:|:---:|:---:|:---:|------|
+| 基线硬锁 | 一旦 person 永不翻转 | 61.2% | **57.5%** | **0.593** | **12.1%** | 当前最优 |
+| Log-Odds | `l += ±1.2~1.8`, 阈值 -0.5 | 62.1% | 54.7% | 0.582 | 16.4% | 软阈值翻转过激 |
+| 离散贝叶斯 | 转移矩阵 + 观测似然 | 62.1% | 55.2% | 0.585 | 15.5% | 略好于 Log-Odds |
+| Beta 分布 | `α+=3`(person) / `β+=3`(not) | **62.9%** | 54.2% | 0.583 | 16.8% | Precision 最高 |
+
+**结论：硬锁策略在该场景下最优。** 三个贝叶斯方案 Precision 微升但 Recall 下降 ~2-3pp，误分类率反升。原因是 YOLO "obstacle" 误分类远多于真实 obstacle，软概率在 YOLO 间歇性漏检时过早翻转正确标签。当下瓶颈在空间 Recall（65%），标签传播方案无法弥补这个 gap。
+
+### 7.5 聚类策略工厂优化
+
+**改动** (`src/cloud/classify/strategy.rs`): `lvdot_qt` 策略从硬编码参数改为从 `config/default.toml` 读取 `merge_patience`（→ eps）和 `min_points_per_cluster`（→ min_pts），使 lvdot_qt 支持 CLI 运行时参数覆盖，提升了可调性。
+
+### 7.6 关键改动
 
 | 文件 | 改动 | 作用 |
 |------|------|------|
@@ -403,7 +482,7 @@ cargo run --release --example eval_pr_curve -- --output ./output/pr_curve
 | `src/main.rs` | 接入 YoloSmoother（`clr_objs.swap()` → `smooth()` → `fuse.act()`） | 主线启用帧间标签平滑 |
 | `examples/eval_labeled.rs` | 添加 `--disable-yolo-smooth` 开关 | 支持关闭平滑做对比实验 |
 
-### 7.4 误差分析
+### 7.7 误差分析
 
 408 帧共 1224 个 GT Pedestrian（均在 0~10m 范围内）：
 

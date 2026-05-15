@@ -60,8 +60,10 @@ pub fn create_strategy() -> Box<dyn ClusteringStrategy> {
             Box::new(LvdotClusterStrategy::new())
         }
         "lvdot_qt" => {
-            log::info!("聚类策略: lvdot_qt (叶节点占用>={})", 3);
-            Box::new(LvdotQt::new())
+            let min_pts = cfg.cluster.min_points_per_cluster.unwrap_or(3) as usize;
+            let eps = cfg.cluster.merge_patience.max(0.05);
+            log::info!("聚类策略: lvdot_qt (eps={:.2}, min_pts={})", eps, min_pts);
+            Box::new(LvdotQt::new().with_params(3, eps, min_pts))
         }
         "dbscan_light" => {
             log::info!("聚类策略: dbscan_light (无内部下采样)");

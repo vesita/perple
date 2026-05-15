@@ -34,9 +34,10 @@ wall_min_z_span = 1.0        # 墙面最小 Z 跨度
 # 点云聚类参数
 [cluster]
 # 聚类策略: "dbscan"（固定eps）, "dbscan_adaptive"（eps随距离线性增长）, "range_image"
-strategy = "dbscan_qt"
+strategy = "lvdot_qt"
 # 基础邻域半径 eps（米），自适应模式下为 eps 截距；eps(p) = merge_patience + eps_slope * range(p)
-merge_patience = 0.10
+# lvdot_qt 使用 merge_patience 作为内部 DBSCAN eps（最优值 ~0.30）
+merge_patience = 0.30
 # 体素下采样格子大小（米），0 表示不下采样
 voxel_size = 0.10
 # DBSCAN 核心点最少邻居数，低于此数的点被视为噪声
