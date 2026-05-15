@@ -117,7 +117,9 @@ Key insight: image-based wall detection (BevEdLines) outperforms all geometric m
 
 - **Density weighting `cluster.rs`**: Formula changed from `1/r^α` → `r^α` (sign inversion bug). Original code amplified centroid bias toward sensor instead of compensating. Fix improved F1 by +8.3%.
 - **Tracker container**: `HashMap` → `BTreeMap` for `tracked_objects` to eliminate iteration-order non-determinism.
-- **YOLO label smoothing**: `yolo_smooth.rs` — frame-to-frame momentum filter on YOLO "person" labels, reducing label flicker.
+- **YOLO label smoothing**: `yolo_smooth.rs` + integrated in `main.rs` and `eval_labeled.rs` — frame-to-frame momentum filter on YOLO "person" labels, reducing label flicker. No significant impact on P/R/F1 metrics (verified by 3×3 runs).
+- **Config override system `config.rs`**: Added `update_from_toml()` with `PartialConfig` structs + `init_config()` with `OnceLock`, replacing compile-time-only config. **Bug**: `Option<T>` fields (`min_points_per_cluster`, `max_points_per_node`, `max_tree_depth`) need `Some()` wrapping — the `update_cluster_field!` macro's `value.clone()` produces `T`, not `Option<T>`.
+- **Multi-frame accumulation** (tested, abandoned): Merging N frames of non-ground points before clustering increased Person Recall +5.8pp but caused FP explosion (135→538) as accumulated clusters produced oversized boxes that passed geometry fallback.
 
 - `src/cloud/wall.rs` — WallPickStrategy trait + XYGrid shared infra + wall module root: only `bev_edlines` (active) and `bev_hough` (reserved) remain
 - `src/cloud/wall/bev_edlines.rs` — BEV image + OpenCV EDLines 边缘检测墙体提取

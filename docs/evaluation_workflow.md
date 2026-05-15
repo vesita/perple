@@ -77,6 +77,7 @@ cargo run --release --example eval_labeled -- \
 | `--frames` | 全部 | 评测帧数 |
 | `--skip` | 0 | 跳过的初始帧数 |
 | `--output` | 自动 | 输出目录 |
+| `--disable-yolo-smooth` | false | 关闭 YOLO 帧间标签平滑（测试平滑影响时用） |
 
 **评估维度：** 输出两个层级的指标：
 
@@ -262,15 +263,22 @@ cargo run --release --example eval_pr_curve -- --output ./output/pr_curve
 
 | 参数 | 当前值 | 说明 |
 |------|--------|------|
-| `min_points_per_cluster` | 5 | 聚类最小点数（降噪），越低 Recall 越高 |
-| `denoise_radius` | 0.20 | 降噪半径 |
+| `strategy` | `"dbscan_qt"` | 聚类策略（DBSCAN + 四叉树加速） |
+| `min_points_per_cluster` | 5 | DBSCAN 核心点最少邻点数，越低 Recall 越高 |
+| `merge_patience` | 0.10 | DBSCAN 基础邻域半径 eps（米） |
+| `eps_slope` | 0.05 | 自适应 eps 斜率，值越大远处邻域半径越大 |
+| `voxel_size` | 0.10 | 体素下采样格子大小（米） |
+| `denoise_radius` | 0.20 | 聚类前半径离群点剔除半径（米） |
 | `denoise_min_pts` | 3 | 降噪最小邻点数 |
+| `density_weight_alpha` | 2.0 | 密度感知质心加权指数：`r^α` 补偿 LiDAR 近密远疏导致的质心偏移 |
 | `default_confidence_threshold` | 0.6 | YOLO 置信度阈值，越低检测越多 |
 | `default_nms_threshold` | 0.7 | YOLO NMS 阈值 |
 | `max_range` | 10.0 | 有效检测距离上限（米），超出此距离的点在聚类前被过滤 |
-| `downsample_method` | "voxel" | 下采样方法: "voxel"（均匀体素）或 "gaussian"（距离概率采样） |
-| `density_weight_alpha` | 2.0 | 密度感知质心加权指数：`r^α` 补偿 LiDAR 近密远疏导致的质心偏移 |
+| `downsample_method` | `"voxel"` | 下采样方法: `"voxel"`（均匀体素）或 `"gaussian"`（距离概率采样） |
 | `point_vel_threshold` | 0.08 | 点云投票位移阈值(m)，排除抖动噪声 |
+| `moving_speed_threshold` | 0.35 | 运动速度阈值(m/s)，高于此值判定为 Moving |
+| `use_point_cloud_voting` | true | 点云投票开关，通过对比历史点云位移判断目标是否真正在运动 |
+| `kf_avg_frames` | 5 | Kalman 滤波器平滑窗口帧数 |
 
 **后聚类过滤链** (`clusters_to_cldbuds`):
 
@@ -296,64 +304,85 @@ cargo run --release --example eval_pr_curve -- --output ./output/pr_curve
 
 ## 7. 最终评估结果
 
-### 7.1 408 帧全量评测（当前最优）
+### 7.1 408 帧全量评测（当前配置）
 
-**配置：** 密度加权 `r^α`（α=2.0，修复后）+ 几何启发式 fallback + 动态点云投票 + 后聚类过滤链 + YOLO 标签平滑 + BTreeMap 确定性迭代。
+**当前默认配置：**
+- 聚类: `dbscan_qt`（min_pts=5, eps=0.10, denoise_radius=0.20, denoise_min_pts=3）
+- 密度加权: `r^α`（α=2.0）
+- 后聚类过滤链: 7 道（尺寸、扁度、体积、Z 中心、边界、稀疏度）
+- 跟踪: 点云投票 + 几何 fallback（trick.rs）+ 航迹评分 + BTreeMap
+- YOLO: 置信度 0.6 + 帧间标签平滑
 
-有效检测范围 10m，聚类后经 7 道过滤链筛选。
-
-指标概要（多次运行均值，YOLO 非确定性导致波动）：
+指标概要（中心距 0.5m 匹配，408 帧，YOLO 非确定性导致波动）：
 
 ```
-── 严格评估 (仅 class_type == "person") ──
-  GT: 1224  | 检测: ~1200 | TP: ~660  FP: ~540  FN: ~564
-  Precision: ~55-66%  | Recall: ~53%  | F1: ~0.55-0.59
+── Person 过滤 (仅 class_type == "person") ──
+  GT: 1224  | 检测: ~766-977 | TP: ~631-693  FP: ~135-284  FN: ~531-593
+  Precision: ~71-82%  | Recall: ~52-57%  | F1: ~0.63
 
-── 空间评估 (全部检测参与匹配) ──
-  GT: 1224  | 检测: ~2240 | TP: ~848  FP: ~1392  FN: ~376
-  Precision: ~38%  | Recall: ~69.3%  | F1: ~0.49
-
-── 行人类别识别分析 ──
-  空间匹配正确: ~848/1224 (~69.3%)
-  ├─ 正确分类为 person: ~650 (~53%)
-  └─ 误分类为 obstacle/其他: ~198 (~16%)
+── 全部类别 (All Classes) ──
+  GT: 1224  | 检测: ~1830-1854 | TP: ~865-872  FP: ~958-989  FN: ~352-359
+  Precision: ~47%  | Recall: ~71%  | F1: ~0.56
 ```
 
-**速度：** 408 帧 / 16.8s = **24.3 FPS**，超过 20Hz 要求。
+**速度：** 408 帧 / ~17-25s = **~16-24 FPS**（Debug 模式较慢，Release 约 24 FPS）。
 
 **非确定性说明：** YOLO (ONNX Runtime on DirectML) 推理不同 run 产生不同检测结果（检测数波动 ~200），是 F1 波动主因。跟踪器已通过 BTreeMap 消除自身非确定性。
 
 ### 7.2 消融对比
 
-| 配置 | Strict Precision | Strict Recall | F1 | Spatial FP |
-|------|:---:|:---:|:---:|:---:|
-| 原始代码基线 (100帧) | 76.7% | 26.3% | 0.392 | - |
-| + 几何 fallback + 点云投票 | 44.0% | 52.0% | 0.477 | - |
-| + Static 持久化 fallback (app≥10) | 37.8% | **61.4%** | 0.468 | 1826 |
-| + 后聚类过滤链 (Z中心+边界+10m) | **79.0%** | 49.1% | **0.606** | **1061** |
-| + 密度加权公式修正 `r^α` | 66.1% | 53.9% | 0.594 | 1391 |
-| + YOLO 平滑 + BTreeMap | 60.0% | 53.3% | 0.563 | 1392 |
+**早期基线（各阶段渐进改进）：**
+
+| 配置 | Person Precision | Person Recall | Person F1 |
+|------|:---:|:---:|:---:|
+| 原始代码基线 (100帧) | 76.7% | 26.3% | 0.392 |
+| + 几何 fallback + 点云投票 | 44.0% | 52.0% | 0.477 |
+| + Static 持久化 fallback (app≥10) | 37.8% | **61.4%** | 0.468 |
+| + 后聚类过滤链 (Z中心+边界+10m) | **79.0%** | 49.1% | **0.606** |
+| + 密度加权公式修正 `r^α` | 66.1% | 53.9% | 0.594 |
+| + YOLO 平滑 + BTreeMap | 60.0% | 53.3% | 0.563 |
+
+**近期参数消融（均基于修复后代码，中心距 0.5m，408 帧）：**
+
+| 实验 | 配置 | All Recall | Person Recall | Person Precision | Person F1 |
+|------|------|:---:|:---:|:---:|:---:|
+| Exp2 | min_pts=5, denoise=0.20, conf=0.5 | 70.7% | 51.6% | **82.4%** | **0.634** |
+| Exp3 | Exp2 + denoise=0.15 | 71.0% | 53.3% | 76.2% | 0.635 |
+| Exp4 | min_pts=3, denoise=0.15, conf=0.5 | 71.2% | **56.6%** | 70.9% | 0.630 |
+
+近期实验主要方向及结论：
+
+| 方向 | 结论 |
+|------|------|
+| `min_points_per_cluster` 3→5 | 5 精度更高(82%→71%), 3 召回更高(52%→57%), F1 基本持平 |
+| denoise_radius 0.15→0.20 | 0.20 显著降低 FP（-149），但召回略降（-2pp） |
+| 多帧累积聚类 | 放弃 — 累积后簇 box 被拉大导致 geometry 误判，FP 暴增 |
+| RANSAC 替代 DBSCAN | 放弃 — RANSAC 线检测不适合行人团状点云，Recall 仅 14% |
 
 ### 7.3 关键改动
 
 | 文件 | 改动 | 作用 |
 |------|------|------|
 | `src/tracker/trick.rs` | 几何 fallback：Floating 速度+几何、Static 纯几何 | 盲区行人检出 |
-| `src/tracker/object.rs` | `geo_labeled` 字段 + correct() 覆盖 | 几何标签可被 YOLO 修正 |
-| `src/tracker/analysis.rs` | 动态点云投票（全历史累积） | 提高运动检测稳定性 |
+| `src/tracker/object.rs` | `geo_labeled` 字段 + correct() 覆盖逻辑 | 几何标签可被 YOLO 修正 |
+| `src/tracker/analysis.rs` | 动态点云投票（全历史累积 + 方向过滤 + 位移阈值） | 提高运动检测稳定性 |
 | `src/tracker/association.rs` | 排序 obj_ids | 消除关联顺序波动 |
 | `src/tracker/core.rs` | `HashMap` → `BTreeMap` | 消除 tracker 内部迭代非确定性 |
 | `src/cloud/classify/cluster.rs` | 密度加权公式 `1/r^α` → `r^α` | 修复质心偏向传感器 Bug，F1 +8.3% |
 | `src/yolo_smooth.rs` | YOLO 帧间标签动量平滑 | 减少 YOLO 间歇性漏检导致的标签闪烁 |
 | `src/cloud/classify/cluster.rs` | 中心 Z 过滤 + 边界过滤 + 点云投票方向一致性 | 大幅降低 FP |
-| `config/default.toml` | max_range 12→10m, downsample_method 配置化 | 收紧检测范围，降低远端噪声 |
+| `config/default.toml` | max_range 12→10m, 相机标定参数更新 | 收紧检测范围，降低远端噪声 |
+| `src/config.rs` | `update_from_toml()` + `init_config()` + `OnceLock` | 支持 CLI 运行时参数覆盖 |
+| `examples/eval_ablation.rs` | 消融实验工具，支持任意配置参数运行时覆盖 | 自动化调参对比 |
+| `src/main.rs` | 接入 YoloSmoother（`clr_objs.swap()` → `smooth()` → `fuse.act()`） | 主线启用帧间标签平滑 |
+| `examples/eval_labeled.rs` | 添加 `--disable-yolo-smooth` 开关 | 支持关闭平滑做对比实验 |
 
 ### 7.4 误差分析
 
 408 帧共 1224 个 GT Pedestrian（均在 0~10m 范围内）：
 
-- **误分类**: ~198 (16%) → 空间命中但未正确分类为 person（几何 fallback 未覆盖或 trick 标记为 obstacle）
-- **漏检**: ~376 (31%) → 空间未命中 → LiDAR 预处理阶段丢失（地面/墙体误删、遮挡、聚类截断）
-- **误报**: ~540 FP → 主要是 YOLO 误检 + 噪声聚类经几何 fallback 误判为 person
+- **误分类（空间命中但 label 错误）**: ~135-198 (11-16%) → 空间匹配到但被标记为 obstacle（几何 fallback 未覆盖或 trick 条件不满足）
+- **漏检（空间未命中）**: ~352-389 (29-31%) → LiDAR 预处理阶段丢失（地面/墙体误删、遮挡、聚类截断）
+- **误报 FP**: 在 min_pts=5, denoise=0.20 配置下约 135（person 过滤后），主要是 YOLO 误检 + 噪声聚类经几何 fallback 误判
 
-**当前主要瓶颈：** 严格 Recall ~53%（空间 Recall ~69%），差距主要在"检测到了但标成 obstacle"。几何 fallback 对稀疏点云行人（8-10m）的识别率不足，YOLO 的 DirectML 非确定性也导致同目标在不同 run 获得不同标签。
+**当前主要瓶颈：** Person Recall ~52-57%（空间 Recall ~71%），差距主要在稀疏远距离行人（8-10m）的聚类点数不足、以及被地面/墙体过滤误删。高 precision 配置（min_pts=5, denoise=0.20）的 FP 已控制在较低水平但 recall 受限。
