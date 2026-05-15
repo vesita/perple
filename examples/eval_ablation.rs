@@ -544,8 +544,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         cfg.cluster.strategy, cfg.cluster.merge_patience,
         cfg.cluster.min_points_per_cluster, cfg.cluster.voxel_size);
     println!("  降噪: radius={}, min_pts={}", cfg.cluster.denoise_radius, cfg.cluster.denoise_min_pts);
-    println!("  跟踪: max_disappeared={}, min_confidence={}",
-        cfg.tracker.max_disappeared, cfg.tracker.min_confidence);
+    println!("  跟踪: max_disappeared={}, min_confidence={}, kf_avg_frames={}",
+        cfg.tracker.max_disappeared, cfg.tracker.min_confidence, cfg.tracker.kf_avg_frames);
+    println!("  KF:   noise_pos={} noise_vel={} noise_acc={} noise_size={}",
+        cfg.tracker.kf_measurement_noise_pos,
+        cfg.tracker.kf_measurement_noise_vel,
+        cfg.tracker.kf_measurement_noise_acc,
+        cfg.tracker.kf_measurement_noise_size);
+    println!("  KF:   proc_pos={} proc_vel={} proc_acc={} cov_init={} gate={}",
+        cfg.tracker.kf_process_noise_pos,
+        cfg.tracker.kf_process_noise_vel,
+        cfg.tracker.kf_process_noise_acc,
+        cfg.tracker.kf_initial_covariance_scale,
+        cfg.tracker.kf_gate_threshold);
     println!();
 
     // ── 输出文件路径 ──
@@ -638,6 +649,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracker_min_appearances: u32,
         tracker_use_point_cloud_voting: bool,
         tracker_moving_speed_threshold: f32,
+        kf_process_noise_pos: f64,
+        kf_process_noise_vel: f64,
+        kf_process_noise_acc: f64,
+        kf_process_noise_size: f64,
+        kf_measurement_noise_pos: f64,
+        kf_measurement_noise_vel: f64,
+        kf_measurement_noise_acc: f64,
+        kf_measurement_noise_size: f64,
+        kf_initial_covariance_scale: f64,
+        kf_gate_threshold: f64,
     }
 
     #[derive(Serialize)]
@@ -674,6 +695,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tracker_min_appearances: cfg.tracker.min_appearances,
             tracker_use_point_cloud_voting: cfg.tracker.use_point_cloud_voting,
             tracker_moving_speed_threshold: cfg.tracker.moving_speed_threshold,
+            kf_process_noise_pos: cfg.tracker.kf_process_noise_pos,
+            kf_process_noise_vel: cfg.tracker.kf_process_noise_vel,
+            kf_process_noise_acc: cfg.tracker.kf_process_noise_acc,
+            kf_process_noise_size: cfg.tracker.kf_process_noise_size,
+            kf_measurement_noise_pos: cfg.tracker.kf_measurement_noise_pos,
+            kf_measurement_noise_vel: cfg.tracker.kf_measurement_noise_vel,
+            kf_measurement_noise_acc: cfg.tracker.kf_measurement_noise_acc,
+            kf_measurement_noise_size: cfg.tracker.kf_measurement_noise_size,
+            kf_initial_covariance_scale: cfg.tracker.kf_initial_covariance_scale,
+            kf_gate_threshold: cfg.tracker.kf_gate_threshold,
         },
         iou_threshold: args.iou_threshold,
         center_dist: args.center_dist,

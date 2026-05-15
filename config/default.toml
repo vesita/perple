@@ -93,7 +93,7 @@ fix_size_frames = 10
 # 尺寸变化率阈值：三维尺寸变化率均低于此值则冻结，否则更新参考
 fix_size_dim_thresh = 0.4
 # Kalman 滤波器平滑窗口：用最近 K 帧的位置均值修正状态
-kf_avg_frames = 5
+kf_avg_frames = 8
 # 漂浮→静态 回归所需连续帧数（在静态簇中持续 N 帧才确认为静态）
 floating_to_static_frames = 30
 # 运动速度阈值（m/s）：自运动补偿后速度高于此值判定为 Moving，低于为 Movable
@@ -115,6 +115,21 @@ box_smoothing_alpha = 0.25
 vel_smoothing_alpha = 0.25
 # 分类转换冷却帧数（Moving↔Movable 迟滞）
 class_cooldown_frames = 15
+
+# Kalman 滤波器 9D CA 模型参数（可通过 eval_ablation --tracker-toml 覆盖）
+kf_process_noise_pos = 0.1        # 位置过程噪声：预测位置不确定性
+kf_process_noise_vel = 0.05       # 速度过程噪声：允许速度变化（0.02→0.05 更灵活）
+kf_process_noise_acc = 1.0        # 加速度过程噪声（0.5→1.0 允许更大加速度变化）
+kf_process_noise_size = 0.01      # 尺寸过程噪声：尺寸变化慢
+kf_measurement_noise_pos = 0.3    # 位置测量噪声（0.2→0.3 降低对点云质心信任）
+kf_measurement_noise_vel = 0.8    # 速度测量噪声（0.1→0.8 速度由位置差推导不直接观测）
+kf_measurement_noise_acc = 2.0    # 加速度测量噪声（0.5→2.0 加速度由速度差推导极不可靠）
+kf_measurement_noise_size = 0.2   # 尺寸测量噪声（0.5→0.2 框尺寸相对可靠）
+kf_initial_covariance_scale = 1.0  # 初始协方差缩放（0.5→1.0 加快收敛）
+kf_gate_threshold = 3.5           # 新息门控：马氏距离超过此值用位置-only修正
+geo_pass_threshold = 6            # 几何后端连续通过帧数阈值
+geo_fail_threshold = 5            # 几何后端连续失败回退阈值
+geo_speed_threshold = 0.6         # 速度激活阈值(m/s)，超过此值直接标为 person（与几何 OR）
 
 # 航迹分级管理
 confirmation_frames = 5        # Tentative→Confirmed 所需连续匹配帧数

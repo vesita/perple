@@ -9,6 +9,7 @@ use crate::{
     tracker::{
         analysis::{analyze_point_cloud_voting_direct, analyze_velocity_clusters_from_snapshot},
         association::{associate, update_object_point_clouds},
+        kalman::KalmanConfigCA,
         lifecycle::apply_state_machine,
         object::{TargetClass, TrackStatus, TrackedObject},
         output::Target,
@@ -111,12 +112,31 @@ pub struct Tracker {
     track_score_delete_threshold: f64,
     track_score_output_threshold: f64,
     track_score_max: f64,
+    // ─── 卡尔曼滤波器配置 ──────────────────────────────────────────────────
+    kalman_config: KalmanConfigCA,
+    kf_gate_threshold: f64,
+    // ─── 几何后端累计阈值 ──────────────────────────────────────────────────
+    geo_pass_threshold: u32,
+    geo_fail_threshold: u32,
+    geo_speed_threshold: f32,
 }
 
 impl Tracker {
     pub fn new() -> Self {
         let swapl = global_swapl();
         let cfg = &fixif().tracker;
+        let kalman_config = KalmanConfigCA {
+            dt: 0.04,
+            process_noise_pos: cfg.kf_process_noise_pos,
+            process_noise_vel: cfg.kf_process_noise_vel,
+            process_noise_acc: cfg.kf_process_noise_acc,
+            process_noise_size: cfg.kf_process_noise_size,
+            measurement_noise_pos: cfg.kf_measurement_noise_pos,
+            measurement_noise_vel: cfg.kf_measurement_noise_vel,
+            measurement_noise_acc: cfg.kf_measurement_noise_acc,
+            measurement_noise_size: cfg.kf_measurement_noise_size,
+            initial_covariance_scale: cfg.kf_initial_covariance_scale,
+        };
         Self {
             tar3d: swapl.cld_objs.clone(),
             target: swapl.targets.clone(),
@@ -158,6 +178,11 @@ impl Tracker {
             track_score_delete_threshold: cfg.track_score_delete_threshold,
             track_score_output_threshold: cfg.track_score_output_threshold,
             track_score_max: cfg.track_score_max,
+            kalman_config,
+            kf_gate_threshold: cfg.kf_gate_threshold,
+            geo_pass_threshold: cfg.geo_pass_threshold,
+            geo_fail_threshold: cfg.geo_fail_threshold,
+            geo_speed_threshold: cfg.geo_speed_threshold,
         }
     }
 
@@ -246,6 +271,8 @@ impl Tracker {
                 detection.centroid,
                 self.kf_avg_frames,
                 self.vel_smoothing_alpha,
+                self.kalman_config.clone(),
+                self.kf_gate_threshold,
             ) {
                 Ok(obj) => {
                     self.tracked_objects.insert(new_id, obj);
@@ -373,7 +400,12 @@ impl Tracker {
         }
 
         // 步骤 9c: trick — 正在移动的目标标记为行人
-        trick::apply(&mut self.tracked_objects);
+        trick::apply(
+    &mut self.tracked_objects,
+    self.geo_pass_threshold,
+    self.geo_fail_threshold,
+    self.geo_speed_threshold,
+);
 
         // 步骤 10: 箱体尺寸平滑
         let _t_fix = Instant::now();
@@ -586,6 +618,8 @@ impl Tracker {
                 detection.centroid,
                 self.kf_avg_frames,
                 self.vel_smoothing_alpha,
+                self.kalman_config.clone(),
+                self.kf_gate_threshold,
             ) {
                 Ok(obj) => {
                     self.tracked_objects.insert(new_id, obj);
@@ -698,7 +732,12 @@ impl Tracker {
         }
 
         // 步骤 9c: trick
-        trick::apply(&mut self.tracked_objects);
+        trick::apply(
+    &mut self.tracked_objects,
+    self.geo_pass_threshold,
+    self.geo_fail_threshold,
+    self.geo_speed_threshold,
+);
 
         // 步骤 10: 箱体尺寸平滑
         let _t_fix = Instant::now();

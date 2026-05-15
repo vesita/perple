@@ -125,6 +125,24 @@ pub struct TrackerConfig {
     pub track_score_delete_threshold: f64,
     pub track_score_output_threshold: f64,
     pub track_score_max: f64,
+    // ─── 卡尔曼滤波器参数（9D CA 模型） ────────────────────────────────────
+    pub kf_process_noise_pos: f64,
+    pub kf_process_noise_vel: f64,
+    pub kf_process_noise_acc: f64,
+    pub kf_process_noise_size: f64,
+    pub kf_measurement_noise_pos: f64,
+    pub kf_measurement_noise_vel: f64,
+    pub kf_measurement_noise_acc: f64,
+    pub kf_measurement_noise_size: f64,
+    pub kf_initial_covariance_scale: f64,
+    /// 新息门控阈值（马氏距离），超过则降级为位置-only 修正
+    pub kf_gate_threshold: f64,
+    /// 几何后端连续通过帧数阈值（通过达到此值标记为 person）
+    pub geo_pass_threshold: u32,
+    /// 几何后端连续失败帧数阈值（失败达到此值回退为 obstacle）
+    pub geo_fail_threshold: u32,
+    /// 几何后端速度激活阈值（m/s），速度超过此值直接标记为 person，与几何判断 OR
+    pub geo_speed_threshold: f32,
 }
 
 
@@ -289,6 +307,19 @@ impl Config {
             update_tracker!(track_score_delete_threshold);
             update_tracker!(track_score_output_threshold);
             update_tracker!(track_score_max);
+            update_tracker!(kf_process_noise_pos);
+            update_tracker!(kf_process_noise_vel);
+            update_tracker!(kf_process_noise_acc);
+            update_tracker!(kf_process_noise_size);
+            update_tracker!(kf_measurement_noise_pos);
+            update_tracker!(kf_measurement_noise_vel);
+            update_tracker!(kf_measurement_noise_acc);
+            update_tracker!(kf_measurement_noise_size);
+            update_tracker!(kf_initial_covariance_scale);
+            update_tracker!(kf_gate_threshold);
+            update_tracker!(geo_pass_threshold);
+            update_tracker!(geo_fail_threshold);
+            update_tracker!(geo_speed_threshold);
         }
 
         Ok(())
@@ -382,6 +413,19 @@ struct PartialTrackerConfig {
     pub track_score_delete_threshold: Option<f64>,
     pub track_score_output_threshold: Option<f64>,
     pub track_score_max: Option<f64>,
+    pub kf_process_noise_pos: Option<f64>,
+    pub kf_process_noise_vel: Option<f64>,
+    pub kf_process_noise_acc: Option<f64>,
+    pub kf_process_noise_size: Option<f64>,
+    pub kf_measurement_noise_pos: Option<f64>,
+    pub kf_measurement_noise_vel: Option<f64>,
+    pub kf_measurement_noise_acc: Option<f64>,
+    pub kf_measurement_noise_size: Option<f64>,
+    pub kf_initial_covariance_scale: Option<f64>,
+    pub kf_gate_threshold: Option<f64>,
+    pub geo_pass_threshold: Option<u32>,
+    pub geo_fail_threshold: Option<u32>,
+    pub geo_speed_threshold: Option<f32>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

@@ -51,47 +51,62 @@ fn check_person_geom(obj: &TrackedObject) -> bool {
     true
 }
 
-/// 几何 + 速度双重判断：用于新目标（Floating）的快速过滤。
-/// 速度 > 0.05 且几何像行人 → 盲区运动行人。
-fn is_person_like(obj: &TrackedObject) -> bool {
-    if obj.speed() < 0.02 {
-        return false;
-    }
-    check_person_geom(obj)
-}
-
-/// 纯几何判断（无速度要求）：用于已跟踪较长时间的 Static 目标。
-/// 已持续跟踪 >30 帧且几何像行人，即使静止也很可能是盲区行人。
-fn is_person_like_static(obj: &TrackedObject) -> bool {
-    check_person_geom(obj)
-}
-
-/// 将正在移动的目标标记为行人（小技巧）。
+/// 基于累计几何验证 + 速度激活的复合跟踪后端行人标记。
 ///
-/// 在 Sight 移除后，作为替代方案：任何被判定为 Moving 的目标
-/// 都视为行人，其余未分类目标降级为障碍物。
+/// 对 YOLO/Fuse 未能标注（cluster_N / 空标签）或已被几何后端标记为 person 的目标，
+/// 使用两条路径 OR 决定标签：
 ///
-/// 扩展：对 YOLO/Fuse 未能标注（cluster_N / 空标签）但几何外形
-/// 像行人的目标，也标记为 person。这解决了相机盲区中行人的漏标问题。
-/// 仅对 Floating（未定性新目标）应用 fallback，避免 Static 背景物体误标。
-pub(crate) fn apply(objs: &mut BTreeMap<usize, TrackedObject>) {
+/// 1. 几何累计路径：连续几何通过 >= geo_pass_threshold → person
+/// 2. 速度激活路径：平滑速度 > geo_speed_threshold → person（单帧即时激活）
+///
+/// 回退：连续几何失败 >= geo_fail_threshold → obstacle
+/// 运动中清空失败计数，避免运动行人因偶发几何异常被降级。
+pub(crate) fn apply(
+    objs: &mut BTreeMap<usize, TrackedObject>,
+    geo_pass_threshold: u32,
+    geo_fail_threshold: u32,
+    geo_speed_threshold: f32,
+) {
     for (_, obj) in objs.iter_mut() {
-        if obj.class_type.is_empty() || obj.class_type.starts_with("cluster_") {
-            // Moving 目标：几何验证后标为 person（替代旧版无条件 Moving→person）
-            if obj.classification == TargetClass::Moving && is_person_like(obj) {
-                obj.class_type = "person".to_string();
-                obj.geo_labeled = true;
-            } else if obj.classification == TargetClass::Floating && is_person_like(obj) {
-                obj.class_type = "person".to_string();
-                obj.geo_labeled = true; // 标记为几何标签，允许后续帧覆盖
-            } else if obj.classification == TargetClass::Static && obj.appearance_count >= 10 && is_person_like_static(obj) {
-                // 持续跟踪的 Static 目标：已确认>30帧且几何外型持续像行人
-                // 相机盲区中静止行人会被状态机误判为 Static，这里通过持久化几何证据纠正
-                obj.class_type = "person".to_string();
-                obj.geo_labeled = true;
-            } else {
-                obj.class_type = "obstacle".to_string();
-            }
+        let is_unlabeled = obj.class_type.is_empty() || obj.class_type.starts_with("cluster_");
+        let is_geo_person = obj.class_type == "person" && obj.geo_labeled;
+
+        // 仅处理未标注或几何标记的目标（YOLO 标注的直接跳过）
+        if !is_unlabeled && !is_geo_person {
+            continue;
         }
+
+        let geom_pass = check_person_geom(obj);
+        let speed = obj.speed();
+
+        // 更新累计计数
+        if geom_pass {
+            obj.geo_pass_streak += 1;
+            obj.geo_fail_streak = 0;
+        } else {
+            obj.geo_fail_streak += 1;
+            obj.geo_pass_streak = 0;
+        }
+
+        // 运动中清空失败计数：避免运动行人偶发几何异常被降级
+        if obj.classification == TargetClass::Moving || obj.confirmed_moving {
+            obj.geo_fail_streak = 0;
+        }
+
+        // 决策：几何累计通过 OR 速度激活 → person
+        let is_person = obj.geo_pass_streak >= geo_pass_threshold || speed > geo_speed_threshold;
+
+        if is_person {
+            obj.class_type = "person".to_string();
+            obj.geo_labeled = true;
+        // 回退：几何累计失败达到阈值 → obstacle
+        } else if obj.geo_fail_streak >= geo_fail_threshold {
+            obj.class_type = "obstacle".to_string();
+            obj.geo_labeled = false;
+        } else if is_unlabeled {
+            // 累计未达阈值，临时标为 obstacle（下一帧仍可检查）
+            obj.class_type = "obstacle".to_string();
+        }
+        // geo_person 且两条阈值都未达到 → 保持 person 不动
     }
 }

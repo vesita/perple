@@ -36,6 +36,8 @@ pub(crate) struct TrackedObject {
     pub(crate) velocity_history: VecDeque<[f32; 3]>,
     /// KF 原始速度历史（用于加速度观测，LV-DOT 风格）
     pub(crate) kf_vel_history: VecDeque<[f64; 3]>,
+    /// 新息门控阈值（从 config 传入）
+    pub(crate) kf_gate_threshold: f64,
     pub(crate) classification: TargetClass,
     /// 一旦为 true，永不回到 Static/Floating
     pub(crate) confirmed_moving: bool,
@@ -81,6 +83,10 @@ pub(crate) struct TrackedObject {
     /// 若为 true，correct() 中允许被后续帧的非 person 标签覆盖，
     /// 避免几何启发式误报被状态锁永久保留。
     pub(crate) geo_labeled: bool,
+    /// 几何通过累计计数（连续几何验证通过帧数，用于累计判定）
+    pub(crate) geo_pass_streak: u32,
+    /// 几何失败累计计数（连续几何验证失败帧数，用于累计回退）
+    pub(crate) geo_fail_streak: u32,
 }
 
 impl TrackedObject {
@@ -92,9 +98,11 @@ impl TrackedObject {
         centroid: [f32; 3],
         kf_avg_frames: usize,
         vel_smoothing_alpha: f32,
+        kalman_config: KalmanConfigCA,
+        kf_gate_threshold: f64,
     ) -> Result<Self, adskalman::Error> {
         // 9D CA 模型：状态 [x, y, vx, vy, ax, ay, l, w, h]
-        let mut kalman_filter = KalmanFilterCA::new(KalmanConfigCA::default())?;
+        let mut kalman_filter = KalmanFilterCA::new(kalman_config)?;
         let init_state = SVector::<f64, 9>::from_column_slice(&[
             centroid[0] as f64, centroid[1] as f64, // x, y
             0.0, 0.0,        // vx, vy
@@ -136,6 +144,9 @@ impl TrackedObject {
             consecutive_matches: 0,
             score: 0.0,
             geo_labeled: false,
+            geo_pass_streak: 0,
+            geo_fail_streak: 0,
+            kf_gate_threshold,
         })
     }
 
@@ -193,7 +204,7 @@ impl TrackedObject {
         // v = (pos_t - pos_{t-k}) / (k * dt) — 仅 2D
         let hist_len = self.position_history.len();
         let k = self.kf_avg_frames.min(hist_len.saturating_sub(1));
-        const MIN_K_FOR_VELOCITY: usize = 3;
+        const MIN_K_FOR_VELOCITY: usize = 2; // was 3: 更快获得速度观测
         if k >= MIN_K_FOR_VELOCITY {
             let old = self.position_history[hist_len - 1 - k];
             let curr = *self.position_history.back().unwrap();
@@ -223,7 +234,8 @@ impl TrackedObject {
                 new_box.width as f64,
                 new_box.height as f64,
             ]);
-            self.kalman_filter.correct(measurement)?;
+            // 使用带新息门控的修正（异常测量时降级到位置only）
+            self.kalman_filter.correct_with_gating(measurement, self.kf_gate_threshold)?;
         } else {
             // 历史不足，仅 (x,y) 位置修正
             self.kalman_filter.correct_position(Vector2::new(

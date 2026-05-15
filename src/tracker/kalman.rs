@@ -15,6 +15,16 @@
 //! - predict() 和 correct() 分离，避免重复预测
 //! - 动态 dt：基于帧间隔时间戳实时计算
 //! - Q/R 对位置/速度/加速度分别设值（LV-DOT 启发）
+//! - correct_with_gating() 新息门控：马氏距离超过阈值时降级到位置-only修正
+//!
+//! 调参建议（通过 eval_ablation --tracker-toml）：
+//!
+//! | 参数 | 默认值 | 调大效果 | 调小效果 |
+//! |------|--------|----------|----------|
+//! | kf_process_noise_vel | 0.05 | 速度跟踪更灵活 | 速度更平滑 |
+//! | kf_measurement_noise_vel | 0.8 | 速度更平滑(信任预测) | 速度响应更快 |
+//! | kf_measurement_noise_pos | 0.3 | 位置更平滑 | 位置响应更快 |
+//! | kf_gate_threshold | 3.5 | 更多测量被接受 | 更多被门控拒绝 |
 
 use nalgebra as na;
 use na::{Matrix2, Matrix3, Matrix6, OMatrix, OVector, Vector2, Vector3, Vector6, U6, U9};
@@ -314,14 +324,14 @@ impl Default for KalmanConfigCA {
         Self {
             dt: 0.04,
             process_noise_pos: 0.1,
-            process_noise_vel: 0.02,
-            process_noise_acc: 0.5,
+            process_noise_vel: 0.05,    // 0.02→0.05: 允许速度预测有更大不确定性
+            process_noise_acc: 1.0,      // 0.5→1.0:  加速度变化快
             process_noise_size: 0.01,
-            measurement_noise_pos: 0.2,
-            measurement_noise_vel: 0.1,
-            measurement_noise_acc: 0.5,
-            measurement_noise_size: 0.5,
-            initial_covariance_scale: 0.5,
+            measurement_noise_pos: 0.3,  // 0.2→0.3:  点云质心噪声较大
+            measurement_noise_vel: 0.8,  // 0.1→0.8:  速度由k帧位置差推导，不可靠
+            measurement_noise_acc: 2.0,  // 0.5→2.0:  加速度由速度差推导，极不可靠
+            measurement_noise_size: 0.2, // 0.5→0.2:  框尺寸测量相对可靠
+            initial_covariance_scale: 1.0, // 0.5→1.0: 初始不确定性更大，收敛更快
         }
     }
 }
@@ -516,28 +526,81 @@ impl KalmanFilterCA {
             .unwrap_or(f64::MAX)
     }
 
+    /// 9D 全状态修正（带新息门控）
+    ///
+    /// 计算位置 (x,y) 马氏距离，超过 `gate_threshold` 时：
+    /// - 降级为 position-only 修正（避免异常测量污染状态）
+    /// - 否则走标准全状态修正
+    pub fn correct_with_gating(&mut self, measurement: SVector<f64, 9>, gate_threshold: f64) -> Result<(), adskalman::Error> {
+        let x = self.current_estimate.state();
+        let p = self.current_estimate.covariance();
+
+        // 位置 (x,y) 创新
+        let innovation_pos = Vector2::new(measurement[0] - x[0], measurement[1] - x[1]);
+        let s_pos = p.fixed_view::<2, 2>(0, 0) + Matrix2::identity() * self.config.measurement_noise_pos;
+        let s_inv = match s_pos.try_inverse() {
+            Some(inv) => inv,
+            None => return Err(adskalman::Error::CovarianceNotPositiveSemiDefinite),
+        };
+        let mahal = (innovation_pos.dot(&(&s_inv * &innovation_pos))).sqrt();
+
+        if mahal > gate_threshold {
+            // 新息过大 → 仅用位置修正（避免错误关联破坏状态）
+            let r_val = self.config.measurement_noise_pos;
+            let innovation = Vector2::new(measurement[0] - x[0], measurement[1] - x[1]);
+            let s = p.fixed_view::<2, 2>(0, 0) + Matrix2::identity() * r_val;
+            let s_inv = s.try_inverse().ok_or(adskalman::Error::CovarianceNotPositiveSemiDefinite)?;
+            let k = p.columns(0, 2) * s_inv;
+            let new_x = x + &k * innovation;
+            let hp = p.fixed_view::<2, 9>(0, 0);
+            let new_p = p - k * hp;
+            self.current_estimate = StateAndCovariance::new(new_x, new_p);
+            return Ok(());
+        }
+
+        // 新息正常 → 全状态修正
+        let h = self.observation_model.H();
+        let r = self.observation_model.R();
+        let y = measurement - (h * x);
+        let s = h * p * h.transpose() + r;
+        let si = s.try_inverse().ok_or(adskalman::Error::CovarianceNotPositiveSemiDefinite)?;
+        let k = p * h.transpose() * si;
+        let new_x = x + &k * y;
+        let i = OMatrix::<f64, U9, U9>::identity();
+        let new_p = (i - &k * h) * p;
+        self.current_estimate = StateAndCovariance::new(new_x, new_p);
+        Ok(())
+    }
+
     /// 距离自适应测量噪声（LV-DOT 风格）
+    ///
+    /// 远距离点云稀疏 → 质心不可靠 → 增大测量噪声。
+    /// 调参：`--tracker-toml 'kf_measurement_noise_pos=0.3,...'`
     pub fn adjust_noise_for_distance(&mut self, distance: f64) {
-        let scale = 1.0 + distance / 20.0;
+        // scale = 1 + d/10 (was d/20): 10m 时 2x, 20m 时 3x
+        let scale = 1.0 + distance / 10.0;
         let noise_pos = self.config.measurement_noise_pos * scale;
-        let noise_vel = self.config.measurement_noise_vel * scale.min(2.0);
-        let noise_acc = self.config.measurement_noise_acc * scale.min(1.5);
-        let noise_size = self.config.measurement_noise_size * scale.min(2.0);
+        let noise_vel = self.config.measurement_noise_vel * scale.min(3.0);
+        let noise_acc = self.config.measurement_noise_acc * scale.min(2.0);
+        let noise_size = self.config.measurement_noise_size * scale.min(3.0);
         self.observation_model = FullStateObservationModel9::new(noise_pos, noise_vel, noise_acc, noise_size);
     }
 
     /// 检测置信度 + 距离自适应测量噪声
     ///
     /// 低置信度检测 → 增大测量噪声（减小滤波器对该观测的信任）。
-    /// confidence ∈ [0, 1], 0.5 时噪声放大 2×, 1.0 时保持基线。
+    /// confidence ∈ [0, 1], 0.5 时噪声放大 2.5×, 1.0 时保持基线。
+    /// 距离缩放：10m 处 2x, 20m 处 3x (was 1.5x/2.0x at d/20).
+    /// 调参：`--tracker-toml 'kf_measurement_noise_pos=0.3,...'`
     pub fn adjust_noise_for_confidence(&mut self, distance: f64, confidence: f32) {
-        let dist_scale = 1.0 + distance / 20.0;
-        let conf_scale = 1.0 + (1.0 - confidence as f64) * 2.0;
+        // scale = (1 + d/10) * (1 + (1-c)*3)
+        let dist_scale = 1.0 + distance / 10.0;          // was 20.0
+        let conf_scale = 1.0 + (1.0 - confidence as f64) * 3.0; // was 2.0
         let scale = dist_scale * conf_scale;
         let noise_pos = self.config.measurement_noise_pos * scale;
-        let noise_vel = self.config.measurement_noise_vel * scale.min(2.0);
-        let noise_acc = self.config.measurement_noise_acc * scale.min(1.5);
-        let noise_size = self.config.measurement_noise_size * scale.min(2.0);
+        let noise_vel = self.config.measurement_noise_vel * scale.min(3.0);
+        let noise_acc = self.config.measurement_noise_acc * scale.min(2.0);
+        let noise_size = self.config.measurement_noise_size * scale.min(3.0);
         self.observation_model = FullStateObservationModel9::new(noise_pos, noise_vel, noise_acc, noise_size);
     }
 

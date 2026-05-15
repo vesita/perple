@@ -147,6 +147,32 @@ cargo run --release --example eval_ablation -- --config ./experiment.toml
 | `--denoise-toml` | 无 | 降噪参数覆盖（逗号分隔） |
 | `--tracker-toml` | 无 | 跟踪参数覆盖（逗号分隔） |
 
+**KF 调参 CLI 示例：**
+
+```bash
+# 调大速度测量噪声 → 更平滑的速度跟踪
+cargo run --release --example eval_ablation -- \
+    --tracker-toml 'kf_measurement_noise_vel=1.2,kf_measurement_noise_acc=3.0' \
+    --center-dist 0.5 --frames 408
+
+# 调大门控阈值 → 接受更多测量
+cargo run --release --example eval_ablation -- \
+    --tracker-toml 'kf_gate_threshold=4.5' \
+    --center-dist 0.5 --frames 408
+
+# 调小位置噪声 → 位置跟踪更紧
+cargo run --release --example eval_ablation -- \
+    --tracker-toml 'kf_measurement_noise_pos=0.2' \
+    --center-dist 0.5 --frames 408
+
+# 完整 KF 参数调整
+cargo run --release --example eval_ablation -- \
+    --tracker-toml 'kf_measurement_noise_pos=0.4,kf_measurement_noise_vel=1.0,kf_measurement_noise_acc=2.5,kf_process_noise_vel=0.08,kf_gate_threshold=4.0,kf_avg_frames=10' \
+    --center-dist 0.5 --frames 408
+```
+
+**评估方法：** 每次配置运行 **2 次** 取平均（因 YOLO ONNX 推理非确定性）。
+
 ### 2.3 PR 曲线 (eval_pr_curve)
 
 管线跑一次，在 0.05-1.0m 共 20 个阈值下计算 P/R/F1，同时输出 **person 过滤** 和 **全部检测** 两组曲线。
