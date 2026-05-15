@@ -249,6 +249,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|i| args.get(i + 1))
         .cloned()
         .unwrap_or_default();
+    let disable_yolo_smooth: bool = args.iter().any(|a| a == "--disable-yolo-smooth");
 
     // ─── 加载标注 ─────────────────────────────────────────────────────────
     let label_dir = "data/labeled/label";
@@ -341,7 +342,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         swapl.cld_buds_raw.swap();
         swapl.clr_objs.swap();
         // YOLO 标签平滑（在 Camera→Fuse 之间）
-        yolo_smoother.smooth(&mut *swapl.clr_objs.consumer().lock().unwrap());
+        if !disable_yolo_smooth {
+            yolo_smoother.smooth(&mut *swapl.clr_objs.consumer().lock().unwrap());
+        }
         swapl.clouds_filtered.swap();
         swapl.ground_buds.swap();
         swapl.wall_buds.swap();

@@ -91,6 +91,8 @@ use perple::tracker::core::Tracker;
 use perple::tracker::output::Target;
 #[cfg(not(feature = "ros1"))]
 use perple::utils::rdra::FrameWriter;
+#[cfg(not(feature = "ros1"))]
+use perple::yolo_smooth::YoloSmoother;
 
 #[cfg(not(feature = "ros1"))]
 use log::info;
@@ -343,6 +345,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let total_start = Instant::now();
+    let mut yolo_smoother = YoloSmoother::new();
 
     // 启动第一帧的检测
     let mut l_handle = Some(tokio::spawn(async move {
@@ -371,6 +374,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let swapl = global_swapl();
         swapl.cld_buds_raw.swap();
         swapl.clr_objs.swap();
+        // YOLO 标签平滑（在 Camera→Fuse 之间）
+        yolo_smoother.smooth(&mut *swapl.clr_objs.consumer().lock().unwrap());
         swapl.clouds_filtered.swap();
         swapl.ground_buds.swap();
         swapl.wall_buds.swap();
