@@ -1,3 +1,5 @@
+use std::sync::{Arc, Mutex};
+
 use crate::{
     cloud::{
         CldBud,
@@ -47,12 +49,15 @@ pub struct Classify {
     ground_plane_out: Eap<Stream<[f32; 4]>>,
     /// 双缓冲：检测阶段写 producer（本模块），后融合阶段读 consumer（Tracker）
     clouds_filtered: DualBuf<Vec<[f32; 3]>>,
-    /// 双缓冲：检测阶段读 producer（本模块，YOLO refine），后融合阶段读 consumer（Fuse）
-    clr_objs: DualBuf<Vec<ClrBud>>,
+    /// 专用共享状态：Camera 写入最新 YOLO 结果，本模块读取用于簇分裂
+    ///（非 DualBuf，避免与 Camera 跨任务并发竞争）
+    last_yolo: Arc<Mutex<Vec<ClrBud>>>,
     /// 双缓冲：检测阶段写 producer（本模块），后融合阶段读 consumer（Fuse）
     cld_buds_raw: DualBuf<Vec<CldBud>>,
-    ground_buds_out: Eap<Stream<Vec<CldBud>>>,
-    wall_buds_out: Eap<Stream<Vec<CldBud>>>,
+    /// 双缓冲：检测阶段写 producer（本模块），后融合阶段读 consumer
+    ground_buds_out: DualBuf<Vec<CldBud>>,
+    /// 双缓冲：检测阶段写 producer（本模块），后融合阶段读 consumer
+    wall_buds_out: DualBuf<Vec<CldBud>>,
 }
 
 impl Classify {
@@ -65,10 +70,10 @@ impl Classify {
             wall_strategy: create_wall_strategy_from_config(),
             ground_plane_out: swapl.ground_plane.clone(),
             clouds_filtered: swapl.clouds_filtered.clone(),
-            clr_objs: swapl.clr_objs.clone(),
+            last_yolo: swapl.last_yolo.clone(),
             cld_buds_raw: swapl.cld_buds_raw.clone(),
-            ground_buds_out: swapl.ground_buds.clone(),
-            wall_buds_out: swapl.wall_buds.clone(),
+            ground_buds_out: Arc::clone(&swapl.ground_buds),
+            wall_buds_out: Arc::clone(&swapl.wall_buds),
         }
     }
 
@@ -108,12 +113,12 @@ impl Classify {
         let (n_ground, grounds, plane_eq) = self.ground_strategy.pick(&mut target);
         println!("地面提取：{} 地面点 / {} 非地面点", n_ground, target.len() - n_ground);
         if let Some(eq) = plane_eq {
-            let mut gp = self.ground_plane_out.lock().unwrap();
-            let _ = gp.write(eq);
+            if let Err(e) = self.ground_plane_out.lock().unwrap().write(eq) {
+                eprintln!("地面平面写入失败：{:?}", e);
+            }
         }
         {
-            let mut gb = self.ground_buds_out.lock().unwrap();
-            let _ = gb.write(grounds);
+            *self.ground_buds_out.producer().lock().unwrap() = grounds;
         }
 
         // ═══════════════════════════════════════════════════════════════════
@@ -159,10 +164,7 @@ impl Classify {
                     vec![CldBud::new(wall_box, 2, "wall".into(), 1.0)]
                 };
 
-                if !wall_buds.is_empty() {
-                    let mut wb = self.wall_buds_out.lock().unwrap();
-                    let _ = wb.write(wall_buds);
-                }
+                *self.wall_buds_out.producer().lock().unwrap() = wall_buds;
             }
             n
         } else {
@@ -229,9 +231,10 @@ impl Classify {
         let _ = self.cluster.cluster(&cluster_input);
 
         // ─── 4. YOLO 辅助簇分裂 ────────────────────────────────────────────
-        // 检测阶段读 DualBuf producer（Camera 写入同一 producer，无跨阶段竞争）
+        // 读取 Camera 写入的最新 YOLO 结果（专用 last_yolo 共享状态，
+        // 非 DualBuf，避免与 Camera 跨任务并发时读到 swap 后的乱帧数据）
         {
-            let guard = self.clr_objs.producer().lock().unwrap();
+            let guard = self.last_yolo.lock().unwrap();
             if !guard.is_empty() {
                 let config = crate::config::fixif();
                 let intrinsic = nalgebra::Matrix3::from(config.camera.intrinsic);

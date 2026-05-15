@@ -1,4 +1,4 @@
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock, Mutex};
 
 use image::DynamicImage;
 
@@ -35,10 +35,10 @@ pub struct Swapl {
     pub cld_buds_raw: DualBuf<Vec<CldBud>>,
     /// 点云检测结果输出流（经 Fuse 融合后，Fuse写 / Tracker读，同阶段无竞争）
     pub cld_objs: Eap<Stream<Vec<CldBud>>>,
-    /// 地面 Bud 独立流（含 box + 点云）
-    pub ground_buds: Eap<Stream<Vec<CldBud>>>,
-    /// 墙体 Bud 独立流（含 box + 点云）
-    pub wall_buds: Eap<Stream<Vec<CldBud>>>,
+    /// 地面 Bud 独立流（双缓冲：检测写producer / 后融合读consumer）
+    pub ground_buds: DualBuf<Vec<CldBud>>,
+    /// 墙体 Bud 独立流（双缓冲：检测写producer / 后融合读consumer）
+    pub wall_buds: DualBuf<Vec<CldBud>>,
     /// 图像数据输入流
     pub colors: Eap<Stream<DynamicImage>>,
     /// 图像检测结果输出流（双缓冲：Camera写producer / Fuse读consumer）
@@ -49,6 +49,8 @@ pub struct Swapl {
     pub targets: Eap<Stream<Vec<Target>>>,
     /// 地面平面方程流 [a, b, c, d] (a*x + b*y + c*z + d = 0)
     pub ground_plane: Eap<Stream<[f32; 4]>>,
+    /// 最新 YOLO 检测结果（供 classify YOLO refine 读取，非 DualBuf 避免跨阶段污染）
+    pub last_yolo: Arc<Mutex<Vec<ClrBud>>>,
 }
 
 impl Swapl {
@@ -60,13 +62,14 @@ impl Swapl {
             clouds_filtered: new_dual_buf(),
             cld_buds_raw: new_dual_buf(),
             cld_objs: new_eap(Stream::new()),
-            ground_buds: new_eap(Stream::new()),
-            wall_buds: new_eap(Stream::new()),
+            ground_buds: new_dual_buf(),
+            wall_buds: new_dual_buf(),
             colors: new_eap(Stream::new()),
             clr_objs: new_dual_buf(),
             sights: new_eap(Stream::new()),
             targets: new_eap(Stream::new()),
             ground_plane: new_eap(Stream::new()),
+            last_yolo: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }

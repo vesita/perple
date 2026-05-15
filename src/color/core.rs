@@ -1,7 +1,7 @@
 use image::DynamicImage;
 use log::info;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::color::{ClrBud, image::ScaleMessage, look::Look, UndistortMap};
@@ -68,6 +68,8 @@ pub struct Color {
     undistort_map: Option<UndistortMap>,
     /// 双缓冲 producer：检测阶段写入 YOLO 结果（后融合阶段读 consumer）
     clr_objs: DualBuf<Vec<ClrBud>>,
+    /// 最新 YOLO 结果（供 lidar YOLO refine 读取，非 DualBuf 避免跨任务竞争）
+    last_yolo: Arc<Mutex<Vec<ClrBud>>>,
 }
 
 pub struct Camera {
@@ -84,9 +86,11 @@ impl Color {
     /// # 参数
     /// * `input_stream` - 输入图像流的线程安全引用
     /// * `clr_objs` - DualBuf producer，检测阶段写入 YOLO 结果
+    /// * `last_yolo` - 最新 YOLO 结果（供 lidar YOLO refine 读取）
     pub fn new(
         input_stream: Eap<Stream<DynamicImage>>,
         clr_objs: DualBuf<Vec<ClrBud>>,
+        last_yolo: Arc<Mutex<Vec<ClrBud>>>,
     ) -> Self {
         // 初始化YOLO检测器
         let model = YoloDetector::new();
@@ -116,6 +120,7 @@ impl Color {
             local_bounds: Vec::new(),
             undistort_map: None,
             clr_objs,
+            last_yolo,
         }
     }
 
@@ -183,9 +188,11 @@ impl Color {
         self.local_bounds.clear();
         let infer_ok = self.model.infer(&self.tensor_value, &mut self.local_bounds, &self.message).is_ok();
 
-        // 推理完成后，写入 DualBuf producer（检测阶段，无跨阶段竞争）
+        // 推理完成后，写入 DualBuf producer + last_yolo（与 lidar 共享）
         if infer_ok {
-            *self.clr_objs.producer().lock().unwrap() = std::mem::take(&mut self.local_bounds);
+            let results = std::mem::take(&mut self.local_bounds);
+            *self.last_yolo.lock().unwrap() = results.clone();   // lidar YOLO refine 读取
+            *self.clr_objs.producer().lock().unwrap() = results; // Fuse 读取
         } else {
             eprintln!("推理过程中发生错误");
             return Err(ColorError::InferenceError("模型推理失败".to_string()));
@@ -237,9 +244,10 @@ impl Camera {
 
         // clr_objs 改用 DualBuf：Camera 写 producer，Fuse 读 consumer
         let clr_objs: DualBuf<Vec<ClrBud>> = pool.clr_objs.clone();
+        let last_yolo = pool.last_yolo.clone();
 
         Self {
-           data: Color::new(Arc::clone(&pool.colors), clr_objs.clone()),
+           data: Color::new(Arc::clone(&pool.colors), clr_objs.clone(), last_yolo),
             look: Look::new(clr_objs, Arc::clone(&pool.sights)),
         }
     }

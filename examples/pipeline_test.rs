@@ -111,15 +111,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|i| args.get(i + 1))
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
-    let _wall_strategy: Option<String> = args.iter()
-        .position(|a| a == "--wall" || a.starts_with("--wall="))
-        .and_then(|i| {
-            if args[i] == "--wall" {
-                args.get(i + 1).cloned()
-            } else {
-                args[i].split_once('=').map(|(_, v)| v.to_string())
-            }
-        });
 
     // ─── 检查 YOLO 模型 ─────────────────────────────────────────────────────
     let config = perple::config::fixif();
@@ -138,8 +129,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if skip_frames > 0 {
         info!("跳过前 {} 帧", skip_frames);
+        // 先触发预加载，跳过帧写入流
         for _ in 0..skip_frames {
             data_loader.load_next().await?;
+        }
+        // 排空流中被跳过帧的数据，确保 lidar/camera 从第 skip_frames 帧开始
+        let swapl = perple::swapl::global_swapl();
+        for _ in 0..skip_frames {
+            swapl.clouds.lock().unwrap().read();
+            swapl.colors.lock().unwrap().read();
         }
     }
 
@@ -149,10 +147,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(total_available);
     info!("将处理 {} 帧（从第 {} 帧开始）", n_frames, skip_frames);
 
+    if n_frames == 0 {
+        info!("没有帧需要处理");
+        return Ok(());
+    }
+
     // ─── 初始化模块 ──────────────────────────────────────────────────────
+    info!("墙体策略: {} (config 默认)", config.wall_strategy);
     let mut lidar = {
-        let cfg = perple::config::fixif();
-        info!("墙体策略: {} (config 默认)", cfg.wall_strategy);
         Lidar::new()
     };
     let mut camera = Camera::new();
@@ -181,11 +183,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut l_handle = Some(tokio::spawn(async move {
-        let _ = lidar.act().await;
+        if let Err(e) = lidar.act().await {
+            eprintln!("LiDAR 错误：{:?}", e);
+        }
         lidar
     }));
     let mut c_handle = Some(tokio::spawn(async move {
-        let _ = camera.act().await;
+        if let Err(e) = camera.act().await {
+            eprintln!("Camera 错误：{:?}", e);
+        }
         camera
     }));
 
@@ -206,31 +212,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         swapl.cld_buds_raw.swap();
         swapl.clr_objs.swap();
         swapl.clouds_filtered.swap();
+        swapl.ground_buds.swap();
+        swapl.wall_buds.swap();
 
         // ─── 提前启动下一帧检测（与当前帧后融合并行） ──────────────────
         if i + 1 < n_frames {
             l_handle = Some(tokio::spawn(async move {
-                let _ = lidar.act().await;
+                if let Err(e) = lidar.act().await {
+                    eprintln!("LiDAR 错误：{:?}", e);
+                }
                 lidar
             }));
             c_handle = Some(tokio::spawn(async move {
-                let _ = camera.act().await;
+                if let Err(e) = camera.act().await {
+                    eprintln!("Camera 错误：{:?}", e);
+                }
                 camera
             }));
         }
 
         // ─── 后融合（与下一帧检测并行执行） ─────────────────────────────
+        let t_swaps = iter_start.elapsed().as_secs_f64() * 1000.0;
         fuse.act().await;
         let t_fuse = iter_start.elapsed().as_secs_f64() * 1000.0;
 
         // ─── 读取各语义流 ────────────────────────────────────────────────
         let ground_buds: Vec<CldBud> = {
-            let gb = swapl.ground_buds.lock().unwrap();
-            gb.peek_latest().unwrap_or_default()
+            swapl.ground_buds.consumer().lock().unwrap().clone()
         };
         let wall_buds: Vec<CldBud> = {
-            let wb = swapl.wall_buds.lock().unwrap();
-            wb.peek_latest().unwrap_or_default()
+            swapl.wall_buds.consumer().lock().unwrap().clone()
         };
         let cluster_buds: Vec<CldBud> = swapl.cld_buds_raw.consumer().lock().unwrap().clone();
 
@@ -251,7 +262,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             data_loader.load_next().await?;
         }
 
-        let _ = tracker.run().await;
+        let t_io = iter_start.elapsed().as_secs_f64() * 1000.0;
+        if let Err(e) = tracker.run().await {
+            eprintln!("Tracker 错误：{:?}", e);
+        }
         let t_tracker = iter_start.elapsed().as_secs_f64() * 1000.0;
 
         // ─── 读取跟踪输出 ────────────────────────────────────────────────
@@ -264,8 +278,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let t_end = iter_start.elapsed().as_secs_f64() * 1000.0;
 
         if i % 50 == 0 || i == n_frames - 1 || i < 5 {
-            println!("  join={:.0}  fuse={:.0}  tracker={:.0}  seq={:.0}  iter={:.0}ms",
-                t_join, t_fuse - t_join, t_tracker - t_fuse, t_end - t_tracker, t_end);
+            println!("  join={:.0}  spawn={:.0}  fuse={:.0}  io={:.0}  tracker={:.0}  read={:.0}  iter={:.0}ms",
+                t_join, t_swaps - t_join, t_fuse - t_swaps, t_io - t_fuse, t_tracker - t_io, t_end - t_tracker, t_end);
         }
 
         print_stats(i, n_frames, t_end, n_filtered_pts, cluster_buds.len(),

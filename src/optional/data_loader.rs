@@ -432,11 +432,15 @@ impl DataLoader {
 
         // 从内存写入流（无 I/O 等待）
         let mut clr_stream = self.clr_stream.lock().unwrap();
-        let _ = clr_stream.write(self.images[idx].clone());
+        if let Err(e) = clr_stream.write(self.images[idx].clone()) {
+            log::warn!("图像流写入失败 (帧 {}): {:?}", idx, e);
+        }
         drop(clr_stream);
 
         let mut cld_stream = self.cld_stream.lock().unwrap();
-        let _ = cld_stream.write(self.clouds[idx].clone());
+        if let Err(e) = cld_stream.write(self.clouds[idx].clone()) {
+            log::warn!("点云流写入失败 (帧 {}): {:?}", idx, e);
+        }
 
         Ok(true)
     }
