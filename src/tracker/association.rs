@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use nalgebra::{Point3, Vector2};
 
@@ -22,7 +22,7 @@ const MAHALANOBIS_THRESHOLD: f64 = 2.796;
 ///
 /// `cost_buf` / `sq_buf` 复用缓冲区，避免每帧堆分配。
 pub(crate) fn associate(
-    objects: &HashMap<usize, TrackedObject>,
+    objects: &BTreeMap<usize, TrackedObject>,
     detections: &[CldBud],
     cost_buf: &mut Vec<Vec<f64>>,
     sq_buf: &mut Vec<Vec<f64>>,
@@ -34,7 +34,8 @@ pub(crate) fn associate(
         return (Vec::new(), (0..n_detections).collect());
     }
 
-    let obj_ids: Vec<usize> = objects.keys().copied().collect();
+    let mut obj_ids: Vec<usize> = objects.keys().copied().collect();
+    obj_ids.sort(); // BTreeMap 保证 key 有序，sort 仅做双重保险
 
     // 构建代价矩阵（复用缓冲区）
     cost_buf.clear();
@@ -113,7 +114,7 @@ pub(crate) fn associate(
     // 匈牙利最优指派（复用 sq_buf）
     let assignment = hungarian(cost_buf, sq_buf);
 
-    // 提取匹配结果（返回实际 obj_id 而非索引，避免 HashMap 顺序不确定性）
+    // 提取匹配结果（返回实际 obj_id 而非索引，避免顺序不确定性）
     let mut used_det = vec![false; n_detections];
     let mut matches = Vec::new();
 
@@ -183,7 +184,7 @@ fn extract_points_in_box(points: &[[f32; 3]], box3d: &Box3D, max_out: usize) -> 
 /// 先计算所有目标 AABB 的并集，快速过滤非目标区域点云，
 /// 再逐目标精确过滤，避免对每个目标扫描整个点云。
 pub(crate) fn update_object_point_clouds(
-    objects: &mut HashMap<usize, TrackedObject>,
+    objects: &mut BTreeMap<usize, TrackedObject>,
     filter_points: &[[f32; 3]],
     max_history: usize,
     max_points_per_obj: usize,

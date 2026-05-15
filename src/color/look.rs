@@ -22,8 +22,8 @@ impl Default for Look {
         let camera_config = &fixif().camera;
 
         // 将数组转换为矩阵
-        let intrinsic = Matrix3::from_iterator(camera_config.intrinsic.iter().flatten().cloned());
-        let extrinsic = Matrix4::from_iterator(camera_config.extrinsic.iter().flatten().cloned());
+        let intrinsic = Matrix3::from_iterator(camera_config.intrinsic.iter().flatten().cloned()).transpose();
+        let extrinsic = Matrix4::from_iterator(camera_config.extrinsic.iter().flatten().cloned()).transpose();
 
         Self {
             clr_objs: crate::utils::stream::new_dual_buf(),
@@ -46,8 +46,8 @@ impl Look {
         let camera_config = &fixif().camera;
 
         // 将数组转换为矩阵
-        let intrinsic = Matrix3::from_iterator(camera_config.intrinsic.iter().flatten().cloned());
-        let extrinsic = Matrix4::from_iterator(camera_config.extrinsic.iter().flatten().cloned());
+        let intrinsic = Matrix3::from_iterator(camera_config.intrinsic.iter().flatten().cloned()).transpose();
+        let extrinsic = Matrix4::from_iterator(camera_config.extrinsic.iter().flatten().cloned()).transpose();
 
         Self {
             clr_objs,

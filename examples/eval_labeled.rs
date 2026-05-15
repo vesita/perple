@@ -22,6 +22,7 @@ use perple::optional::data_loader::DataLoader;
 use perple::swapl::global_swapl;
 use perple::tracker::core::Tracker;
 use perple::tracker::output::Target;
+use perple::yolo_smooth::YoloSmoother;
 use perple::utils::boxes::Box3D;
 
 use log::info;
@@ -99,6 +100,8 @@ struct FrameMatch {
     fn_count: usize,
     /// 被匹配的 GT 索引集合
     matched_gt: HashSet<usize>,
+    /// (gt_idx, detection_class_type) 匹配对
+    matched_pairs: Vec<(usize, String)>,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -118,12 +121,12 @@ fn match_frame(
 
     if n_det == 0 {
         return FrameMatch {
-            tp: 0, fp: 0, fn_count: n_gt, matched_gt: HashSet::new(),
+            tp: 0, fp: 0, fn_count: n_gt, matched_gt: HashSet::new(), matched_pairs: Vec::new(),
         };
     }
     if n_gt == 0 {
         return FrameMatch {
-            tp: 0, fp: n_det, fn_count: 0, matched_gt: HashSet::new(),
+            tp: 0, fp: n_det, fn_count: 0, matched_gt: HashSet::new(), matched_pairs: Vec::new(),
         };
     }
 
@@ -150,6 +153,7 @@ fn match_frame(
     let assignment = perple::tracker::hungarian::hungarian(&cost, hungarian_buf);
 
     let mut matched_gt = HashSet::new();
+    let mut matched_pairs = Vec::new();
     let mut fp = 0usize;
     let mut tp = 0usize;
 
@@ -157,13 +161,14 @@ fn match_frame(
         if gt_idx < n_gt && cost[i][gt_idx] < f64::MAX / 2.0 {
             tp += 1;
             matched_gt.insert(gt_idx);
+            matched_pairs.push((gt_idx, detections[i].class_type.clone()));
         } else {
             fp += 1;
         }
     }
     let fn_count = n_gt - matched_gt.len();
 
-    FrameMatch { tp, fp, fn_count, matched_gt }
+    FrameMatch { tp, fp, fn_count, matched_gt, matched_pairs }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -194,7 +199,9 @@ fn load_labels(label_dir: &str) -> Vec<Vec<LabelItem>> {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 fn print_metrics(title: &str, stats: &ClassStats, n_gt: usize, n_det: usize) {
-    println!("  {:<25}", title);
+    if !title.is_empty() {
+        println!("  {:<25}", title);
+    }
     println!("    GT: {:>4}  | 检测: {:>4}  | TP: {:>4}  FP: {:>4}  FN: {:>4}",
         n_gt, n_det, stats.tp, stats.fp, stats.fn_);
     println!("    Precision: {:.1}%  | Recall: {:.1}%  | F1: {:.4}",
@@ -307,6 +314,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //  累计统计
     // ═════════════════════════════════════════════════════════════════════
     let mut overall = ClassStats::default();
+    let mut overall_spatial = ClassStats::default();   // 空间匹配（忽略类名）
+    let mut tp_person = 0usize;                         // 正确分类为 person 的匹配
+    let mut tp_nonperson = 0usize;                      // 空间匹配但类名非 person
     let mut per_class: HashMap<String, ClassStats> = HashMap::new();
     let mut per_distance: Vec<ClassStats> = (0..4).map(|_| ClassStats::default()).collect();
 
@@ -314,10 +324,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let total_start = Instant::now();
     let mut total_gt_count = 0usize;
     let mut total_det_count = 0usize;
+    let mut total_det_person = 0usize;
 
     // 启动第一帧
     let mut l_handle = Some(tokio::spawn(async move { let _ = lidar.act().await; lidar }));
     let mut c_handle = Some(tokio::spawn(async move { let _ = camera.act().await; camera }));
+    let mut yolo_smoother = YoloSmoother::new();
 
     for i in 0..n_frames {
         // ── 等待检测完成 ─────────────────────────────────────────────────
@@ -328,6 +340,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let swapl = global_swapl();
         swapl.cld_buds_raw.swap();
         swapl.clr_objs.swap();
+        // YOLO 标签平滑（在 Camera→Fuse 之间）
+        yolo_smoother.smooth(&mut *swapl.clr_objs.consumer().lock().unwrap());
         swapl.clouds_filtered.swap();
         swapl.ground_buds.swap();
         swapl.wall_buds.swap();
@@ -343,12 +357,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let _ = tracker.run().await;
 
         let targets_all: Vec<Target> = swapl.targets.lock().unwrap().read().unwrap_or_default();
-        let targets: Vec<Target> = targets_all.into_iter()
-            .filter(|t| t.class_type == "person")
-            .collect();
+        let n_person = targets_all.iter().filter(|t| t.class_type == "person").count();
+        // 不按 class_type 过滤，让所有检测参与空间匹配
+        // 后续通过 matched_pairs 中的 class_type 区分 "正确分类" 和 "空间正确但类名不对"
+        total_det_person += n_person;
         let gt_items = &all_labels[i];
 
-        if gt_items.is_empty() && targets.is_empty() {
+        if gt_items.is_empty() && targets_all.is_empty() {
             continue;
         }
 
@@ -356,16 +371,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let gt_boxes: Vec<Box3D> = gt_items.iter().map(|item| item.to_box3d()).collect();
 
         total_gt_count += gt_items.len();
-        total_det_count += targets.len();
+        total_det_count += targets_all.len();
 
-        // ── 匈牙利匹配 ────────────────────────────────────────────────────
-        let fm = match_frame(&targets, gt_items.len(), &gt_boxes, iou_threshold, center_dist, &mut hungarian_buf);
+        // ── 匈牙利匹配（所有检测参与） ────────────────────────────────────
+        let fm = match_frame(&targets_all, gt_items.len(), &gt_boxes, iou_threshold, center_dist, &mut hungarian_buf);
 
+        // ── 按分类质量区分匹配 ────────────────────────────────────────────
+        let mut tp_strict = 0usize;
+        let mut tp_nonperson_here = 0usize;
+        for (_, det_class) in &fm.matched_pairs {
+            if det_class == "person" {
+                tp_strict += 1;
+            } else {
+                tp_nonperson_here += 1;
+            }
+        }
+        tp_person += tp_strict;
+        tp_nonperson += tp_nonperson_here;
 
-        // ── 累计 overall ─────────────────────────────────────────────────
-        overall.tp += fm.tp;
-        overall.fp += fm.fp;
-        overall.fn_ += fm.fn_count;
+        // ── 累计 overall（strict: 仅 person 检测参与） ──────────────────
+        // strict 的 TP = 匹配中 class_type=="person" 的数量
+        // strict 的 FN = GT - tp_strict（未匹配或匹配了但检测非 person 都算 FN）
+        // strict 的 FP = person 检测总数 - tp_strict
+        overall.tp += tp_strict;
+        overall.fp += n_person - tp_strict;
+        overall.fn_ += gt_items.len() - tp_strict;
+
+        // ── 累计 overall_spatial（所有检测参与） ─────────────────────────
+        overall_spatial.tp += fm.tp;
+        overall_spatial.fp += fm.fp;
+        overall_spatial.fn_ += fm.fn_count;
 
         // ── 按类别 + 按距离累计 ───────────────────────────────────────────
         // TP: matched GT → 加 TP 到对应类别和距离桶
@@ -396,8 +431,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // 因为 FP 没有对应 GT，无法确定其类别
 
         if i % 50 == 0 || i == n_frames - 1 || i < 5 {
-            println!("  进度: {:>4}/{} | GT: {:>3} 检测: {:>3} | TP: {} FP: {} FN: {}",
-                i + 1, n_frames, gt_items.len(), targets.len(),
+            println!("  进度: {:>4}/{} | GT: {:>3} 检测: {:>3}(person:{}) | TP: {} FP: {} FN: {}",
+                i + 1, n_frames, gt_items.len(), targets_all.len(), n_person,
                 fm.tp, fm.fp, fm.fn_count);
         }
     }
@@ -420,7 +455,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  配置: {}  |  帧数: {}  |  耗时: {:.1}s",
         match_desc, n_frames, total_elapsed);
     println!();
-    print_metrics("总体 (Overall)", &overall, total_gt_count, total_det_count);
+    println!("  ── 严格评估 (仅 class_type == \"person\") ──");
+    print_metrics("", &overall, total_gt_count, total_det_person);
+    println!();
+    println!("  ── 空间评估 (全部检测参与匹配) ──");
+    print_metrics("", &overall_spatial, total_gt_count, total_det_count);
+    println!();
+
+    // ─── 行人类别识别分析 ──
+    let spatial_recall = if total_gt_count > 0 {
+        tp_person as f64 / total_gt_count as f64
+    } else { 0.0 };
+    let nonperson_recall = if total_gt_count > 0 {
+        tp_nonperson as f64 / total_gt_count as f64
+    } else { 0.0 };
+    println!("  ── 行人类别识别分析 ──");
+    println!("    空间匹配正确: {}/{} ({:.1}%)",
+        tp_person + tp_nonperson, total_gt_count,
+        (tp_person + tp_nonperson) as f64 / total_gt_count.max(1) as f64 * 100.0);
+    println!("    ├─ 正确分类为 person: {} ({:.1}%)", tp_person, spatial_recall * 100.0);
+    println!("    └─ 误分类为 obstacle/其他: {} ({:.1}%)", tp_nonperson, nonperson_recall * 100.0);
     println!();
 
     // ─── 按类别 ──
@@ -457,6 +511,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         iou_threshold: f32,
         n_frames: usize,
         n_gt: usize,
+        // strict (person-only)
         n_detections: usize,
         tp: usize,
         fp: usize,
@@ -464,6 +519,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         precision: f64,
         recall: f64,
         f1: f64,
+        // spatial (all detections)
+        n_detections_spatial: usize,
+        tp_spatial: usize,
+        fp_spatial: usize,
+        fn_spatial: usize,
+        precision_spatial: f64,
+        recall_spatial: f64,
+        f1_spatial: f64,
+        // classification breakdown
+        tp_person: usize,
+        tp_nonperson: usize,
         per_class: Vec<ClassOutput>,
         per_distance: Vec<DistanceOutput>,
     }
@@ -486,13 +552,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         iou_threshold,
         n_frames,
         n_gt: total_gt_count,
-        n_detections: total_det_count,
+        n_detections: total_det_person,
         tp: overall.tp,
         fp: overall.fp,
         fn_: overall.fn_,
         precision: overall.precision(),
         recall: overall.recall(),
         f1: overall.f1(),
+        n_detections_spatial: total_det_count,
+        tp_spatial: overall_spatial.tp,
+        fp_spatial: overall_spatial.fp,
+        fn_spatial: overall_spatial.fn_,
+        precision_spatial: overall_spatial.precision(),
+        recall_spatial: overall_spatial.recall(),
+        f1_spatial: overall_spatial.f1(),
+        tp_person,
+        tp_nonperson,
         per_class: {
             let mut v: Vec<_> = per_class.iter().map(|(name, s)| ClassOutput {
                 name: name.clone(),
@@ -529,13 +604,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         writeln!(f, "iou_threshold,{:.1}", iou_threshold)?;
         writeln!(f, "n_frames,{}", n_frames)?;
         writeln!(f, "n_gt,{}", total_gt_count)?;
-        writeln!(f, "n_detections,{}", total_det_count)?;
+        writeln!(f, "n_detections,{}", total_det_person)?;
         writeln!(f, "tp,{}", overall.tp)?;
         writeln!(f, "fp,{}", overall.fp)?;
         writeln!(f, "fn,{}", overall.fn_)?;
         writeln!(f, "precision,{:.4}", overall.precision())?;
         writeln!(f, "recall,{:.4}", overall.recall())?;
         writeln!(f, "f1,{:.4}", overall.f1())?;
+        writeln!(f, "n_detections_spatial,{}", total_det_count)?;
+        writeln!(f, "tp_spatial,{}", overall_spatial.tp)?;
+        writeln!(f, "fp_spatial,{}", overall_spatial.fp)?;
+        writeln!(f, "fn_spatial,{}", overall_spatial.fn_)?;
+        writeln!(f, "precision_spatial,{:.4}", overall_spatial.precision())?;
+        writeln!(f, "recall_spatial,{:.4}", overall_spatial.recall())?;
+        writeln!(f, "f1_spatial,{:.4}", overall_spatial.f1())?;
+        writeln!(f, "tp_person,{}", tp_person)?;
+        writeln!(f, "tp_nonperson,{}", tp_nonperson)?;
         writeln!(f, "elapsed_s,{:.1}", total_elapsed)?;
     }
     println!("  CSV → {}/eval_result.csv", out_dir.display());

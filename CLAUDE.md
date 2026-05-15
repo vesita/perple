@@ -113,8 +113,15 @@ Raw Cloud (~20k pts)
 
 Key insight: image-based wall detection (BevEdLines) outperforms all geometric methods (RANSAC, CC, normal-based, SVD). Pipeline simplified by removing pre/post denoising as fixed stages — each clustering strategy handles its own denoise.
 
+### Key Fixes
+
+- **Density weighting `cluster.rs`**: Formula changed from `1/r^α` → `r^α` (sign inversion bug). Original code amplified centroid bias toward sensor instead of compensating. Fix improved F1 by +8.3%.
+- **Tracker container**: `HashMap` → `BTreeMap` for `tracked_objects` to eliminate iteration-order non-determinism.
+- **YOLO label smoothing**: `yolo_smooth.rs` — frame-to-frame momentum filter on YOLO "person" labels, reducing label flicker.
+
 - `src/cloud/wall.rs` — WallPickStrategy trait + XYGrid shared infra + wall module root: only `bev_edlines` (active) and `bev_hough` (reserved) remain
 - `src/cloud/wall/bev_edlines.rs` — BEV image + OpenCV EDLines 边缘检测墙体提取
 - `src/cloud/wall/bev_hough.rs` — Hough 变换备选
 - `src/cloud/classify/core.rs` — Three-stage pipeline: ground → wall → cluster (no denoise stages)
+- `src/yolo_smooth.rs` — YOLO 帧间标签平滑模块（Camera→Fuse 间介入）
 - `src/bench/strategy.rs` — Preprocessor trait + GroundWallPreprocessor (地面→墙体, 无降噪) + GroundPreprocessor

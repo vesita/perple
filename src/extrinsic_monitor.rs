@@ -56,9 +56,9 @@ pub struct ExtrinsicMonitor {
 impl ExtrinsicMonitor {
     pub fn new() -> Self {
         let config = fixif();
-        let cam_from_lidar = Matrix4::from(config.camera.extrinsic);
+        let cam_from_lidar = Matrix4::from(config.camera.extrinsic).transpose();
         Self {
-            intrinsic: Matrix3::from(config.camera.intrinsic),
+            intrinsic: Matrix3::from(config.camera.intrinsic).transpose(),
             cam_from_lidar,
             frame_count: 0,
             csv_writer: None,

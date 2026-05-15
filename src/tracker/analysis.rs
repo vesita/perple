@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crate::tracker::object::TrackedObject;
 
@@ -68,10 +68,19 @@ pub(crate) fn analyze_velocity_clusters_from_snapshot(snapshot: &[(usize, [f32; 
 }
 
 /// 点云投票分析（直接引用 tracked_objects，无拷贝）
+///
+/// 动态投票：将所有历史帧的点云按时间分为两组（前半段 vs 后半段），
+/// 累积组内所有点后比较运动方向与 Kalman 速度的一致性。
+/// 相比原实现（只比两帧），累积后点更多，投票更稳定，减少目标因稀疏点云漏判。
+///
+/// 速度方向过滤（参考 LV-DOT 方法）：
+/// - 位移方向与 Kalman 速度相反的点的排除出投票基数（不是简单地不给票）
+/// - 位移幅度小于 `point_vel_threshold` 的不计为运动票
 pub(crate) fn analyze_point_cloud_voting_direct(
-    objects: &HashMap<usize, TrackedObject>,
+    objects: &BTreeMap<usize, TrackedObject>,
     vote_threshold: f32,
     skip_frames: usize,
+    point_vel_threshold: f32,
 ) -> Vec<usize> {
     let mut pass_ids = Vec::new();
     let ids: Vec<usize> = objects.keys().copied().collect();
@@ -83,14 +92,8 @@ pub(crate) fn analyze_point_cloud_voting_direct(
         };
 
         let hist_len = obj.point_cloud_history.len();
-        if hist_len <= skip_frames {
-            continue;
-        }
-
-        let old_pts = &obj.point_cloud_history[hist_len - 1 - skip_frames];
-        let new_pts = &obj.point_cloud_history[hist_len - 1];
-
-        if old_pts.is_empty() || new_pts.is_empty() {
+        // 至少需要 skip_frames+1 帧才有足够的前后对比
+        if hist_len < skip_frames + 2 {
             continue;
         }
 
@@ -99,17 +102,31 @@ pub(crate) fn analyze_point_cloud_voting_direct(
             continue;
         }
 
-        let vel = obj.kalman_filter.get_velocity();
+        // ─── 累积投票：把所有历史帧分为前后两组 ─────────────────
+        let mid = hist_len - 1 - skip_frames; // 分割点
+        let mut old_all: Vec<[f32; 3]> = Vec::new();
+        let mut new_all: Vec<[f32; 3]> = Vec::new();
 
-        let mut votes = 0usize;
-        let total = new_pts.len().min(old_pts.len());
-        if total == 0 {
+        for i in 0..hist_len {
+            if i < mid {
+                old_all.extend_from_slice(&obj.point_cloud_history[i]);
+            } else {
+                new_all.extend_from_slice(&obj.point_cloud_history[i]);
+            }
+        }
+
+        if old_all.is_empty() || new_all.is_empty() {
             continue;
         }
 
+        let vel = obj.kalman_filter.get_velocity();
+
+        let mut votes = 0usize;
+        let mut valid_count = 0usize; // 排除方向相反的点后的计数
+        let total = new_all.len().min(old_all.len());
         for i in 0..total {
-            let np = new_pts[i];
-            let best_old = old_pts.iter().min_by(|a, b| {
+            let np = new_all[i];
+            let best_old = old_all.iter().min_by(|a, b| {
                 let da = (np[0] - a[0]).powi(2) + (np[1] - a[1]).powi(2) + (np[2] - a[2]).powi(2);
                 let db = (np[0] - b[0]).powi(2) + (np[1] - b[1]).powi(2) + (np[2] - b[2]).powi(2);
                 da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
@@ -119,13 +136,23 @@ pub(crate) fn analyze_point_cloud_voting_direct(
                 let dy = np[1] - op[1];
                 let dz = np[2] - op[2];
                 let dot = dx * vel.x as f32 + dy * vel.y as f32 + dz * vel.z as f32;
-                if dot > 0.0 {
+                if dot <= 0.0 {
+                    // 方向相反 → 排除此点（LV-DOT: 方向不一致的点不应参与投票）
+                    continue;
+                }
+                valid_count += 1;
+                // 位移幅度 > 阈值才计为运动票
+                let disp_mag = (dx * dx + dy * dy + dz * dz).sqrt();
+                if disp_mag > point_vel_threshold {
                     votes += 1;
                 }
             }
         }
 
-        let ratio = votes as f32 / total as f32;
+        if valid_count == 0 {
+            continue;
+        }
+        let ratio = votes as f32 / valid_count as f32;
         if ratio >= vote_threshold {
             pass_ids.push(*id);
         }

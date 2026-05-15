@@ -237,8 +237,8 @@ impl Classify {
             let guard = self.last_yolo.lock().unwrap();
             if !guard.is_empty() {
                 let config = crate::config::fixif();
-                let intrinsic = nalgebra::Matrix3::from(config.camera.intrinsic);
-                let cam_from_lidar = nalgebra::Matrix4::from(config.camera.extrinsic);
+                let intrinsic = nalgebra::Matrix3::from(config.camera.intrinsic).transpose();
+                let cam_from_lidar = nalgebra::Matrix4::from(config.camera.extrinsic).transpose();
                 self.cluster.refine_with_yolo(&guard, &intrinsic, &cam_from_lidar);
             }
         }

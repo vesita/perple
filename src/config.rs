@@ -1,11 +1,20 @@
-use std::{fs, sync::LazyLock};
+use std::{fs, sync::OnceLock};
 use serde::{Deserialize, Serialize};
 
-// 调查到一般使用LazyLock和OnceLock替换lazy_static和once_cell
-static THE_FIXIF: LazyLock<Config> = LazyLock::new(Config::new);
+static THE_FIXIF: OnceLock<Config> = OnceLock::new();
+
+/// Initialize config before first access to `fixif()`.
+/// Used by eval/bench tools that need to override config at runtime.
+pub fn init_config(config: Config) {
+    THE_FIXIF.set(config).expect("config already initialized");
+}
 
 pub fn fixif() -> &'static Config {
-    &THE_FIXIF
+    THE_FIXIF.get_or_init(|| {
+        let config_path = std::env::var("PERPLE_CONFIG_PATH")
+            .unwrap_or_else(|_| "config/default.toml".to_string());
+        Config::from_file(&config_path)
+    })
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -89,6 +98,7 @@ pub struct TrackerConfig {
     pub use_point_cloud_voting: bool,
     pub point_cloud_vote_threshold: f32,
     pub point_cloud_skip_frames: usize,
+    pub point_vel_threshold: f32,
     pub point_cloud_history_len: usize,
     pub use_fix_size: bool,
     pub fix_size_frames: usize,
@@ -120,22 +130,23 @@ pub struct TrackerConfig {
 
 impl Config {
     pub fn new() -> Self {
-        let config_path = "config/default.toml";
-        
-        match fs::read_to_string(config_path) {
+        Self::from_file("config/default.toml")
+    }
+
+    /// 从 TOML 文件加载配置
+    pub fn from_file(path: &str) -> Self {
+        match fs::read_to_string(path) {
             Ok(config_str) => {
                 match toml::from_str(&config_str) {
                     Ok(config) => config,
                     Err(e) => {
-                        eprintln!("解析配置文件 {} 失败: {}", config_path, e);
-                        eprintln!("请检查配置文件格式是否正确");
+                        eprintln!("解析配置文件 {} 失败: {}", path, e);
                         std::process::exit(1);
                     }
                 }
             },
             Err(e) => {
-                eprintln!("读取配置文件 {} 失败: {}", config_path, e);
-                eprintln!("请确保配置文件存在且路径正确");
+                eprintln!("读取配置文件 {} 失败: {}", path, e);
                 std::process::exit(1);
             }
         }
@@ -242,6 +253,7 @@ impl Config {
             update_tracker!(use_point_cloud_voting);
             update_tracker!(point_cloud_vote_threshold);
             update_tracker!(point_cloud_skip_frames);
+            update_tracker!(point_vel_threshold);
             update_tracker!(point_cloud_history_len);
             update_tracker!(use_fix_size);
             update_tracker!(fix_size_frames);
@@ -334,6 +346,7 @@ struct PartialTrackerConfig {
     pub use_point_cloud_voting: Option<bool>,
     pub point_cloud_vote_threshold: Option<f32>,
     pub point_cloud_skip_frames: Option<usize>,
+    pub point_vel_threshold: Option<f32>,
     pub point_cloud_history_len: Option<usize>,
     pub use_fix_size: Option<bool>,
     pub fix_size_frames: Option<usize>,

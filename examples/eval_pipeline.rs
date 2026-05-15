@@ -63,7 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut l_handle = Some(tokio::spawn(async move { let _ = lidar.act().await; lidar }));
     let mut c_handle = Some(tokio::spawn(async move { let _ = camera.act().await; camera }));
 
-    let mut stats: Vec<(u32, usize, usize, usize)> = Vec::new();
+    let mut stats: Vec<(u32, usize, usize, usize, usize)> = Vec::new();
     let total_start = Instant::now();
 
     for i in 0..n_total {
@@ -92,9 +92,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let targets: Vec<Target> = swapl.targets.lock().unwrap().read().unwrap_or_default();
         let n_moving = targets.iter().filter(|t| t.classification == "moving").count();
         let n_person = targets.iter().filter(|t| t.class_type == "person").count();
+        let n_obstacle = targets.iter().filter(|t| t.class_type != "person").count();
 
         if file_num >= start_file && file_num <= end_file {
-            stats.push((file_num, clusters, n_moving, n_person));
+            stats.push((file_num, clusters, n_moving, n_person, n_obstacle));
         }
 
         if i % 100 == 0 {
@@ -113,7 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let n_folds = stats.len() / fold_size;
         let total_used = n_folds * fold_size;
         println!("  拆分为 {} 折 × {} 帧（丢弃 {} 帧）\n", n_folds, fold_size, stats.len() - total_used);
-        println!("  {:>6}  {:>6}  {:>5}  {:>6}  {:>6}  {:>5}", "Fold", "文件范围", "帧数", "簇均值", "行人均", "有人帧");
+        println!("  {:>6}  {:>6}  {:>5}  {:>6}  {:>6}  {:>6}  {:>5}", "Fold", "文件范围", "帧数", "簇均值", "行人均", "障碍均", "有人帧");
 
         for f in 0..n_folds {
             let beg = f * fold_size;
@@ -124,10 +125,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let last_file = seg.last().map(|s| s.0).unwrap_or(0);
             let avg_c = seg.iter().map(|s| s.1).sum::<usize>() as f64 / fold_size as f64;
             let avg_p = seg.iter().map(|s| s.3).sum::<usize>() as f64 / fold_size as f64;
+            let avg_o = seg.iter().map(|s| s.4).sum::<usize>() as f64 / fold_size as f64;
             let with_p = seg.iter().filter(|s| s.3 > 0).count();
 
-            println!("  {:>3}     {:>3}-{:>3}  {:>5}  {:>6.1}  {:>6.1}  {:>3}/{} ({:>2}%)",
-                f + 1, first_file, last_file, fold_size, avg_c, avg_p,
+            println!("  {:>3}     {:>3}-{:>3}  {:>5}  {:>6.1}  {:>6.1}  {:>6.1}  {:>3}/{} ({:>2}%)",
+                f + 1, first_file, last_file, fold_size, avg_c, avg_p, avg_o,
                 with_p, fold_size, with_p * 100 / fold_size);
         }
 
@@ -142,12 +144,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         let with_person = stats.iter().filter(|s| s.3 > 0).count();
         let total_p: usize = stats.iter().map(|s| s.3).sum();
+        let total_o: usize = stats.iter().map(|s| s.4).sum();
         let max_concurrent_p = stats.iter().map(|s| s.3).max().unwrap_or(0);
-        println!("  有行人帧 {}/{} ({:.1}%) | 累计行人 {} | 帧均 {:.2} | 最多 {} 人",
+        println!("  有行人帧 {}/{} ({:.1}%) | 累计行人 {} | 累计障碍 {} | 帧均 {:.2}/{:.2} | 最多 {} 人",
             with_person, stats.len(),
             with_person as f64 / stats.len() as f64 * 100.0,
-            total_p,
+            total_p, total_o,
             total_p as f64 / stats.len() as f64,
+            total_o as f64 / stats.len() as f64,
             max_concurrent_p);
     }
 

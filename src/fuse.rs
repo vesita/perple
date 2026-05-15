@@ -23,9 +23,9 @@ impl Fuse {
         let config = fixif();
         // camera.extrinsic = lidar→camera 变换矩阵 [R|t]
         // 与标准针孔模型定义一致：P_cam = extrinsic * P_lidar
-        let cam_from_lidar = Matrix4::from(config.camera.extrinsic);
+        let cam_from_lidar = Matrix4::from(config.camera.extrinsic).transpose();
         Self {
-            intrinsic: Matrix3::from(config.camera.intrinsic),
+            intrinsic: Matrix3::from(config.camera.intrinsic).transpose(),
             cam_from_lidar,
         }
     }

@@ -77,6 +77,10 @@ pub(crate) struct TrackedObject {
     pub(crate) consecutive_matches: u32,
     /// 轨迹评分（match +bonus, miss -penalty, 用于生命周期决策）
     pub(crate) score: f64,
+    /// 是否由几何 fallback 标记为 person
+    /// 若为 true，correct() 中允许被后续帧的非 person 标签覆盖，
+    /// 避免几何启发式误报被状态锁永久保留。
+    pub(crate) geo_labeled: bool,
 }
 
 impl TrackedObject {
@@ -131,6 +135,7 @@ impl TrackedObject {
             status: TrackStatus::Tentative,
             consecutive_matches: 0,
             score: 0.0,
+            geo_labeled: false,
         })
     }
 
@@ -248,7 +253,11 @@ impl TrackedObject {
 
         self.appearance_count += 1;
         // 保留 person 标签：避免 YOLO 间歇性漏检导致标签闪烁
-        if !(self.class_type == "person" && new_class_type != "person") {
+        // 几何 fallback 标签 (geo_labeled) 可被后续观测覆盖，避免误报锁死
+        if self.geo_labeled {
+            self.class_type = new_class_type;
+            self.geo_labeled = false;
+        } else if !(self.class_type == "person" && new_class_type != "person") {
             self.class_type = new_class_type;
         }
         self.confidence = new_confidence;

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::time::{Instant, SystemTime};
 
 use crate::{
@@ -67,7 +67,7 @@ pub struct Tracker {
     /// DualBuf consumer：后融合阶段读取检测阶段写入的体素过滤点云
     clouds_filtered: DualBuf<Vec<[f32; 3]>>,
     next_id: usize,
-    tracked_objects: HashMap<usize, TrackedObject>,
+    tracked_objects: BTreeMap<usize, TrackedObject>,
     max_disappeared: u32,
     min_confidence: f32,
     min_appearances: u32,
@@ -75,6 +75,7 @@ pub struct Tracker {
     use_point_cloud_voting: bool,
     point_cloud_vote_threshold: f32,
     point_cloud_skip_frames: usize,
+    point_vel_threshold: f32,
     point_cloud_history_len: usize,
     /// fix_size 配置
     use_fix_size: bool,
@@ -121,13 +122,14 @@ impl Tracker {
             target: swapl.targets.clone(),
             clouds_filtered: swapl.clouds_filtered.clone(),
             next_id: 1,
-            tracked_objects: HashMap::new(),
+            tracked_objects: BTreeMap::new(),
             max_disappeared: cfg.max_disappeared,
             min_confidence: cfg.min_confidence,
             min_appearances: cfg.min_appearances,
             use_point_cloud_voting: cfg.use_point_cloud_voting,
             point_cloud_vote_threshold: cfg.point_cloud_vote_threshold,
             point_cloud_skip_frames: cfg.point_cloud_skip_frames,
+            point_vel_threshold: cfg.point_vel_threshold,
             point_cloud_history_len: cfg.point_cloud_history_len,
             use_fix_size: cfg.use_fix_size,
             fix_size_frames: cfg.fix_size_frames,
@@ -330,6 +332,7 @@ impl Tracker {
                 &self.tracked_objects,
                 self.point_cloud_vote_threshold,
                 self.point_cloud_skip_frames,
+                self.point_vel_threshold,
             )
         } else {
             Vec::new()
@@ -538,7 +541,7 @@ impl Tracker {
             &mut self.sq_buf,
         );
 
-        // 步骤 3: 修正匹配的轨迹（matches 内含实际 obj_id，修复 HashMap 顺序 Bug）
+        // 步骤 3: 修正匹配的轨迹
         let _t_update = Instant::now();
         let mut updated_ids: Vec<usize> = Vec::new();
         for (obj_id, det_idx) in &matches {
@@ -661,6 +664,7 @@ impl Tracker {
                 &self.tracked_objects,
                 self.point_cloud_vote_threshold,
                 self.point_cloud_skip_frames,
+                self.point_vel_threshold,
             )
         } else {
             Vec::new()

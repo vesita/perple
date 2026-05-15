@@ -54,13 +54,13 @@ impl Cluster {
         let box3d = Box3D::from_cloud_aabb(&pts, 0.0);
 
         let centroid = if alpha > 0.0 {
-            // 密度感知加权：LiDAR 近密远疏，用 1/r^α 补偿质心被拉向传感器的系统偏差
+            // 密度感知加权：LiDAR 近密远疏，用 r^α 补偿质心被拉向传感器的系统偏差
             let eps = 1e-6;
             let mut w_sum = 0.0f32;
             let mut weighted = [0.0f32; 3];
             for p in &pts {
                 let r = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt().max(eps);
-                let w = 1.0 / r.powf(alpha);
+                let w = r.powf(alpha);
                 weighted[0] += p[0] * w;
                 weighted[1] += p[1] * w;
                 weighted[2] += p[2] * w;
@@ -111,6 +111,16 @@ pub fn clusters_to_cldbuds(all_points: &[[f32; 3]], objects: &[Vec<usize>]) -> V
 
             // box 过大过滤（室内场景物体不应过大）
             if w > 3.0 { return None; }
+            // 盒子中心过低 → 地面残留噪点（用 AABB 中心 Z，不受密度加权偏移影响）
+            if box3d.center().z < 0.2 { return None; }
+
+            // 边界过滤：盒子超出有效检测范围时丢弃（避免截断/不完整的目标）
+            let max_r = cfg.max_range;
+            let c = box3d.center();
+            let center_dist = (c.x * c.x + c.y * c.y).sqrt();
+            let half_diag = (box3d.length * box3d.length + box3d.width * box3d.width).sqrt() * 0.5;
+            if center_dist + half_diag > max_r { return None; }
+
             // 点云稀疏度过滤：大体积内点数过少 → 离群噪点
             let n_pts = cluster.len() as f32;
             let volume = box3d.length * box3d.width * h;

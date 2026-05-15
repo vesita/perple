@@ -9,6 +9,7 @@ pub mod swapl;
 pub mod optional;
 pub mod bench;
 pub mod extrinsic_monitor;
+pub mod yolo_smooth;
 
 #[cfg(feature = "ros1")]
 pub mod ros_bridge;
