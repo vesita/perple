@@ -229,6 +229,18 @@ impl Config {
         update_cluster_field!(ceiling_height);
         update_cluster_field!(denoise_radius);
         update_cluster_field!(denoise_min_pts);
+        // Option-typed fields — macro destructures to inner type, re-wrap
+        if let Some(ref cluster) = partial_config.cluster {
+            if let Some(value) = cluster.min_points_per_cluster {
+                self.cluster.min_points_per_cluster = Some(value);
+            }
+            if let Some(value) = cluster.max_points_per_node {
+                self.cluster.max_points_per_node = Some(value);
+            }
+            if let Some(value) = cluster.max_tree_depth {
+                self.cluster.max_tree_depth = Some(value);
+            }
+        }
 
         update_nested_field!(camera, intrinsic);
         update_nested_field!(camera, extrinsic);

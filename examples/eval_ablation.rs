@@ -252,7 +252,7 @@ fn build_override_toml(args: &Args) -> String {
 
     // 降噪参数 → [cluster] 段下字段
     if let Some(ref s) = args.denoise_toml {
-        if !parts.is_empty() && !parts.iter().any(|p| p.starts_with("\n[cluster]")) {
+        if !parts.iter().any(|p| p.starts_with("\n[cluster]")) {
             parts.push("\n[cluster]".to_string());
         }
         for pair in s.split(',') {
