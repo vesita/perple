@@ -1,5 +1,5 @@
-name = "四叉树叶节点 LV-DOT 聚类"
-type = "lvdot_qt"
+name = "四叉树剪叶聚类"
+type = "prune_qt"
 preprocessor = "ground"
 
 [quick]

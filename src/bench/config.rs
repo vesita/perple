@@ -88,7 +88,7 @@ pub fn param_dirname(strategy_type: &str, params: &toml::Table) -> String {
         "gpf" => format!("l{}_s{:.1}_d{:.2}", int(params, "n_lpr"), float(params, "th_seed"), float(params, "th_dist")),
         "xy_grid_dbscan" | "xy_grid_dbscan_grid" | "lvdot_grid" | "lvdot" => format!("e{:.2}_m{}", float(params, "eps"), int(params, "min_pts")),
         "xy_dbscan" => format!("e{:.2}_m{}", float(params, "eps"), int(params, "min_pts")),
-        "lvdot_qt" => format!("o{}_e{:.2}_m{}", int(params, "min_occ"), float(params, "eps"), int(params, "min_pts")),
+        "prune_qt" | "lvdot_qt" => format!("o{}_e{:.2}_m{}", int(params, "min_occ"), float(params, "eps"), int(params, "min_pts")),
         "range_image" => format!("a{:.1}_e{:.1}_t{:.1}_m{}",
             float(params, "azimuth"), float(params, "elevation"),
             float(params, "threshold"), int(params, "min_pts")),

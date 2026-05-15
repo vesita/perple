@@ -42,6 +42,7 @@ pub struct Config {
     pub wall_eps: f32,
     pub wall_min_pts: usize,
     pub wall_min_z_span: f32,
+    pub wall_angle_tolerance: f32,
 
     // 地面检测参数
     pub ground_strategy: String,
@@ -80,6 +81,8 @@ pub struct ClusterConfig {
     pub ceiling_height: f32,
     pub denoise_radius: f32,
     pub denoise_min_pts: usize,
+    // 剪叶聚类 (prune_qt) 参数
+    pub min_occ: usize,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -223,6 +226,7 @@ impl Config {
         update_field!(wall_eps);
         update_field!(wall_min_pts);
         update_field!(wall_min_z_span);
+        update_field!(wall_angle_tolerance);
 
         update_field!(ground_strategy);
         update_field!(ground_expand);
@@ -247,6 +251,7 @@ impl Config {
         update_cluster_field!(ceiling_height);
         update_cluster_field!(denoise_radius);
         update_cluster_field!(denoise_min_pts);
+        update_cluster_field!(min_occ);
         // Option-typed fields — macro destructures to inner type, re-wrap
         if let Some(ref cluster) = partial_config.cluster {
             if let Some(value) = cluster.min_points_per_cluster {
@@ -359,6 +364,7 @@ struct PartialConfig {
     pub wall_eps: Option<f32>,
     pub wall_min_pts: Option<usize>,
     pub wall_min_z_span: Option<f32>,
+    pub wall_angle_tolerance: Option<f32>,
 
     pub ground_strategy: Option<String>,
     pub ground_expand: Option<f32>,
@@ -448,4 +454,5 @@ struct PartialClusterConfig {
     pub ceiling_height: Option<f32>,
     pub denoise_radius: Option<f32>,
     pub denoise_min_pts: Option<usize>,
+    pub min_occ: Option<usize>,
 }

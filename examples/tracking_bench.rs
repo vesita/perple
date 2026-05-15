@@ -25,7 +25,7 @@ use perple::cloud::classify::cluster::clusters_to_cldbuds;
 use perple::cloud::classify::strategy::{
     ClusteringStrategy, CcCluster,
     DbscanStrategy, RangeImageStrategy,
-    XYGridDBSCAN, LvdotClusterStrategy, LvdotQt,
+    XYGridDBSCAN, LvdotClusterStrategy, PruneQt,
 };
 use perple::cloud::wall::{WallPickStrategy, BevEdLines};
 use perple::cloud::CldBud;
@@ -233,8 +233,8 @@ fn build_strategies() -> Vec<Box<dyn ClusteringStrategy>> {
             cfg.cluster.min_points_per_cluster.unwrap_or(3) as usize,
             0.30, 5,
         )),
-        // 3. lvdot_qt — 四叉树密集叶子过滤
-        Box::new(LvdotQt::new().with_params(
+        // 3. prune_qt — 四叉树剪叶过滤
+        Box::new(PruneQt::new().with_params(
             cfg.cluster.min_points_per_cluster.unwrap_or(3) as usize,
             0.30, 5,
         )),
@@ -290,7 +290,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     cfg.cluster.min_points_per_cluster.unwrap_or(3) as usize,
                     0.30, 5,
                 )),
-                "lvdot_qt" => Box::new(LvdotQt::new().with_params(
+                "lvdot_qt" | "prune_qt" => Box::new(PruneQt::new().with_params(
                     cfg.cluster.min_points_per_cluster.unwrap_or(3) as usize,
                     0.30, 5,
                 )),

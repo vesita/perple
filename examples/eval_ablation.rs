@@ -477,6 +477,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         overall_all.fn_ += fm_all.fn_count;
 
         // 分类质量分析：匹配的检测是 person 还是非 person
+        // 注意：这些分类统计只用于分析识别准确率，不影响 overall_all 的 TP/FP 计数。
+        // overall_all 基于空间匹配（忽略类名），所有检测参与，FP 覆盖全部误检。
+        // 下面的 overall_person（Mode B）则只统计 person 类检测的 FP。
+        // 详见 memory 中跟踪策略有效性的记录：分类质量高（87.9%），瓶颈在空间召回率（65.4%）。
         for (_, det_class) in &fm_all.matched_pairs {
             if det_class == "person" {
                 tp_person += 1;

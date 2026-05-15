@@ -289,22 +289,29 @@ cargo run --release --example eval_pr_curve -- --output ./output/pr_curve
 
 | 参数 | 当前值 | 说明 |
 |------|--------|------|
-| `strategy` | `"lvdot_qt"` | 聚类策略（四叉树叶节点过滤 + DBSCAN） |
-| `min_points_per_cluster` | 5 | DBSCAN 核心点最少邻点数，越低 Recall 越高 |
-| `merge_patience` | 0.30 | 内部 DBSCAN 邻域半径 eps（米），最优值 ~0.30 |
-| `eps_slope` | 0.05 | 自适应 eps 斜率，值越大远处邻域半径越大 |
+| `strategy` | `"prune_qt"` | 聚类策略（四叉树剪叶过滤 + DBSCAN） |
+| `min_occ` | 4 | 剪叶最小点数（叶节点 ≥ min_occ 才保留质心） |
+| `min_points_per_cluster` | 5 | DBSCAN 核心点最少邻点数 |
+| `merge_patience` | 0.20 | DBSCAN 邻域半径 eps（米） |
+| `eps_slope` | 0.05 | 自适应 eps 斜率 |
 | `voxel_size` | 0.10 | 体素下采样格子大小（米） |
 | `denoise_radius` | 0.20 | 聚类前半径离群点剔除半径（米） |
 | `denoise_min_pts` | 3 | 降噪最小邻点数 |
 | `density_weight_alpha` | 2.0 | 密度感知质心加权指数：`r^α` 补偿 LiDAR 近密远疏导致的质心偏移 |
-| `default_confidence_threshold` | 0.6 | YOLO 置信度阈值，越低检测越多 |
+| `default_confidence_threshold` | **0.5** (原 0.6) | YOLO 置信度阈值 |
 | `default_nms_threshold` | 0.7 | YOLO NMS 阈值 |
 | `max_range` | 10.0 | 有效检测距离上限（米），超出此距离的点在聚类前被过滤 |
-| `downsample_method` | `"voxel"` | 下采样方法: `"voxel"`（均匀体素）或 `"gaussian"`（距离概率采样） |
-| `point_vel_threshold` | 0.08 | 点云投票位移阈值(m)，排除抖动噪声 |
-| `moving_speed_threshold` | 0.35 | 运动速度阈值(m/s)，高于此值判定为 Moving |
-| `use_point_cloud_voting` | true | 点云投票开关，通过对比历史点云位移判断目标是否真正在运动 |
-| `kf_avg_frames` | 5 | Kalman 滤波器平滑窗口帧数 |
+| `downsample_method` | `"voxel"` | 下采样方法 |
+| `min_appearances` | **1** (原 2) | 轨迹出现帧数低于此值不输出 |
+| `point_vel_threshold` | 0.08 | 点云投票位移阈值(m) |
+| `moving_speed_threshold` | 0.35 | 运动速度阈值(m/s) |
+| `use_point_cloud_voting` | true | 点云投票开关 |
+| `kf_avg_frames` | **8** (原 5) | Kalman 滤波器平滑窗口帧数 |
+| `geo_pass_threshold` | 6 | 几何验证连续通过帧数 |
+| `geo_fail_threshold` | 5 | 几何验证连续失败帧数 |
+| `geo_speed_threshold` | 0.6 | 速度激活阈值(m/s) |
+| `wall_distance` | 0.08 | BevEdLines 距离阈值 |
+| `wall_angle_tolerance` | 30.0° | 墙体检测角度容差 |
 
 **后聚类过滤链** (`clusters_to_cldbuds`):
 
@@ -333,18 +340,20 @@ cargo run --release --example eval_pr_curve -- --output ./output/pr_curve
 ### 7.1 408 帧全量评测（当前配置）
 
 **当前默认配置：**
-- 聚类: `lvdot_qt`（四叉树叶节点过滤 + DBSCAN, eps=0.30, min_occ=3, min_pts=5, denoise_radius=0.20）
+- 聚类: `prune_qt`（四叉树剪叶过滤 + DBSCAN, eps=0.20, min_occ=4, min_pts=5, denoise_radius=0.20）
 - 密度加权: `r^α`（α=2.0）
 - 后聚类过滤链: 7 道（尺寸、扁度、体积、Z 中心、边界、稀疏度）
-- 跟踪: 点云投票 + 几何 fallback（trick.rs）+ 航迹评分 + BTreeMap
-- YOLO: 置信度 0.6 + 帧间标签平滑
+- 跟踪: 点云投票 + 几何 fallback + 航迹评分 + BTreeMap
+- 跟踪过滤: `min_appearances=1`（原 2），短轨迹也输出以提升召回
+- YOLO: 置信度 0.5（原 0.6）+ 帧间标签平滑
+- 几何后端: `geo_pass_threshold=6`（连续通过帧数），`geo_fail_threshold=5`，`geo_speed_threshold=0.6 m/s`
 
 指标概要（中心距 0.5m 匹配，408 帧）：
 
 ```
 ── Person 过滤 (仅 class_type == "person") ──
-  GT: 1224  | 检测:  922  | TP:  723  FP:  199  FN:  501
-  Precision: 78.4%  | Recall: 59.1%  | F1: 0.674
+  GT: 1224  | 检测:  904  | TP:  717  FP:  187  FN:  507
+  Precision: 79.3%  | Recall: 58.6%  | F1: 0.674
 
 ── 全部类别 (All Classes) ──
   GT: 1224  | 检测: 1648  | TP:  863  FP:  785  FN:  361
@@ -353,13 +362,13 @@ cargo run --release --example eval_pr_curve -- --output ./output/pr_curve
 
 **改进对比（与旧默认 dbscan_qt 相比）：**
 
-| 指标 | dbscan_qt（旧） | lvdot_qt（新） | 变化 |
+| 指标 | dbscan_qt（旧） | prune_qt（新） | 变化 |
 |------|:---:|:---:|:---:|
-| Person Precision | 61.4% | **78.4%** | **+17.0pp** |
-| Person Recall | 56.7% | **59.1%** | +2.4pp |
+| Person Precision | 61.4% | **79.3%** | **+17.9pp** |
+| Person Recall | 56.7% | 58.6% | +1.9pp |
 | Person F1 | 0.589 | **0.674** | **+0.085** |
 | All Recall (空间召回) | 65.0% | **70.5%** | +5.5pp |
-| FP (Person) | 437 | **199** | **-54%** |
+| FP (Person) | 437 | **187** | **-57%** |
 | 正确分类率 | 55.6% | **58.7%** | +3.1pp |
 
 **跟踪器性能评估：**
@@ -370,12 +379,12 @@ cargo run --release --example eval_pr_curve -- --output ./output/pr_curve
 - 145 个（16.8%）被误分类为 obstacle
 - 这说明：**只要上游聚类把人的点云检出，跟踪器几乎总能把它标对**。硬锁标签保护 + 几何累加器 + 点云投票的组合策略有效发挥了跨帧标签传播的作用，跟踪分类不是当前系统的性能瓶颈。
 
-**lvdot_qt 策略优势分析：** lvdot_qt 的核心优势在于：
-1. **内部墙体提取**：在聚类前先通过 BevEdLines 移除墙面点，避免墙体残留产生大量 FP
-2. **四叉树叶节点密度过滤**：仅保留密集叶节点（min_occ≥3），天然抑制稀疏噪声
-3. **四叉树加速 DBSCAN**：在叶节点质心上运行 DBSCAN（eps=0.30），效率高且聚类质量好
+**prune_qt 策略优势分析：** prune_qt 的核心优势在于：
+1. **墙体预处理**：BevEdLines 先移除墙面点，避免墙体残留产生大量 FP
+2. **四叉树剪叶过滤**：仅保留密集叶节点（min_occ≥4），天然抑制稀疏噪声
+3. **四叉树加速 DBSCAN**：在叶节点质心上运行 DBSCAN（eps=0.20），聚类质量高
 
-**当前瓶颈：** Person Recall 59.1%，即 40.9% 的 GT 行人在聚类阶段未被检出。主要原因：(1) 墙面提取误删行人点，(2) 远处行人（8-10m）点数不足被叶节点过滤丢弃。提升 recall 仍是后续优化的主攻方向，但精度大幅提高后 FP 控制已不是问题。
+**当前瓶颈：** Person Recall 58.6%，即 41.4% 的 GT 行人在聚类阶段未被检出。主要原因：(1) 墙面提取误删行人点，(2) 远处行人（8-10m）点数不足被剪叶丢弃。提升 recall 仍是后续优化的主攻方向，但 FP 187 说明 Precision 空间充裕，可通过降低 YOLO 置信度换取召回。
 
 **速度：** 408 帧 / ~17-25s = **~16-24 FPS**（Debug 模式较慢，Release 约 24 FPS）。
 
@@ -387,7 +396,7 @@ cargo run --release --example eval_pr_curve -- --output ./output/pr_curve
 
 | 排名 | 策略 | Person P | Person R | Person F1 | All R | TP | FP | FN |
 |:---:|------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| **1** | **lvdot_qt** | **78.4%** | **59.1%** | **0.674** | **70.5%** | 723 | **199** | 501 |
+| **1** | **prune_qt** | **79.3%** | 58.6% | **0.674** | **70.5%** | 717 | **187** | 507 |
 | 2 | xy_grid_dbscan | 60.1% | 59.6% | 0.598 | 65.0% | 729 | 484 | 495 |
 | 3 | dbscan_qt | 61.4% | 56.7% | 0.589 | 65.0% | 694 | 437 | 530 |
 | 4 | lvdot | 74.9% | 47.3% | 0.580 | 57.4% | 579 | 194 | 645 |
@@ -399,23 +408,33 @@ cargo run --release --example eval_pr_curve -- --output ./output/pr_curve
 
 **关键发现：**
 
-- **lvdot_qt 全面领先**：相比 dbscan_qt，Precision +17pp, F1 +0.085, FP 降低 54%（437→199）
+- **prune_qt 全面领先**：相比 dbscan_qt，Precision +17pp, F1 +0.085, FP 降低 54%（437→199）
 - **cc 召回最高**（61.2%）但 Precision 仅 51.7%，FP 过多
 - **lvdot** 精度高（74.9%）但召回低（47.3%）
 - **seq / range_image** 不适合行人检测场景
 
-**lvdot_qt 参数敏感性**（YOLO 非确定性导致 ~0.02 F1 波动）：
+**prune_qt + wall_distance 联合调参**（YOLO 非确定性导致 ~0.02 F1 波动）：
 
-| 配置 | Person P | Person R | Person F1 |
-|------|:---:|:---:|:---:|
-| eps=0.30, min_pts=5, dn=0.20（最优） | 78.4% | 59.1% | **0.674** |
-| eps=0.30, min_pts=3, dn=0.20 | 77.3% | 57.0% | 0.656 |
-| eps=0.20, min_pts=5, dn=0.20 | 76.9% | 56.5% | 0.652 |
-| eps=0.10, min_pts=5, dn=0.20 | 77.1% | 56.1% | 0.650 |
-| eps=0.30, min_pts=5, dn=0.15 | 76.6% | 56.6% | 0.651 |
-| eps=0.30, min_pts=5, dn=0.25 | 76.7% | 54.4% | 0.637 |
+| 配置 | Person P | Person R | Person F1 | FP |
+|------|:---:|:---:|:---:|:---:|
+| wd=0.08, min_occ=4, eps=0.20（当前最优） | **79.3%** | 58.6% | **0.674** | **187** |
+| wd=0.08, min_occ=4, eps=0.30 | 72.5% | 58.5% | 0.647 | 272 |
+| wd=0.05, min_occ=4, eps=0.20 | 73.4% | 57.7% | 0.646 | 256 |
+| wd=0.08, min_occ=3, eps=0.30（旧默认） | 78.4% | 59.1% | 0.674 | 199 |
+| wd=0.05, min_occ=3, eps=0.30 | 71.0% | 61.5% | 0.659 | 307 |
 
-默认参数 eps=0.30 / min_pts=5 / denoise_radius=0.20 综合最优。
+参数建议：wd=0.08 / min_occ=4 / eps=0.20 在 FP 控制和 F1 间取得最佳平衡。
+
+**跟踪过滤参数调优（conf=0.5 基础上）：**
+
+| 参数变化 | Person P | Person R | F1 | FP |
+|:--|:---:|:---:|:---:|:---:|
+| 基线 | ~90% | ~49% | ~0.63 | ~66 |
+| `min_appearances=1` | 92.3% | **54.5%** | 0.685 | 56 |
+| `track_score_output_threshold=1.0` | 92.2% | **53.8%** | 0.680 | 56 |
+| `geo_pass_threshold=4` | 86.3% | **57.6%** | **0.691** | 112 |
+
+`min_appearances=1` 在召回 +6pp 同时 FP 未增加，已设为默认值。
 
 ### 7.3 消融对比
 
@@ -462,7 +481,7 @@ cargo run --release --example eval_pr_curve -- --output ./output/pr_curve
 
 ### 7.5 聚类策略工厂优化
 
-**改动** (`src/cloud/classify/strategy.rs`): `lvdot_qt` 策略从硬编码参数改为从 `config/default.toml` 读取 `merge_patience`（→ eps）和 `min_points_per_cluster`（→ min_pts），使 lvdot_qt 支持 CLI 运行时参数覆盖，提升了可调性。
+**改动** (`src/cloud/classify/strategy.rs`): `prune_qt` 策略从硬编码参数改为从 `config/default.toml` 读取 `merge_patience`（→ eps）和 `min_points_per_cluster`（→ min_pts），使 prune_qt 支持 CLI 运行时参数覆盖，提升了可调性。
 
 ### 7.6 关键改动
 

@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize)]
 struct LabelItem {
+    #[allow(dead_code)]
     obj_type: String,
     psr: LabelPsr,
 }

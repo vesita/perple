@@ -8,7 +8,7 @@ use perple::bench::{
 };
 use perple::cloud::classify::strategy::{
     ClusteringStrategy, CcCluster, RansacCluster, SeqCluster,
-    DbscanStrategy, DbscanGrid, RangeImageStrategy, XYGridDBSCAN, LvdotClusterStrategy, LvdotQt,
+    DbscanStrategy, DbscanGrid, RangeImageStrategy, XYGridDBSCAN, LvdotClusterStrategy, PruneQt,
 };
 use perple::cloud::wall::{WallPickStrategy, BevEdLines};
 use perple::config::fixif;
@@ -193,7 +193,7 @@ fn build_cluster_strategy(cli: &CliArgs) -> Box<dyn ClusteringStrategy> {
         "seq" => Box::new(SeqCluster::new(eps, min_pts).with_denoise(0.20, 3)),
         "xy_grid_dbscan" | "xy_grid_dbscan_grid" => Box::new(XYGridDBSCAN::with_params(wall, cell_size, 3, 12.0, eps, min_pts).with_pre_extracted_wall()),
         "lvdot_grid" | "lvdot" => Box::new(LvdotClusterStrategy::direct(voxel_size, min_occ, eps, min_pts)),
-        "lvdot_qt" => Box::new(LvdotQt::new().with_params(min_occ, eps, min_pts)),
+        "lvdot_qt" | "prune_qt" => Box::new(PruneQt::new().with_params(min_occ, eps, min_pts)),
         "xy_dbscan" => Box::new(LvdotClusterStrategy::direct(0.0, 1, eps, min_pts).with_pre_extracted_wall()),
         "dbscan_qt" | "dbscan" | "dbscan_adaptive" => Box::new(DbscanStrategy::with_params(0.10, 0.20, 10, 20, 10, 0.10)),
         "dbscan_grid" => Box::new(DbscanGrid::new(eps, min_pts)),
@@ -231,7 +231,7 @@ fn build_cluster_from_toml(strategy_type: &str, p: &toml::Table) -> Box<dyn Clus
         },
         "xy_grid_dbscan" | "xy_grid_dbscan_grid" => Box::new(XYGridDBSCAN::with_params(wall, f32(p, "cell_size"), 3, 12.0, f32(p, "eps"), i(p, "min_pts") as usize).with_pre_extracted_wall()),
         "lvdot_grid" | "lvdot" => Box::new(LvdotClusterStrategy::direct(f32(p, "voxel_size"), i(p, "min_occ") as usize, f32(p, "eps"), i(p, "min_pts") as usize)),
-        "lvdot_qt" => Box::new(LvdotQt::new().with_params(i(p, "min_occ") as usize, f32(p, "eps"), i(p, "min_pts") as usize)),
+        "lvdot_qt" | "prune_qt" => Box::new(PruneQt::new().with_params(i(p, "min_occ") as usize, f32(p, "eps"), i(p, "min_pts") as usize)),
         "xy_dbscan" => Box::new(LvdotClusterStrategy::direct(0.0, 1, f32(p, "eps"), i(p, "min_pts") as usize).with_pre_extracted_wall()),
         "range_image" => Box::new(RangeImageStrategy::with_params(f32(p, "azimuth"), f32(p, "elevation"), f32(p, "threshold"), i(p, "min_pts") as usize)),
         "dbscan_qt" | "dbscan_adaptive" => Box::new(DbscanStrategy::with_params(f32(p, "patience"), f32(p, "slope"), i(p, "min_pts") as usize, 20, 10, f32(p, "voxel_size"))),
@@ -248,7 +248,7 @@ impl StrategyBuilder for ClusterBuilder {
         // 墙提已在预处理阶段完成，所有聚类策略的输入统一为去地面+墙体后的点。
         // cc/ransac/seq 等新策略内部自带降噪，只需 non_wall 输入。
         let input_source = match strategy_type {
-            "lvdot" | "lvdot_grid" | "lvdot_qt" => InputSource::NonGround,
+            "lvdot" | "lvdot_grid" | "lvdot_qt" | "prune_qt" => InputSource::NonGround,
             _ => InputSource::Denoised,
         };
         Box::new(ClusterBenchCase::new(&format!("{}_{}", strategy_type, dirname), strategy, input_source))

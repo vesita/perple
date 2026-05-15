@@ -6,7 +6,7 @@ mod dbscan_grid;
 mod range_image;
 mod xy_grid_dbscan;
 mod lvdot_cluster;
-mod lvdot_qt;
+mod prune_qt;
 
 pub use cc_cluster::CcCluster;
 pub use ransac_cluster::RansacCluster;
@@ -16,7 +16,7 @@ pub use dbscan_grid::DbscanGrid;
 pub use range_image::RangeImageStrategy;
 pub use xy_grid_dbscan::XYGridDBSCAN;
 pub use lvdot_cluster::LvdotClusterStrategy;
-pub use lvdot_qt::LvdotQt;
+pub use prune_qt::PruneQt;
 
 use crate::config::fixif;
 
@@ -59,11 +59,12 @@ pub fn create_strategy() -> Box<dyn ClusteringStrategy> {
             log::info!("聚类策略: lvdot_grid (体素{:.2}m 占用>={})", cfg.cluster.voxel_size, 3);
             Box::new(LvdotClusterStrategy::new())
         }
-        "lvdot_qt" => {
-            let min_pts = cfg.cluster.min_points_per_cluster.unwrap_or(3) as usize;
-            let eps = cfg.cluster.merge_patience.max(0.05);
-            log::info!("聚类策略: lvdot_qt (eps={:.2}, min_pts={})", eps, min_pts);
-            Box::new(LvdotQt::new().with_params(3, eps, min_pts))
+        "prune_qt" | "lvdot_qt" => {
+            let min_pts = cfg.cluster.min_points_per_cluster.unwrap_or(5) as usize;
+            log::info!("聚类策略: prune_qt (min_occ={}, eps={}, min_pts={})",
+                cfg.cluster.min_occ, cfg.cluster.merge_patience, min_pts);
+            Box::new(PruneQt::new()
+                .with_params(cfg.cluster.min_occ, cfg.cluster.merge_patience, min_pts))
         }
         "dbscan_light" => {
             log::info!("聚类策略: dbscan_light (无内部下采样)");

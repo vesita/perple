@@ -2,9 +2,9 @@ use super::ClusteringStrategy;
 use crate::cloud::classify::quadtree::QuadTreeNode;
 use crate::cloud::wall::{WallPickStrategy, BevEdLines, cluster_obstacles_with_indices};
 
-/// 四叉树版 LV-DOT 风格聚类策略（lvdot_qt）。
+/// 剪叶四叉树聚类策略（prune_qt）。
 ///
-/// 与 lvdot_grid 的区别：使用四叉树叶节点过滤替代体素占用下采样，
+/// 与 `lvdot_cluster`（均匀体素过滤）的区别：使用四叉树叶节点过滤替代体素占用下采样，
 /// 使用四叉树范围查询替代 XYGrid 网格 DBSCAN。
 ///
 /// 管线：
@@ -12,7 +12,7 @@ use crate::cloud::wall::{WallPickStrategy, BevEdLines, cluster_obstacles_with_in
 /// 2. 网格连通域预聚类（可选）
 /// 3. 四叉树构建 → 密集叶节点过滤（叶片点数 ≥ min_occ）→ 质心输出
 /// 4. 四叉树加速 DBSCAN 精化聚类
-pub struct LvdotQt {
+pub struct PruneQt {
     wall: Box<dyn WallPickStrategy>,
     skip_wall: bool,
     use_box_filter: bool,
@@ -31,7 +31,7 @@ pub struct LvdotQt {
     min_pts: usize,
 }
 
-impl LvdotQt {
+impl PruneQt {
     pub fn new() -> Self {
         Self {
             wall: Box::new(BevEdLines::with_params(0.05, 20).with_min_extent(0.0)),
@@ -40,10 +40,10 @@ impl LvdotQt {
             box_cell_size: 0.30,
             box_min_pts: 3,
             box_max_range: 12.0,
-            min_occ: 3,
+            min_occ: 4,
             max_pts_per_node: 20,
             max_depth: 10,
-            eps: 0.30,
+            eps: 0.20,
             min_pts: 5,
         }
     }
@@ -69,7 +69,7 @@ impl LvdotQt {
     }
 }
 
-impl ClusteringStrategy for LvdotQt {
+impl ClusteringStrategy for PruneQt {
     fn run(&mut self, points: &[[f32; 3]]) -> (Vec<[f32; 3]>, Vec<Vec<usize>>) {
         let n = points.len();
         if n == 0 { return (Vec::new(), Vec::new()); }
@@ -183,7 +183,7 @@ impl ClusteringStrategy for LvdotQt {
     }
 
     fn strategy_name(&self) -> &'static str {
-        "lvdot_qt"
+        "prune_qt"
     }
 }
 

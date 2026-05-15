@@ -4,7 +4,7 @@ use crate::{
     cloud::{
         CldBud,
         classify::cluster::Cluster,
-        classify::strategy::{LvdotClusterStrategy, LvdotQt, XYGridDBSCAN},
+        classify::strategy::{LvdotClusterStrategy, PruneQt, XYGridDBSCAN},
         denoise::{DenoiseStrategy, RadiusOutlierRemoval},
         ground::{GroundPickStrategy, create_ground_strategy},
         wall::{WallPickStrategy, XYGrid, BevEdLines, BevHough},
@@ -22,7 +22,7 @@ fn create_wall_strategy_from_config() -> Box<dyn WallPickStrategy> {
     match cfg.wall_strategy.as_str() {
         "bev_edlines" => Box::new(BevEdLines::with_params(cfg.wall_distance, 20)
             .with_grad_threshold(0.08)
-            .with_angle_tolerance(30.0)
+            .with_angle_tolerance(cfg.wall_angle_tolerance)
             .with_min_extent(0.5)),
         "bev_hough" => Box::new(BevHough::with_params(cfg.wall_distance, 20)),
         _ => {
@@ -221,9 +221,9 @@ impl Classify {
                     LvdotClusterStrategy::new().with_pre_extracted_wall(),
                 ));
             }
-            "lvdot_qt" => {
+            "prune_qt" | "lvdot_qt" => {
                 self.cluster.set_strategy(Box::new(
-                    LvdotQt::new().with_pre_extracted_wall(),
+                    PruneQt::new().with_pre_extracted_wall(),
                 ));
             }
             _ => {}

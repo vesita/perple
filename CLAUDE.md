@@ -34,11 +34,11 @@ cargo run --example label_test --package redra_client
 cargo run --example ground_bench -- --mode=quick    # 地面提取快速测试
 cargo run --example wall_bench -- --mode=quick       # 墙体提取快速测试
 cargo run --example cluster_bench -- --mode=quick    # 后聚类快速测试
-cargo run --example cluster_bench -- --strategy=lvdot_qt --denoise-radius=0.20 --denoise-min-pts=3  # 聚类（降噪默认开启）
+cargo run --example cluster_bench -- --strategy=prune_qt --denoise-radius=0.20 --denoise-min-pts=3  # 聚类（降噪默认开启）
 cargo run --example denoise_bench -- --mode=quick    # 降噪快速测试
 
 # Cluster strategy comparison (eval_ablation)
-cargo run --release --example eval_ablation -- --cluster-toml 'strategy="lvdot_qt"' --center-dist 0.5 --frames 408  # lvdot_qt 最优策略评估
+cargo run --release --example eval_ablation -- --cluster-toml 'strategy="prune_qt"' --center-dist 0.5 --frames 408  # prune_qt 最优策略评估
 cargo run --release --example eval_ablation -- --cluster-toml 'strategy="dbscan_qt"' --center-dist 0.5 --frames 408  # dbscan_qt 对比
 cargo run --release --example eval_ablation -- --cluster-toml 'strategy="cc"' --center-dist 0.5 --frames 408  # 连通域聚类对比
 cargo run --example pipeline_evolution_bench         # 管线演化对比（论文用）
@@ -112,7 +112,7 @@ The point cloud processing pipeline: ground extraction → wall extraction → c
 Raw Cloud (~20k pts)
   → Ground Extraction (GroundPickStrategy: peak_scan/histogram/ransac)
     → Wall Extraction (WallPickStrategy: bev_edlines, image-based edge detection)
-      → Post-Clustering (ClusteringStrategy: lvdot_qt/dbscan_qt/lvdot/xy_dbscan/cc/ransac/seq, denoise internalized)
+      → Post-Clustering (ClusteringStrategy: prune_qt/dbscan_qt/lvdot/xy_dbscan/cc/ransac/seq, denoise internalized)
         → YOLO fusion + Tracking → Detection Results
 ```
 
@@ -125,7 +125,7 @@ Key insight: image-based wall detection (BevEdLines) outperforms all geometric m
 - **YOLO label smoothing**: `yolo_smooth.rs` + integrated in `main.rs` and `eval_labeled.rs` — frame-to-frame momentum filter on YOLO "person" labels, reducing label flicker. No significant impact on P/R/F1 metrics (verified by 3×3 runs).
 - **Config override system `config.rs`**: Added `update_from_toml()` with `PartialConfig` structs + `init_config()` with `OnceLock`, replacing compile-time-only config. **Bug**: `Option<T>` fields (`min_points_per_cluster`, `max_points_per_node`, `max_tree_depth`) need `Some()` wrapping — the `update_cluster_field!` macro's `value.clone()` produces `T`, not `Option<T>`.
 - **Multi-frame accumulation** (tested, abandoned): Merging N frames of non-ground points before clustering increased Person Recall +5.8pp but caused FP explosion (135→538) as accumulated clusters produced oversized boxes that passed geometry fallback.
-- **Default strategy changed to `lvdot_qt`**: Replaced `dbscan_qt` after comprehensive 9-strategy benchmark (408 frames). lvdot_qt improves Person Precision 61→78% (+17pp), reduces FP by 54% (437→199), and raises F1 from 0.589 to 0.674. The factory was also updated to read `merge_patience` and `min_points_per_cluster` from config instead of hardcoded values.
+- **Default strategy changed to `prune_qt`**: Replaced `dbscan_qt` after comprehensive 9-strategy benchmark (408 frames). prune_qt improves Person Precision 61→78% (+17pp), reduces FP by 54% (437→199), and raises F1 from 0.589 to 0.674. The factory was also updated to read `merge_patience` and `min_points_per_cluster` from config instead of hardcoded values.
 
 - `src/cloud/wall.rs` — WallPickStrategy trait + XYGrid shared infra + wall module root: only `bev_edlines` (active) and `bev_hough` (reserved) remain
 - `src/cloud/wall/bev_edlines.rs` — BEV image + OpenCV EDLines 边缘检测墙体提取

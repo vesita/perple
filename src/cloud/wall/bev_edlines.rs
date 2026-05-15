@@ -252,7 +252,7 @@ impl WallPickStrategy for BevEdLines {
             let rny = dx / len_m;
             let rd = -(rnx * x1 + rny * y1);
 
-            // 收集附近 3D 点
+            // 收集附近 3D 点（点到无限直线距离）
             let remaining = &cloud[total_wall..wall_end];
             let mut inlier_rel = Vec::new();
             let mut z_min = f32::MAX;

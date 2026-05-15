@@ -28,7 +28,6 @@ struct EdlinesParams {
     min_wall_pts: usize,
     grad_threshold: f32,
     angle_tolerance: f32,
-    min_region_pts: usize,
     min_extent: f32,
 }
 
@@ -47,7 +46,6 @@ fn generate_params() -> Vec<EdlinesParams> {
                 min_wall_pts: 20,
                 grad_threshold: g,
                 angle_tolerance: 30.0,
-                min_region_pts: 8,
                 min_extent: 0.5,
             });
         }

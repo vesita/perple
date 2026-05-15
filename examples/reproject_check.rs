@@ -11,7 +11,7 @@ use perple::{
 use serde::Deserialize;
 
 #[derive(Deserialize)]
-struct LabelItem { obj_type: String, psr: LabelPsr }
+struct LabelItem { #[allow(dead_code)] obj_type: String, psr: LabelPsr }
 #[derive(Deserialize)] struct LabelPsr { position: LabelVec3, scale: LabelVec3, rotation: LabelVec3 }
 #[derive(Deserialize)] struct LabelVec3 { x: f32, y: f32, z: f32 }
 
@@ -127,9 +127,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             draw_box(&mut rgb, &Box2D { x1: b.the_box.x1, y1: b.the_box.y1, x2: b.the_box.x2, y2: b.the_box.y2 }, image::Rgb([0, 255, 255]));
             // 显示置信度
             let cx = ((b.the_box.x1 + b.the_box.x2) / 2.0) as u32;
-            let cy = b.the_box.y1.max(2.0) as u32 - 2;
+            let _cy = b.the_box.y1.max(2.0) as u32 - 2;
             let label = format!("{:.2}", b.confidence);
-            for (dx, c) in label.chars().enumerate() {
+            for (dx, _c) in label.chars().enumerate() {
                 if cx + dx as u32 * 8 < rgb.width() {
                     // simple pixel text would be complex, skip for now
                 }
