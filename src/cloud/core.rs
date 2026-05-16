@@ -96,11 +96,11 @@ impl Lidar {
         let start = Instant::now();
         let classify_result = self.classify.act().await;
         if let Err(e) = classify_result {
-            eprintln!("点云分类错误：{:?}", e);
+            error!("点云分类错误：{:?}", e);
         }
 
         let elapsed = start.elapsed().as_millis();
-        println!("点云处理耗时：{}ms", elapsed);
+        info!("点云处理耗时：{}ms", elapsed);
         Ok(())
     }
 

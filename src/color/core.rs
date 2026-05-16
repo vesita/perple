@@ -198,7 +198,7 @@ impl Color {
             return Err(ColorError::InferenceError("模型推理失败".to_string()));
         }
 
-        let duration = start_time.elapsed();
+      let duration = start_time.elapsed();
         println!("模型推理耗时：{:?}", duration);
         Ok(())
     }

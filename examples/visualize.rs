@@ -72,21 +72,18 @@ async fn write_frame(writer: &mut FrameWriter, frame: usize, total: usize) -> Re
         println!("  帧 {}/{} | 点云: {} points", frame + 1, total, cloud.len());
         writer.write_cloud(&cloud, "point_cloud", 5000);
     } else {
-        println!("  帧 {}/{} | 点云: 无数据", frame + 1, total);
-    }
-    drop(cloud_stream);
+        drop(cloud_in_world_stream);
+        None
+    };
 
-    // ── 跟踪目标（框 + 标签 + 颜色） ──
-    let target_stream = swapl.targets.lock().unwrap();
-    if let Some(targets) = target_stream.peek_latest() {
-        println!("  帧 {}/{} | 目标: {} 个", frame + 1, total, targets.len());
-        for t in targets.iter() {
-            let dyn_str = if t.is_dynamic { "动态" } else { "静态" };
-            println!("    id={} type={} class={} {} speed={:.2}",
-                t.id, t.class_type, t.classification, dyn_str, t.speed);
-        }
-        write_targets(writer, &targets);
-        write_speed_arrows(writer, &targets);
+    // 准备3D框发送任务
+    let box_task = if let Some(bounds) = cld_objs_stream.get_at(0) {
+        println!("  3D检测结果对象数量: {}", bounds.len());
+        let bounds_data = bounds.clone();
+        drop(cld_objs_stream); // 释放锁
+        Some(tokio::spawn(async move {
+            send_boxes_async(bounds_data).await;
+        }))
     } else {
         println!("  帧 {}/{} | 目标: 无", frame + 1, total);
     }

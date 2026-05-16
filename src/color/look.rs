@@ -7,6 +7,7 @@ use crate::{
     },
 };
 use nalgebra::{Matrix3, Matrix4, Vector2, Vector3};
+use log::error;
 
 pub struct Look {
     /// DualBuf producer：检测阶段读取 Camera 写入的 YOLO 结果

@@ -87,110 +87,18 @@ impl Classify {
         let mut target = {
             let mut stream = self.in_stream.lock().unwrap();
             match stream.read() {
-                Some(target) => target,
-                None => return Ok(()),
+               Some(target) => target,
+                None => return Ok(()), // 没有数据可处理
             }
         };
 
-        // ═══════════════════════════════════════════════════════════════════
-        //  模块 1：地面提取
-        // ═══════════════════════════════════════════════════════════════════
-        let cfg = crate::config::fixif();
-
-        // ─── 0. 距离过滤（近点弃置 + 远点弃置） ──────────────────────────
-        {
-            let before = target.len();
-            target.retain(|p| {
-                let d = (p[0] * p[0] + p[1] * p[1]).sqrt();
-                d >= cfg.min_range && d <= cfg.max_range
-            });
-            if before != target.len() {
-                println!("距离过滤：{} → {} 点 (min={}m max={}m)", before, target.len(), cfg.min_range, cfg.max_range);
-            }
-        }
-
-        // ─── 1. 地面提取 ──────────────────────────────────────────────────
-        let (n_ground, grounds, plane_eq) = self.ground_strategy.pick(&mut target);
-        println!("地面提取：{} 地面点 / {} 非地面点", n_ground, target.len() - n_ground);
-        if let Some(eq) = plane_eq {
-            if let Err(e) = self.ground_plane_out.lock().unwrap().write(eq) {
-                eprintln!("地面平面写入失败：{:?}", e);
-            }
-        }
-        {
-            *self.ground_buds_out.producer().lock().unwrap() = grounds;
-        }
-
-        // ═══════════════════════════════════════════════════════════════════
-        //  模块 2：墙体提取
-        // ═══════════════════════════════════════════════════════════════════
-
-        // ─── 2a. 墙体提取 ──────────────────────────────────────────────────
-        let n_wall = if target.len() > n_ground {
-            let (n, planes) = self.wall_strategy.pick(&mut target[n_ground..]);
-            if n > 0 {
-                println!("墙体提取：{} 墙体点 / {} 剩余，{} 个平面", n, target.len() - n_ground - n, planes.len());
-
-                let wall_buds = if !planes.is_empty() {
-                    // 按最近平面对墙面点分组，每面墙生成独立 box
-                    let wall_start = n_ground;
-                    let wall_end = n_ground + n;
-                    let mut plane_groups: Vec<Vec<[f32; 3]>> = vec![Vec::new(); planes.len()];
-                    for p in &target[wall_start..wall_end] {
-                        let mut best_idx = 0usize;
-                        let mut best_dist = f32::MAX;
-                        for (i, eq) in planes.iter().enumerate() {
-                            let dist = (eq[0] * p[0] + eq[1] * p[1] + eq[3]).abs();
-                            if dist < best_dist {
-                                best_dist = dist;
-                                best_idx = i;
-                            }
-                        }
-                        plane_groups[best_idx].push(*p);
-                    }
-
-                    let mut buds = Vec::new();
-                    for (i, group) in plane_groups.iter().enumerate() {
-                        if group.len() >= 30 {
-                            let wall_box = Box3D::from_cloud_aabb(group, 0.05);
-                            buds.push(CldBud::new(wall_box, 2, format!("wall_{}", i), 1.0));
-                        }
-                    }
-                    buds
-                } else {
-                    // 降级：无平面信息时退化为单 box
-                    let wall_pts: Vec<[f32; 3]> = target[n_ground..n_ground + n].to_vec();
-                    let wall_box = Box3D::from_cloud_aabb(&wall_pts, 0.05);
-                    vec![CldBud::new(wall_box, 2, "wall".into(), 1.0)]
-                };
-
-                *self.wall_buds_out.producer().lock().unwrap() = wall_buds;
-            }
-            n
-        } else {
-            0
-        };
-
-        // ═══════════════════════════════════════════════════════════════════
-        //  模块 3：体素过滤 + 后聚类
-        // ═══════════════════════════════════════════════════════════════════
-
-        let remaining_start = n_ground + n_wall;
-
-        // ─── 3a. 框架级降噪（RadiusOutlierRemoval） ────────────────────
-        let cluster_input: Vec<[f32; 3]> = if remaining_start < target.len() {
-            let raw = &target[remaining_start..];
-            if cfg.cluster.denoise_radius > 0.0 {
-                let mut denoiser = RadiusOutlierRemoval::new(cfg.cluster.denoise_radius, cfg.cluster.denoise_min_pts);
-                let (denoised, _) = denoiser.denoise(raw);
-                println!("降噪：{} → {} 点 (半径={}m min={})", raw.len(), denoised.len(), cfg.cluster.denoise_radius, cfg.cluster.denoise_min_pts);
-                denoised
-            } else {
-                raw.to_vec()
-            }
-        } else {
-            Vec::new()
-        };
+   let(slice_index, grounds) = single_pick_ground(&mut target);
+       println!("完成地面提取，已过滤{}个点", slice_index);
+        // let (slice_index, walls) = pick_wall(&mut target[slice_index..]);
+        // println!("完成墙壁提取，已过滤{}个点", slice_index);
+    // 优化：直接传递切片引用，避免不必要的 to_vec() 克隆
+   let _ = self.claster.claster(&target[slice_index..]);
+   let targets = self.claster.to_cldbuds();
 
         // ─── 3b. 体素占用过滤（仅用于 clouds_filtered 跟踪器投票） ────────
         let t4 = std::time::Instant::now();
