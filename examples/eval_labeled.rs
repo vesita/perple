@@ -239,7 +239,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .position(|a| a == "--center-dist")
         .and_then(|i| args.get(i + 1))
         .and_then(|s| s.parse().ok())
-        .unwrap_or(0.0); // 0 = 不使用中心距离
+        .unwrap_or(0.5); // 默认中心距 0.5m；设 0 回退 IoU
     let n_frames_limit: Option<usize> = args.iter()
         .position(|a| a == "--frames")
         .and_then(|i| args.get(i + 1))

@@ -70,7 +70,7 @@ fn parse_args() -> Args {
             .unwrap_or(0.15),
         center_dist: get(&args, "--center-dist")
             .and_then(|s| s.parse().ok())
-            .unwrap_or(0.0),
+            .unwrap_or(0.5),
         ground_toml: get(&args, "--ground-toml"),
         cluster_toml: get(&args, "--cluster-toml"),
         denoise_toml: get(&args, "--denoise-toml"),
