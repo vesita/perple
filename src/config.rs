@@ -161,14 +161,14 @@ impl Config {
                 match toml::from_str(&config_str) {
                     Ok(config) => config,
                     Err(e) => {
-                        eprintln!("解析配置文件 {} 失败: {}", config_path, e);
+                        eprintln!("解析配置文件 {} 失败: {}", config_str, e);
                         eprintln!("请检查配置文件格式是否正确");
                         std::process::exit(1);
                     }
                 }
             },
             Err(e) => {
-                eprintln!("读取配置文件 {} 失败: {}", config_path, e);
+                eprintln!("读取配置文件 {} 失败: {}", path, e);
                 eprintln!("请确保配置文件存在且路径正确");
                 std::process::exit(1);
             }

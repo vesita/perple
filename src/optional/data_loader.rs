@@ -1,6 +1,5 @@
 use image::DynamicImage;
 use log::{error, info};
-use log::{error, info};
 use pcd_rs::DynReader;
 use std::collections::HashMap;
 use std::num::NonZero;

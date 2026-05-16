@@ -92,15 +92,17 @@ impl Classify {
             }
         };
 
-   let(slice_index, grounds) = single_pick_ground(&mut target);
-       println!("完成地面提取，已过滤{}个点", slice_index);
-        // let (slice_index, walls) = pick_wall(&mut target[slice_index..]);
-        // println!("完成墙壁提取，已过滤{}个点", slice_index);
-    // 优化：直接传递切片引用，避免不必要的 to_vec() 克隆
-   let _ = self.claster.claster(&target[slice_index..]);
-   let targets = self.claster.to_cldbuds();
+        // ─── 1. 地面提取 ──────────────────────────────────────────────────
+        let (slice_index, _grounds, _ground_plane) = self.ground_strategy.pick(&mut target);
+        println!("完成地面提取，已过滤 {} 个点", slice_index);
 
-        // ─── 3b. 体素占用过滤（仅用于 clouds_filtered 跟踪器投票） ────────
+        // ─── 2. 墙体提取 ──────────────────────────────────────────────────
+        let (n_wall, _walls) = self.wall_strategy.pick(&mut target[slice_index..]);
+        println!("完成墙壁提取，已过滤 {} 个点", n_wall);
+
+        let remaining_start = slice_index + n_wall;
+
+        // ─── 3a. 体素占用过滤（仅用于 clouds_filtered 跟踪器投票） ────────
         let t4 = std::time::Instant::now();
         let (filtered_pts, _map) = if remaining_start < target.len() {
             XYGrid::voxel_occupancy_filter(&target[remaining_start..], 0.10, 3)
@@ -110,10 +112,10 @@ impl Classify {
         println!("体素过滤：{} → {} 点 [{:.1}ms]",
             target.len() - remaining_start, filtered_pts.len(),
             t4.elapsed().as_secs_f64() * 1000.0);
-        // 检测阶段写 DualBuf producer（后融合阶段通过 consumer 读）
         *self.clouds_filtered.producer().lock().unwrap() = filtered_pts;
 
-        // ─── 3c. 后聚类（从配置读取参数） ──────────────────────────────────
+        // ─── 3b. 后聚类（从配置读取参数） ──────────────────────────────────
+        let cfg = crate::config::fixif();
         match cfg.cluster.strategy.as_str() {
             "xy_grid_dbscan" => {
                 let cell = cfg.cluster.voxel_size.max(0.05);
@@ -136,7 +138,7 @@ impl Classify {
             }
             _ => {}
         }
-        let _ = self.cluster.cluster(&cluster_input);
+        let _ = self.cluster.cluster(&target[remaining_start..]);
 
         // ─── 4. YOLO 辅助簇分裂 ────────────────────────────────────────────
         // 读取 Camera 写入的最新 YOLO 结果（专用 last_yolo 共享状态，

@@ -2,7 +2,7 @@ use std::fmt;
 use std::sync::PoisonError;
 use std::time::Instant;
 
-use log::info;
+use log::{error, info};
 use crate::cloud::classify::core::{Classify, ClassifyError};
 use crate::swapl::global_swapl;
 use crate::utils::stream::{Cream, StreamError};
