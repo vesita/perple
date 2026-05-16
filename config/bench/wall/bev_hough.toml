@@ -1,0 +1,33 @@
+name = "BEV 鸟瞰图 Hough 墙体 (bev_hough)"
+type = "bev_hough"
+preprocessor = "wall"
+
+[quick]
+frames = 1
+params = [
+  { distance = 0.08, min_wall_pts = 30 },
+  { distance = 0.10, min_wall_pts = 30 },
+  { distance = 0.12, min_wall_pts = 30 },
+]
+
+[full]
+frames = 10
+params = [
+  { distance = 0.05, min_wall_pts = 20, hough_threshold = 0.10 },
+  { distance = 0.05, min_wall_pts = 30, hough_threshold = 0.10 },
+  { distance = 0.08, min_wall_pts = 20, hough_threshold = 0.10 },
+  { distance = 0.08, min_wall_pts = 30, hough_threshold = 0.10 },
+  { distance = 0.10, min_wall_pts = 20, hough_threshold = 0.10 },
+  { distance = 0.10, min_wall_pts = 30, hough_threshold = 0.10 },
+  { distance = 0.10, min_wall_pts = 40, hough_threshold = 0.10 },
+  { distance = 0.12, min_wall_pts = 20, hough_threshold = 0.10 },
+  { distance = 0.12, min_wall_pts = 30, hough_threshold = 0.10 },
+  { distance = 0.12, min_wall_pts = 30, hough_threshold = 0.15 },
+  { distance = 0.15, min_wall_pts = 30, hough_threshold = 0.10 },
+]
+[stats]
+fastest_ms = 65.853
+slowest_ms = 67.93639999999999
+avg_ms = 67.13503333333334
+median_ms = 67.6157
+last_run = "1778757643"

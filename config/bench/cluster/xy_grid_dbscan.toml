@@ -1,0 +1,36 @@
+name = "XY网格+DBSCAN"
+type = "xy_grid_dbscan"
+preprocessor = "ground+wall"
+
+[quick]
+frames = 1
+params = [
+  { cell_size = 0.20, eps = 0.20, min_pts = 3 },
+  { cell_size = 0.20, eps = 0.30, min_pts = 5 },
+  { cell_size = 0.30, eps = 0.20, min_pts = 3 },
+  { cell_size = 0.30, eps = 0.30, min_pts = 5 },
+]
+
+[full]
+frames = 10
+params = [
+  { cell_size = 0.15, eps = 0.15, min_pts = 3 },
+  { cell_size = 0.15, eps = 0.30, min_pts = 5 },
+  { cell_size = 0.15, eps = 0.50, min_pts = 8 },
+  { cell_size = 0.20, eps = 0.20, min_pts = 5 },
+  { cell_size = 0.20, eps = 0.50, min_pts = 3 },
+  { cell_size = 0.25, eps = 0.15, min_pts = 8 },
+  { cell_size = 0.25, eps = 0.30, min_pts = 3 },
+  { cell_size = 0.30, eps = 0.20, min_pts = 8 },
+  { cell_size = 0.30, eps = 0.50, min_pts = 5 },
+  { cell_size = 0.40, eps = 0.15, min_pts = 5 },
+  { cell_size = 0.40, eps = 0.30, min_pts = 3 },
+  { cell_size = 0.40, eps = 0.50, min_pts = 8 },
+]
+
+[stats]
+fastest_ms = 4.2638
+slowest_ms = 5.1826
+avg_ms = 4.59835
+median_ms = 4.4735
+last_run = "1778762079"

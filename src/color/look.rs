@@ -3,13 +3,15 @@ use crate::{
     config::fixif,
     utils::{
         sight::Sight,
-        stream::{Cream, Eap, Stream, new_eap},
+        stream::{Cream, DualBuf, Eap, Stream, new_eap},
     },
 };
 use nalgebra::{Matrix3, Matrix4, Vector2, Vector3};
 use log::error;
 
 pub struct Look {
+    /// DualBuf producer：检测阶段读取 Camera 写入的 YOLO 结果
+    clr_objs: DualBuf<Vec<ClrBud>>,
     pub cream: Cream<Vec<ClrBud>, Vec<Sight>>,
     pub intrinsic: Matrix3<f32>,
     pub extrinsic: Matrix4<f32>,
@@ -21,10 +23,11 @@ impl Default for Look {
         let camera_config = &fixif().camera;
 
         // 将数组转换为矩阵
-        let intrinsic = Matrix3::from_iterator(camera_config.intrinsic.iter().flatten().cloned());
-        let extrinsic = Matrix4::from_iterator(camera_config.extrinsic.iter().flatten().cloned());
+        let intrinsic = Matrix3::from_iterator(camera_config.intrinsic.iter().flatten().cloned()).transpose();
+        let extrinsic = Matrix4::from_iterator(camera_config.extrinsic.iter().flatten().cloned()).transpose();
 
         Self {
+            clr_objs: crate::utils::stream::new_dual_buf(),
             cream: Cream {
                 in_stream: new_eap(Stream::new()),
                 out_stream: new_eap(Stream::new()),
@@ -37,19 +40,20 @@ impl Default for Look {
 
 impl Look {
     pub fn new(
-        input_stream: Eap<Stream<Vec<ClrBud>>>,
+        clr_objs: DualBuf<Vec<ClrBud>>,
         output_stream: Eap<Stream<Vec<Sight>>>,
     ) -> Self {
         // 从全局配置中获取相机参数
         let camera_config = &fixif().camera;
 
         // 将数组转换为矩阵
-        let intrinsic = Matrix3::from_iterator(camera_config.intrinsic.iter().flatten().cloned());
-        let extrinsic = Matrix4::from_iterator(camera_config.extrinsic.iter().flatten().cloned());
+        let intrinsic = Matrix3::from_iterator(camera_config.intrinsic.iter().flatten().cloned()).transpose();
+        let extrinsic = Matrix4::from_iterator(camera_config.extrinsic.iter().flatten().cloned()).transpose();
 
         Self {
+            clr_objs,
             cream: Cream {
-                in_stream: input_stream,
+                in_stream: new_eap(Stream::new()),
                 out_stream: output_stream,
             },
             intrinsic,
@@ -122,29 +126,27 @@ impl Look {
 
     /// 自动化流式处理
     ///
-    /// 从输入流读取检测结果，为每个检测目标生成视线向量，
-    /// 然后将结果写入输出流
-  pub fn act(&mut self) {
-        // 从输入流读取检测结果（使用 blocking_lock）
-     let detections = {
-         let mut stream = self.cream.in_stream.blocking_lock();
-            match stream.read() {
-               Some(dets) => dets,
-                None => return, // 没有数据可处理
-            }
-        };
+    /// 从 DualBuf producer 读取 Camera 写入的 YOLO 结果，
+    /// 为每个检测目标生成视线向量，然后将结果写入输出流。
+    /// 与 Camera.data.act() 在同阶段（检测阶段）串行，无竞争。
+    pub async fn act(&mut self) {
+        // 从 DualBuf producer 读取 Camera 刚写入的 YOLO 结果
+        let detections: Vec<ClrBud> = self.clr_objs.producer().lock().unwrap().clone();
+        if detections.is_empty() {
+            return;
+        }
 
         // 为每个检测目标生成视线向量
-     let sights: Vec<Sight> = detections
+        let sights: Vec<Sight> = detections
             .iter()
             .map(|detection| self.look_target(detection))
             .collect();
 
-        // 将结果写入输出流（使用 blocking_lock）
+        // 将结果写入输出流
         {
-         let mut stream = self.cream.out_stream.blocking_lock();
-          if stream.write(sights).is_err() {
-              error!("写入视线向量到输出流失败");
+            let mut stream = self.cream.out_stream.lock().unwrap();
+            if stream.write(sights).is_err() {
+                eprintln!("写入视线向量到输出流失败");
             }
         }
     }

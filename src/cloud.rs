@@ -1,10 +1,14 @@
 pub mod core;
 
-
+pub mod ground;
+pub mod wall;
 pub mod output;
 pub mod classify;
-
-// 重新导出关键类型，使它们可以直接通过lidar模块访问
-
+pub mod ego_motion;
+pub mod denoise;
 
 pub use output::CldBud;
+pub use ground::{GroundPickStrategy, create_ground_strategy};
+pub use ground::HistogramExpand as HistogramExpandStrategy;
+pub use wall::WallPickStrategy;
+pub use denoise::{DenoiseStrategy, RadiusOutlierRemoval};

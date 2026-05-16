@@ -1,0 +1,31 @@
+name = "四叉树剪叶聚类"
+type = "prune_qt"
+preprocessor = "ground"
+
+[quick]
+frames = 1
+params = [
+  { min_occ = 2, eps = 0.20, min_pts = 3 },
+  { min_occ = 3, eps = 0.30, min_pts = 3 },
+  { min_occ = 2, eps = 0.20, min_pts = 5 },
+  { min_occ = 3, eps = 0.30, min_pts = 5 },
+]
+
+[full]
+frames = 10
+params = [
+  { min_occ = 2, eps = 0.15, min_pts = 3 },
+  { min_occ = 2, eps = 0.30, min_pts = 5 },
+  { min_occ = 3, eps = 0.20, min_pts = 3 },
+  { min_occ = 3, eps = 0.40, min_pts = 5 },
+  { min_occ = 4, eps = 0.20, min_pts = 3 },
+  { min_occ = 4, eps = 0.30, min_pts = 5 },
+  { min_occ = 5, eps = 0.15, min_pts = 3 },
+  { min_occ = 5, eps = 0.40, min_pts = 5 },
+]
+[stats]
+fastest_ms = 16.5025
+slowest_ms = 17.318299999999997
+avg_ms = 16.840975
+median_ms = 16.771549999999998
+last_run = "1778762079"

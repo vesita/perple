@@ -1,16 +1,15 @@
 use image::DynamicImage;
 use log::info;
-use nalgebra::{Matrix4, Vector3};
 use std::fmt;
-use std::sync::{Arc, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use crate::color::{ClrBud, image::ScaleMessage, look::Look};
+use crate::color::{ClrBud, image::ScaleMessage, look::Look, UndistortMap};
 use crate::color::{YoloDetector, fill_input_image};
 use crate::config::fixif;
 use crate::swapl::global_swapl;
-use crate::utils::stream::{Cream, Eap, Stream, StreamError};
-use crate::utils::world::OnWorld;
+use crate::utils::stream::{DualBuf, Eap, Stream, StreamError};
+
 use ort::value::{Tensor, TensorValueType, Value};
 
 /// Color模块的错误类型
@@ -48,12 +47,6 @@ impl From<StreamError> for ColorError {
     }
 }
 
-impl<T> From<PoisonError<T>> for ColorError {
-    fn from(error: PoisonError<T>) -> Self {
-        ColorError::PoisonError(format!("线程锁中毒: {:?}", error))
-    }
-}
-
 /// Color模块的核心结构，用于执行目标检测
 ///
 /// 这个结构体封装了整个目标检测流程，包括：
@@ -61,14 +54,22 @@ impl<T> From<PoisonError<T>> for ColorError {
 /// - 模型推理
 /// - 检测结果输出
 pub struct Color {
-    /// 输入输出流（线程安全）
-    cream: Cream<DynamicImage, Vec<ClrBud>>,
+    /// 输入流（图像）
+    in_stream: Eap<Stream<DynamicImage>>,
     /// YOLO检测器
     model: YoloDetector,
     /// 图像缩放信息
     message: ScaleMessage,
     /// Tensor Value缓存，用于避免拷贝
     tensor_value: Value<TensorValueType<f32>>,
+    /// 本地推理缓冲区（避免推理时持有输出锁）
+    local_bounds: Vec<ClrBud>,
+    /// 去畸变映射（预计算，复用）
+    undistort_map: Option<UndistortMap>,
+    /// 双缓冲 producer：检测阶段写入 YOLO 结果（后融合阶段读 consumer）
+    clr_objs: DualBuf<Vec<ClrBud>>,
+    /// 最新 YOLO 结果（供 lidar YOLO refine 读取，非 DualBuf 避免跨任务竞争）
+    last_yolo: Arc<Mutex<Vec<ClrBud>>>,
 }
 
 pub struct Camera {
@@ -84,14 +85,12 @@ impl Color {
     ///
     /// # 参数
     /// * `input_stream` - 输入图像流的线程安全引用
-    /// * `output_stream` - 输出结果流的线程安全引用
-    /// * `model_path` - 模型文件路径
-    ///
-    /// # 返回值
-    /// 返回新的Color实例
+    /// * `clr_objs` - DualBuf producer，检测阶段写入 YOLO 结果
+    /// * `last_yolo` - 最新 YOLO 结果（供 lidar YOLO refine 读取）
     pub fn new(
         input_stream: Eap<Stream<DynamicImage>>,
-        output_stream: Eap<Stream<Vec<ClrBud>>>,
+        clr_objs: DualBuf<Vec<ClrBud>>,
+        last_yolo: Arc<Mutex<Vec<ClrBud>>>,
     ) -> Self {
         // 初始化YOLO检测器
         let model = YoloDetector::new();
@@ -106,18 +105,22 @@ impl Color {
             Tensor::from_array(([1, 3, input_height, input_width], initial_data)).unwrap();
 
         Self {
-            cream: Cream {
-                in_stream: input_stream,
-                out_stream: output_stream,
-            },
+            in_stream: input_stream,
             model,
             message: ScaleMessage {
                 o_width: 0,
                 o_height: 0,
                 s_width: input_width as u32,
                 s_height: input_height as u32,
+                pad_x: 0.0,
+                pad_y: 0.0,
+                scale: 1.0,
             },
             tensor_value,
+            local_bounds: Vec::new(),
+            undistort_map: None,
+            clr_objs,
+            last_yolo,
         }
     }
 
@@ -128,19 +131,48 @@ impl Color {
     /// 2. 准备模型输入张量
     /// 3. 执行模型推理
     /// 4. 将结果写入输出流
-  pub fn act(&mut self) -> Result<(), ColorError> {
-        // 从输入流中读取图像（使用 try_lock 或 blocking_lock）
-     let input = {
-         let mut stream = self.cream.in_stream.blocking_lock();
+    pub async fn act(&mut self) -> Result<(), ColorError> {
+        // 从输入流中读取图像
+        let mut input = {
+            let mut stream = self.in_stream.lock().unwrap();
             match stream.read() {
-               Some(img) => img,
+                Some(img) => img,
                 None => return Ok(()), // 没有数据可处理，这不是错误
             }
         };
 
+        // 去畸变（如果配置了 dist_coeffs）
+        if let Some(ref dist) = fixif().camera.dist_coeffs {
+            if self.undistort_map.is_none() {
+                self.undistort_map = Some(UndistortMap::new(
+                    &fixif().camera.intrinsic,
+                    dist,
+                    input.width(),
+                    input.height(),
+                ));
+            }
+            if let Some(ref map) = self.undistort_map {
+                let t = Instant::now();
+                input = map.apply(&input);
+                log::debug!("去畸变耗时: {:?}", t.elapsed());
+            }
+        }
+
         // 处理图像
         self.message.o_width = input.width();
         self.message.o_height = input.height();
+
+        // Letterbox: 计算保持宽高比的缩放和填充偏移
+        let target_w = self.message.s_width as f32;
+        let target_h = self.message.s_height as f32;
+        let src_w = input.width() as f32;
+        let src_h = input.height() as f32;
+        let scale = (target_w / src_w).min(target_h / src_h);
+        let new_w = (src_w * scale).round();
+        let new_h = (src_h * scale).round();
+        self.message.pad_x = (target_w - new_w) / 2.0;
+        self.message.pad_y = (target_h - new_h) / 2.0;
+        self.message.scale = scale;
 
         // 填充 tensor value，避免拷贝
         fill_input_image(
@@ -150,46 +182,24 @@ impl Color {
             &mut self.tensor_value,
         );
 
-        // 执行推理并计时
-      let start_time = Instant::now();
+        // 执行推理并计时（不持有输出锁，避免阻塞 lidar 的 YOLO 细化）
+        let start_time = Instant::now();
 
-        // 获取输出流的引用并填充数据（使用 blocking_lock）
-        {
-          let mut output_stream = self.cream.out_stream.blocking_lock();
+        self.local_bounds.clear();
+        let infer_ok = self.model.infer(&self.tensor_value, &mut self.local_bounds, &self.message).is_ok();
 
-            // 获取写入位置的可变引用
-          let write_mut_result = output_stream.get_write_mut();
-            match write_mut_result {
-                Ok(slot) => {
-                    // 初始化或获取 Vec<ClrBud> 对象
-                  let bounds = slot.get_or_insert_with(|| Vec::new());
-                    bounds.clear(); // 清空之前的数据
-
-                    // 执行推理
-                  let infer_result = self.model.infer(&self.tensor_value, bounds, &self.message);
-                    match infer_result {
-                        Ok(_) => {
-                            // 提交写入操作
-                            output_stream
-                                .commit_write()
-                                .map_err(|e| ColorError::CommitError(format!("{:?}", e)))?;
-                        }
-                        Err(e) => {
-                           info!("推理过程中发生错误：{:?}", e);
-                            // 即使推理出错，也尝试提交写入以保持流的一致性
-                          let _ = output_stream.commit_write();
-                            return Err(ColorError::InferenceError(format!("{:?}", e)));
-                        }
-                    }
-                }
-                Err(e) => {
-                    return Err(ColorError::from(e));
-                }
-            }
-        } // 在这里释放 output_stream 锁
+        // 推理完成后，写入 DualBuf producer + last_yolo（与 lidar 共享）
+        if infer_ok {
+            let results = std::mem::take(&mut self.local_bounds);
+            *self.last_yolo.lock().unwrap() = results.clone();   // lidar YOLO refine 读取
+            *self.clr_objs.producer().lock().unwrap() = results; // Fuse 读取
+        } else {
+            eprintln!("推理过程中发生错误");
+            return Err(ColorError::InferenceError("模型推理失败".to_string()));
+        }
 
       let duration = start_time.elapsed();
-        info!("模型推理耗时：{:?}", duration);
+        println!("模型推理耗时：{:?}", duration);
         Ok(())
     }
 
@@ -207,10 +217,6 @@ impl Color {
     }
 
     /// 获取输入输出流的引用
-    pub fn cream(&self) -> &Cream<DynamicImage, Vec<ClrBud>> {
-        &self.cream
-    }
-
     // 模型参数设置方法
     // ------------------------------------------------------------------------
 
@@ -236,33 +242,19 @@ impl Camera {
 
       info!("Camera 模块初始化");
 
+        // clr_objs 改用 DualBuf：Camera 写 producer，Fuse 读 consumer
+        let clr_objs: DualBuf<Vec<ClrBud>> = pool.clr_objs.clone();
+        let last_yolo = pool.last_yolo.clone();
+
         Self {
-           data: Color::new(Arc::clone(&pool.colors), Arc::clone(&pool.clr_objs)),
-            look: Look::new(Arc::clone(&pool.clr_objs), Arc::clone(&pool.sights)),
+           data: Color::new(Arc::clone(&pool.colors), clr_objs.clone(), last_yolo),
+            look: Look::new(clr_objs, Arc::clone(&pool.sights)),
         }
     }
 
-    pub fn act(&mut self) -> Result<(), ColorError> {
-      self.data.act()?;
-      self.look.act();
+    pub async fn act(&mut self) -> Result<(), ColorError> {
+        self.data.act().await?;
+        self.look.act().await;
         Ok(())
-    }
-}
-
-impl OnWorld for Camera {
-    fn on_world(&self) -> Matrix4<f32> {
-        self.look.extrinsic
-    }
-
-    fn set_by_angle(&mut self, tra: Vector3<f32>, rot: Vector3<f32>) {
-        self.look.set_by_angle(tra, rot);
-    }
-
-    fn set_by_radian(&mut self, tra: Vector3<f32>, rot: Vector3<f32>) {
-        self.look.set_by_radians(tra, rot);
-    }
-
-    fn set_by_matrix(&mut self, matrix: &Matrix4<f32>) {
-        self.look.extrinsic = *matrix;
     }
 }

@@ -2,14 +2,10 @@ use std::fmt;
 use std::sync::PoisonError;
 use std::time::Instant;
 
-use log::{error, info};
-use nalgebra::{Matrix4, Vector3, Vector4};
-
+use log::info;
 use crate::cloud::classify::core::{Classify, ClassifyError};
-use crate::config::fixif;
 use crate::swapl::global_swapl;
 use crate::utils::stream::{Cream, StreamError};
-use crate::utils::world::OnWorld;
 
 /// Lidar模块的错误类型
 #[derive(Debug)]
@@ -63,97 +59,64 @@ impl From<ClassifyError> for LidarError {
 pub struct Lidar {
     cream: Cream<Vec<[f32; 3]>, Vec<[f32; 3]>>,
     classify: Classify,
-    extrinsic: Matrix4<f32>,
 }
 
 impl Lidar {
-    /// 创建 Lidar 实例，通过全局 Swapl 数据中枢进行数据交互
+    /// 创建 Lidar 实例
     ///
-    /// 所有数据交互都通过全局 Swapl 完成，实现了模块间的松耦合设计。
-    /// Lidar 模块内部保留指向各模块的指针，但不再需要外部传入数据流引用
-   pub fn new() -> Self {
-        // 获取全局数据交换中枢
-       let pool = global_swapl();
-
-        // 从全局配置中获取 lidar 外参
-       let lidar_config = &fixif().lidar;
-
-        // 将数组转换为矩阵
-       let extrinsic = lidar_config.extrinsic.clone();
-
-       info!("Lidar 模块初始化");
-
+    /// 点云数据保持在 LiDAR 原生帧，不进行坐标变换。
+    pub fn new() -> Self {
+        let pool = global_swapl();
+        info!("Lidar 模块初始化");
         Self {
             cream: Cream {
-               in_stream: pool.clouds.clone(),
-                out_stream: pool.cloud_in_world.clone(),
+                in_stream: pool.clouds.clone(),
+                out_stream: pool.clouds_out.clone(),
             },
-           classify: Classify::new(),
-            extrinsic: extrinsic.into(),
+            classify: Classify::new(),
         }
     }
 
-    pub fn act(&mut self) -> Result<(), LidarError> {
-        // 先读取并处理输入数据
-        self.read_input()?;
+    /// 使用预先配置的 Classify 创建 Lidar 实例
+    pub fn with_classify(classify: Classify) -> Self {
+        let pool = global_swapl();
+        info!("Lidar 模块初始化（自定义策略）");
+        Self {
+            cream: Cream {
+                in_stream: pool.clouds.clone(),
+                out_stream: pool.clouds_out.clone(),
+            },
+            classify,
+        }
+    }
 
-        // 创建一个计时器
+    pub async fn act(&mut self) -> Result<(), LidarError> {
+        self.read_input().await?;
+
         let start = Instant::now();
-        // 使用分类器处理数据
-        let classify_result = self.classify.act();
+        let classify_result = self.classify.act().await;
         if let Err(e) = classify_result {
             error!("点云分类错误：{:?}", e);
         }
 
-        // 计算处理时间
         let elapsed = start.elapsed().as_millis();
         info!("点云处理耗时：{}ms", elapsed);
         Ok(())
     }
 
-  pub fn read_input(&mut self) -> Result<(), LidarError> {
-    let data = {
-        let mut stream = self.cream.in_stream.blocking_lock();
+    pub async fn read_input(&mut self) -> Result<(), LidarError> {
+        let data = {
+            let mut stream = self.cream.in_stream.lock().unwrap();
             match stream.read() {
-              Some(mut data) => {
-                   for point in &mut data {
-                        // 使用转换矩阵将点从雷达坐标系转换到世界坐标系
-                    let point_vec = Vector4::new(point[0], point[1], point[2], 1.0);
-                     let point_world = self.extrinsic * point_vec;
-                       point[0] = point_world.x;
-                       point[1] = point_world.y;
-                       point[2] = point_world.z;
-                    }
-                   data
-                },
+                Some(data) => data,
                 None => return Err(LidarError::Other("没有数据".to_string())),
             }
         };
 
-        // 写入处理后的数据到输出流
         {
-         let mut stream = self.cream.out_stream.blocking_lock();
-           stream.write(data)?;
+            let mut stream = self.cream.out_stream.lock().unwrap();
+            stream.write(data)?;
         }
         Ok(())
-    }
-}
-
-impl OnWorld for Lidar {
-    fn on_world(&self) -> Matrix4<f32> {
-        self.extrinsic
-    }
-
-    fn set_by_angle(&mut self, tra: Vector3<f32>, rot: Vector3<f32>) {
-        let rot_rad = Vector3::new(rot.x.to_radians(), rot.y.to_radians(), rot.z.to_radians());
-        self.extrinsic = Matrix4::new_rotation(rot_rad) * Matrix4::new_translation(&tra);
-    }
-
-    fn set_by_radian(&mut self, tra: Vector3<f32>, rot: Vector3<f32>) {
-        self.extrinsic = Matrix4::new_rotation(rot) * Matrix4::new_translation(&tra);
-    }
-
-    fn set_by_matrix(&mut self, matrix: &Matrix4<f32>) {
-        self.extrinsic = *matrix;
     }
 }

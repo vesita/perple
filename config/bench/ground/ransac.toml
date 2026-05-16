@@ -1,0 +1,36 @@
+name = "RANSAC 地面拟合"
+type = "ransac"
+preprocessor = "passthrough"
+
+[quick]
+frames = 1
+params = [
+  { distance = 0.2, iterations = 50 },
+  { distance = 0.2, iterations = 100 },
+  { distance = 0.4, iterations = 50 },
+  { distance = 0.4, iterations = 100 },
+]
+
+[full]
+frames = 10
+params = [
+  { distance = 0.1, iterations = 50 },
+  { distance = 0.1, iterations = 100 },
+  { distance = 0.1, iterations = 200 },
+  { distance = 0.2, iterations = 50 },
+  { distance = 0.2, iterations = 100 },
+  { distance = 0.2, iterations = 200 },
+  { distance = 0.4, iterations = 50 },
+  { distance = 0.4, iterations = 100 },
+  { distance = 0.4, iterations = 200 },
+  { distance = 0.6, iterations = 50 },
+  { distance = 0.6, iterations = 100 },
+  { distance = 0.6, iterations = 200 },
+]
+
+[stats]
+fastest_ms = 10.9546
+slowest_ms = 55.4818
+avg_ms = 29.953658333333344
+median_ms = 25.626649999999998
+last_run = "1778747722"

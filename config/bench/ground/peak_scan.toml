@@ -1,0 +1,26 @@
+name = "峰值扫描地面检测"
+type = "peak_scan"
+preprocessor = "passthrough"
+
+[quick]
+frames = 1
+params = [
+  { threshold = 0.10, expand = 0.10 },
+  { threshold = 0.15, expand = 0.10 },
+]
+
+[full]
+frames = 10
+params = [
+  { threshold = 0.05, expand = 0.10 },
+  { threshold = 0.10, expand = 0.10 },
+  { threshold = 0.15, expand = 0.10 },
+  { threshold = 0.20, expand = 0.10 },
+]
+
+[stats]
+fastest_ms = 5.4882
+slowest_ms = 8.106300000000001
+avg_ms = 6.017642499999999
+median_ms = 5.88635
+last_run = "1778747722"

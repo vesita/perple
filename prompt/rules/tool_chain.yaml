@@ -1,0 +1,60 @@
+# ============================================================================
+# 工具链配置规则 - 定义开发环境和构建命令
+# ============================================================================
+# 优先级：P1 (中等) | mandatory: true (必须遵守)
+# 依赖：lang_001 (语言偏好)
+# ============================================================================
+
+rule_index:
+  id: "tool_001"
+  category: "development_environment"
+  mandatory: true
+  depends_on: ["lang_001"]
+
+# 🛠️ 基础开发工具
+basic_tools:
+  ide: "VS Code"
+  version_control: "Git"
+  terminal: "bash"
+
+# 🔧 语言版本和工具链
+language:
+  rust:
+    version: "1.92.0"
+    edition: "2024"
+    toolchain: "stable"
+  
+  python:
+    version: "3.8+"
+    environment_manager: "uv"
+    config_file: "pyproject.toml"
+
+# ⚡ 构建和运行命令
+commands:
+  # Rust 命令
+  rust_build_debug: "cargo build"
+  rust_build_release: "cargo build --release"
+  rust_test: "cargo test --all"
+  rust_format: "cargo fmt --all"
+  rust_lint: "cargo clippy -- -D warnings"
+  
+  # Python 命令
+  python_run: "uv run python"
+  python_install: "uv pip install"
+  python_sync: "uv sync"
+  python_format: "black ."
+
+# ✅ 环境检测
+environment_checks:
+  rust_required: true
+  python_required: true
+  git_required: true
+
+# 💡 应用提示
+# ────────────────────────────────────────
+# 常用命令组合:
+#   1. 构建并测试：cargo build && cargo test --all
+#   2. 格式化代码：cargo fmt --all && black .
+#   3. 完整检查：cargo clippy -- -D warnings
+# 
+# 注意：所有命令输出应为中文 (遵循 lang_001)

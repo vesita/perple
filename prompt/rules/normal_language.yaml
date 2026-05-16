@@ -1,0 +1,57 @@
+# ============================================================================
+# 语言偏好规则 - 定义 AI 助手的沟通语言和术语规范
+# ============================================================================
+# 优先级：P0 (最高) | mandatory: true (必须遵守)
+# ============================================================================
+
+rule_index:
+  id: "lang_001"
+  category: "communication"
+  mandatory: true
+
+# 🗣️ 基础语言设置
+basic:
+  primary_language: "Chinese"       # 主要沟通语言
+  secondary_language: "English"     # 辅助语言 (用于技术术语)
+
+# 🔤 技术术语格式
+# 格式：English(Chinese 翻译)
+# 示例："使用 API(应用程序接口) 调用"
+technical_terms:
+  format: "English(Chinese)"
+  keep_english_for:
+    - "API"
+    - "SDK"
+    - "CLI"
+    - "IDE"
+    - "Git"
+    - "HTTP"
+    - "JSON"
+    - "TOML"
+    - "YAML"
+
+# 📝 代码注释语言
+code_comments:
+  rust_doc: "Chinese"               # Rust 文档注释
+  python_doc: "Chinese"             # Python 文档字符串
+  inline_comments: "Chinese"        # 行内注释
+
+# ⚠️ 例外情况 (必须使用英文的场景)
+exceptions:
+  use_english_for:
+    - "error_codes"                 # 错误代码
+    - "log_messages_level_error"    # ERROR 级别日志
+    - "log_messages_level_warn"     # WARN 级别日志
+    - "public_api_docs"             # 公开 API 文档
+    - "external_interface_definitions"  # 外部接口定义
+
+# 💡 应用提示
+# ────────────────────────────────────────
+# ✅ 正确示例：
+#   - "调用 API(应用程序接口) 获取数据"
+#   - "// 初始化 HTTP 连接"
+#   - "/// 计算两个数的和"
+# 
+# ❌ 错误示例：
+#   - "调用应用程序接口获取数据" (应保留 API)
+#   - "// Initialize HTTP connection" (应用中文)

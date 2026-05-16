@@ -1,0 +1,32 @@
+name = "BEV EDLines 线段检测墙体 (bev_edlines)"
+type = "bev_edlines"
+preprocessor = "wall"
+
+[quick]
+frames = 1
+params = [
+  { distance = 0.08, min_wall_pts = 30 },
+  { distance = 0.10, min_wall_pts = 30 },
+  { distance = 0.12, min_wall_pts = 30 },
+]
+
+[full]
+frames = 10
+params = [
+  { distance = 0.05, min_wall_pts = 20 },
+  { distance = 0.05, min_wall_pts = 30 },
+  { distance = 0.08, min_wall_pts = 20 },
+  { distance = 0.08, min_wall_pts = 30 },
+  { distance = 0.10, min_wall_pts = 20 },
+  { distance = 0.10, min_wall_pts = 30 },
+  { distance = 0.10, min_wall_pts = 40 },
+  { distance = 0.12, min_wall_pts = 20 },
+  { distance = 0.12, min_wall_pts = 30 },
+  { distance = 0.15, min_wall_pts = 30 },
+]
+[stats]
+fastest_ms = 19.019099999999998
+slowest_ms = 26.742
+avg_ms = 21.219314
+median_ms = 20.974600000000002
+last_run = "1778758350"

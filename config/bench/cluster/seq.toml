@@ -1,0 +1,33 @@
+name = "顺序 SVD 平面聚类 (seq)"
+type = "seq"
+preprocessor = "ground+wall"
+
+[quick]
+frames = 1
+params = [
+  { distance = 0.10, min_pts = 10, max_walls = 5, denoise_radius = 0.20, denoise_min_pts = 3 },
+  { distance = 0.10, min_pts = 15, max_walls = 5, denoise_radius = 0.20, denoise_min_pts = 3 },
+  { distance = 0.15, min_pts = 10, max_walls = 3, denoise_radius = 0.20, denoise_min_pts = 3 },
+  { distance = 0.15, min_pts = 15, max_walls = 5, denoise_radius = 0.20, denoise_min_pts = 3 },
+]
+
+[full]
+frames = 10
+params = [
+  { distance = 0.08, min_pts = 10, max_walls = 3, denoise_radius = 0.20, denoise_min_pts = 3 },
+  { distance = 0.08, min_pts = 15, max_walls = 5, denoise_radius = 0.15, denoise_min_pts = 3 },
+  { distance = 0.10, min_pts = 10, max_walls = 5, denoise_radius = 0.20, denoise_min_pts = 5 },
+  { distance = 0.10, min_pts = 20, max_walls = 3, denoise_radius = 0.20, denoise_min_pts = 3 },
+  { distance = 0.12, min_pts = 10, max_walls = 5, denoise_radius = 0.15, denoise_min_pts = 3 },
+  { distance = 0.12, min_pts = 15, max_walls = 5, denoise_radius = 0.20, denoise_min_pts = 3 },
+  { distance = 0.15, min_pts = 10, max_walls = 5, denoise_radius = 0.20, denoise_min_pts = 5 },
+  { distance = 0.15, min_pts = 15, max_walls = 3, denoise_radius = 0.20, denoise_min_pts = 3 },
+  { distance = 0.20, min_pts = 15, max_walls = 5, denoise_radius = 0.20, denoise_min_pts = 3 },
+  { distance = 0.20, min_pts = 20, max_walls = 5, denoise_radius = 0.15, denoise_min_pts = 3 },
+]
+[stats]
+fastest_ms = 350.7684
+slowest_ms = 368.6433
+avg_ms = 360.48564999999996
+median_ms = 361.26545
+last_run = "1778762079"

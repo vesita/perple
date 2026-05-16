@@ -236,11 +236,21 @@ impl YoloDetector {
         // 运行推理
         let input_tensor = to_input(&tensor);
         let mut outputs = Vec::new();
+        let o_w = image.width();
+        let o_h = image.height();
+        let target_w = self.input_width as f32;
+        let target_h = self.input_height as f32;
+        let scale = (target_w / o_w as f32).min(target_h / o_h as f32);
+        let new_w = (o_w as f32 * scale).round();
+        let new_h = (o_h as f32 * scale).round();
         let scale_message = ScaleMessage {
-            o_width: image.width(),
-            o_height: image.height(),
+            o_width: o_w,
+            o_height: o_h,
             s_width: self.input_width as u32,
             s_height: self.input_height as u32,
+            pad_x: (target_w - new_w) / 2.0,
+            pad_y: (target_h - new_h) / 2.0,
+            scale,
         };
 
         self.infer(&input_tensor, &mut outputs, &scale_message)?;

@@ -19,10 +19,7 @@ Cargo.lock
 /runs
 
 # 项目忽略项
-/data/color
-/data/depth
-/data/test
-/data/analyze
+/data
 /results
 
 
@@ -30,4 +27,6 @@ Cargo.lock
 flamegraph.svg
 perf.data*
 .vscode/
-.lingma/
+.claude
+log/
+output/

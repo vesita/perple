@@ -1,56 +1,200 @@
-stream_capacity = 16
+stream_capacity = 1024
 detections_capacity = 16
 person_class_label = "person"
 points_capacity = 16384
-resolution = 0.07
+max_range = 10.0
+min_range = 0.10
 
 # 目标检测超参数配置
 default_input_width = 640
 default_input_height = 640
-default_confidence_threshold = 0.6
+default_confidence_threshold = 0.5
 default_nms_threshold = 0.7
 
 # 模型路径
-model_path = "module/color/yolo11n.onnx"
+model_path = "model/quantized/yolo11n.onnx"
 
-# DBSCAN聚类算法参数
-dbscan_min_points = 3
-# dbscan_eps会基于resolution动态计算，值为resolution * 4.0
+# 地面检测参数（直方图种子 + RANSAC 平面拟合生长）
+ground_strategy = "peak_scan"  # 地面提取策略: "histogram", "histoseed", "ransac", "peak_scan", "gpf"
+ground_expand = 0.10       # 地面种子区域 Z 向扩展量（米），peak_z ± expand 为初始地面区域
+ground_ransac_distance = 0.3   # RANSAC 平面拟合内点距离阈值（米）
+ground_ransac_iterations = 50  # RANSAC 迭代次数
+upside_down = true         # 点云 Z 轴是否上下翻转（LiDAR 安装朝下时为 true）
+has_ceiling = false        # 是否有天花板（配合 [cluster].ceiling_filter 使用）
 
-# 地面检测参数
-default_ground_vector = [0.0, 0.0, 1.0]
-ground_filter_threshold = 0.2
-ground_cross_product_patience = 3
-ground_sample_test_count = 23
+# 墙体提取策略（用于追踪管线，bench 使用 config/bench/wall/*.toml）
+wall_strategy = "bev_edlines"   # 墙体提取策略: bev_edlines / ransac_l2_grid / dbscan_l2_qt_dif / ...
+wall_distance = 0.08         # RansacL2Grid 距离阈值
+wall_iterations = 50         # RansacL2Grid RANSAC 迭代次数
+wall_max_walls = 30          # 最大墙体平面数（RansacL2Grid 每帧保留的墙面数上限）
+wall_eps = 0.20              # DbscanL2QtDif BFS 合并距离
+wall_min_pts = 16            # DbscanL2QtDif 叶节点最小点数（密度中心门槛）
+wall_min_z_span = 1.0        # 墙面最小 Z 跨度
+wall_angle_tolerance = 30.0  # BevEdLines 区域生长角度容差（度）
 
 # 点云聚类参数
-[claster]
+[cluster]
+# 聚类策略: "dbscan"（固定eps）, "dbscan_adaptive"（eps随距离线性增长）, "range_image", "prune_qt"
+strategy = "prune_qt"
+# 基础邻域半径 eps（米），自适应模式下为 eps 截距；eps(p) = merge_patience + eps_slope * range(p)
 merge_patience = 0.20
-merge_threshold = 0.6
-voxel_size = 0.1
-min_points_per_cluster = 10
+# 体素下采样格子大小（米），0 表示不下采样
+voxel_size = 0.10
+# DBSCAN 核心点最少邻居数，低于此数的点被视为噪声
+min_points_per_cluster = 5
+# 自适应 eps 斜率，值越大远处邻域半径越大；设为 0 则退化为固定 eps 模式
+eps_slope = 0.05
+# 四叉树节点最大点数，超过则分裂（空间索引加速邻域查询）
 max_points_per_node = 50
+# 四叉树最大深度
 max_tree_depth = 10
-use_parallel = true
+# 下采样方法: "voxel"（均匀体素） 或 "gaussian"（距离概率采样，近密远疏）
+downsample_method = "voxel"
+# Gaussian 下采样 σ 值（米），keep_prob = exp(-d²/2σ²)；σ 越大远处保留越多
+# 6m 处保留约 60%，12m 处保留约 14%
+gaussian_downsample_rate = 6.0
+# 聚类输入最大距离（米），超过此距离的非地面点被剔除；0 = 不限制
+max_range = 10.0
+# 天花板过滤：剔除 Z > ceiling_height 的点，减少天花板附近杂点产生的无效簇
+ceiling_filter = true
+ceiling_height = 2.5
+# 框架级降噪：聚类前半径离群点剔除（替代策略内部噪声过滤）
+denoise_radius = 0.20
+denoise_min_pts = 3
+# 四叉树剪叶最小点数（叶节点 ≥ min_occ 才保留质心，prune_qt 策略专用）
+min_occ = 4
+# 密度感知质心加权：用 1/r^α 补偿 LiDAR 近密远疏导致的质心偏向传感器偏差
+# 0 = 禁用（算术平均），1 = 1/r 补偿，2 = 1/r² 补偿
+density_weight_alpha = 2.0
 
+# Range image 策略参数（仅 strategy="range_image" 时有效）
+azimuth_resolution = 2.0   # 方位角分辨率（度）
+elevation_resolution = 2.0 # 俯仰角分辨率（度）
+cluster_threshold = 1.0    # 相邻像素深度差阈值（米），超过则视为不同簇
+
+[tracker]
+# 目标连续未匹配帧数超过此值则永久删除轨迹
+max_disappeared = 12
+# 聚类结果置信度低于此值的检测被过滤，不参与匹配
+min_confidence = 0.5
+# 轨迹累计出现次数低于此值不输出（过滤一次性噪声目标）
+min_appearances = 1
+# 点云投票开关：通过对比历史点云位移判断目标是否真正在运动
+use_point_cloud_voting = true
+# 点云投票阈值：超过此比例的点发生位移则判定为运动
+point_cloud_vote_threshold = 0.8
+# 点云投票回溯帧数：对比当前帧与 N 帧前的点云
+point_cloud_skip_frames = 5
+# 点云投票位移阈值(m)：位移幅度超过此值才计为运动票，排除抖动噪声
+point_vel_threshold = 0.08
+# 每个轨迹保留的点云历史帧数上限
+point_cloud_history_len = 10
+# 箱体尺寸锁定开关：稳定跟踪后冻结尺寸，抑制抖动
+use_fix_size = true
+# 出现帧数超过此值后才启用尺寸锁定（避免初始阶段误锁）
+fix_size_frames = 10
+# 尺寸变化率阈值：三维尺寸变化率均低于此值则冻结，否则更新参考
+fix_size_dim_thresh = 0.4
+# Kalman 滤波器平滑窗口：用最近 K 帧的位置均值修正状态
+kf_avg_frames = 8
+# 漂浮→静态 回归所需连续帧数（在静态簇中持续 N 帧才确认为静态）
+floating_to_static_frames = 30
+# 运动速度阈值（m/s）：自运动补偿后速度高于此值判定为 Moving，低于为 Movable
+moving_speed_threshold = 0.35
+# 点云投票连续确认帧数：连续 N 帧投票通过才触发 Floating → Moving 转换
+voting_consistency_frames = 5
+
+# 帧间平滑：质心 1€ 低通滤波（静止强平滑，运动低延迟）
+use_centroid_smoothing = true
+# 最小截止频率（Hz），越低平滑越强
+centroid_fc_min = 0.5
+# 速度自适应系数，越大运动时延迟越低
+centroid_beta = 1.0
+# 箱体尺寸 EMA 平滑（替代 fix_size 硬锁定）
+use_box_smoothing = true
+# EMA 系数（0-1），越大跟踪越快；0=自适应置信度
+box_smoothing_alpha = 0.25
+# 速度 EMA 系数（0-1）；0=自适应置信度
+vel_smoothing_alpha = 0.25
+# 分类转换冷却帧数（Moving↔Movable 迟滞）
+class_cooldown_frames = 15
+
+# Kalman 滤波器 9D CA 模型参数（可通过 eval_ablation --tracker-toml 覆盖）
+kf_process_noise_pos = 0.1        # 位置过程噪声：预测位置不确定性
+kf_process_noise_vel = 0.05       # 速度过程噪声：允许速度变化（0.02→0.05 更灵活）
+kf_process_noise_acc = 1.0        # 加速度过程噪声（0.5→1.0 允许更大加速度变化）
+kf_process_noise_size = 0.01      # 尺寸过程噪声：尺寸变化慢
+kf_measurement_noise_pos = 0.3    # 位置测量噪声（0.2→0.3 降低对点云质心信任）
+kf_measurement_noise_vel = 0.8    # 速度测量噪声（0.1→0.8 速度由位置差推导不直接观测）
+kf_measurement_noise_acc = 2.0    # 加速度测量噪声（0.5→2.0 加速度由速度差推导极不可靠）
+kf_measurement_noise_size = 0.2   # 尺寸测量噪声（0.5→0.2 框尺寸相对可靠）
+kf_initial_covariance_scale = 1.0  # 初始协方差缩放（0.5→1.0 加快收敛）
+kf_gate_threshold = 3.5           # 新息门控：马氏距离超过此值用位置-only修正
+geo_pass_threshold = 6            # 几何后端连续通过帧数阈值
+geo_fail_threshold = 5            # 几何后端连续失败回退阈值
+geo_speed_threshold = 0.6         # 速度激活阈值(m/s)，超过此值直接标为 person（与几何 OR）
+
+# 航迹分级管理
+confirmation_frames = 5        # Tentative→Confirmed 所需连续匹配帧数
+tentative_max_missed = 3       # Tentative 轨迹最大丢失帧数（之后立即删除）
+
+# Track Score（代替纯阈值生灭）
+track_score_match_bonus = 3.0       # 匹配一次加分
+track_score_miss_penalty = 1.5      # 丢失一次扣分
+track_score_confirm_threshold = 5.0 # score ≥ 此值 → Tentative→Confirmed
+track_score_delete_threshold = 0.0  # score ≤ 此值 + 超时 → 删除
+track_score_output_threshold = 2.0  # score < 此值 → 不输出
+track_score_max = 20.0              # score 上限
+
+# 从 STPoints 获取的标定参数
 [camera]
 intrinsic = [
-  [ 641.0308344961991,    0.0,                343.4226052091193 ],
-  [ 0.0,                  640.888660794135,   212.3908419652066 ],
-  [ 0.0,                  0.0,                1.0 ]
+    [
+        523.0821532216979,
+        0,
+        327.81872513382706,
+    ],
+    [
+        0,
+        523.6022449177096,
+        209.3883050723496,
+    ],
+    [
+        0,
+        0,
+        1,
+    ],
 ]
-
 extrinsic = [
-  [ 0.5947311099479503,   -0.7581582777519342,  -0.267377883783046,    -2.4976536649521894  ],
-  [-0.05945191784505893,   0.2902022126746384,  -0.9551168228145122,   -0.3708529610726749  ],
-  [ 0.801723378931052,     0.5839338161426901,   0.12751832041087943,   3.190733849345525   ],
-  [ 0.0,                   0.0,                 0.0,                    1.0                 ]
+    [
+        0.24466752110643908,
+        0.9649821947436015,
+        0.09458947057390465,
+        -0.6459888184247511,
+    ],
+    [
+        -0.03628428786226734,
+        -0.08837391980522774,
+        0.995426290969144,
+        -0.3433851101527302,
+    ],
+    [
+        0.9689278892518048,
+        -0.24698059463464067,
+        0.013391463846834928,
+        -0.04214965045225494,
+    ],
+    [
+        0,
+        0,
+        0,
+        1,
+    ],
 ]
-
-[lidar]
-extrinsic = [
-  [ 1.0,  0.0,  0.0, 0.0 ],
-  [ 0.0, -1.0,  0.0, 0.0 ],
-  [ 0.0,  0.0, -1.0, 0.0 ],
-  [ 0.0,  0.0,  0.0, 1.0 ]
+dist_coeffs = [
+    -0.4982036049195756,
+    0.3061057658560564,
+    -0.005599087666224605,
+    -0.0019290139342983445,
+    -0.10034677732140297,
 ]

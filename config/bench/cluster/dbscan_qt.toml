@@ -1,0 +1,30 @@
+name = "四叉树 DBSCAN 聚类"
+type = "dbscan_qt"
+preprocessor = "ground+wall"
+
+[quick]
+frames = 1
+params = [
+  { patience = 0.10, slope = 0.20, min_pts = 5, voxel_size = 0.05 },
+  { patience = 0.10, slope = 0.20, min_pts = 5, voxel_size = 0.10 },
+  { patience = 0.20, slope = 0.20, min_pts = 5, voxel_size = 0.05 },
+  { patience = 0.20, slope = 0.20, min_pts = 5, voxel_size = 0.10 },
+]
+
+[full]
+frames = 10
+params = [
+  { patience = 0.10, slope = 0.10, min_pts = 5, voxel_size = 0.05 },
+  { patience = 0.10, slope = 0.10, min_pts = 10, voxel_size = 0.10 },
+  { patience = 0.10, slope = 0.30, min_pts = 5, voxel_size = 0.05 },
+  { patience = 0.10, slope = 0.30, min_pts = 10, voxel_size = 0.10 },
+  { patience = 0.20, slope = 0.20, min_pts = 5, voxel_size = 0.05 },
+  { patience = 0.20, slope = 0.20, min_pts = 10, voxel_size = 0.10 },
+]
+
+[stats]
+fastest_ms = 23.5107
+slowest_ms = 53.7616
+avg_ms = 37.513175
+median_ms = 36.3902
+last_run = "1778762079"

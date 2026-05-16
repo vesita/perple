@@ -1,79 +1,76 @@
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
 
+use perple::cloud::core::Lidar;
 use perple::optional::data_loader::DataLoader;
-use perple::perple::Perple;
+use perple::tracker::core::Tracker;
 use perple::swapl::global_swapl;
-
-use redra::client::*;
-use tokio;
-use tokio::time::sleep;
+use perple::tracker::output::Target;
+use perple::utils::rdra::FrameWriter;
 
 use log::info;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::from_default_env()
-        .filter_level(log::LevelFilter::Info)  // 设置默认日志级别为Info
+        .filter_level(log::LevelFilter::Info)
         .init();
-    info!("Perple可视化演示");
-    let mut data_loader = DataLoader::new("./data/test".to_string());
+    info!("Perple 检测流程可视化（14 帧）");
 
-    // 首先加载数据
+    let mut data_loader = DataLoader::new("./data/cloud".to_string());
+    data_loader.set_frame_limit(14);
+    info!("开始加载数据...");
+    let load_start = std::time::Instant::now();
     let _ = data_loader.load().await;
+    info!("数据加载完成，耗时 {}ms", load_start.elapsed().as_millis());
 
-    let mut perple = Perple::new();
+    let lidar = Arc::new(Mutex::new(Lidar::new()));
+    let tracker = Arc::new(Mutex::new(Tracker::new()));
+    let mut writer = FrameWriter::new("output/visualize.db")?;
 
-    // 启动Perple处理流程
-    let _ = perple.run().await;
+    let n_frames = 14;
+    for i in 0..n_frames {
+        info!("─── 第 {}/{} 帧 ───", i + 1, n_frames);
 
-    // 增加等待时间，让数据处理流程有足够时间运行
-    info!("等待数据处理完成...");
-    // 给数据处理模块足够的时间来处理数据
-    let _ = sleep(Duration::from_secs(5)).await;
+        // ── LiDAR 处理 ──
+        {
+            let l = Arc::clone(&lidar);
+            tokio::task::spawn_blocking(move || {
+                let _ = l.lock().unwrap().act();
+            })
+            .await
+            .map_err(|e| format!("Lidar 任务失败: {}", e))?;
+        }
 
-    // 显示流状态并等待发送完成
-    show_stream_status().await?;
+        // ── 跟踪 ──
+        {
+            let t = Arc::clone(&tracker);
+            tokio::task::spawn_blocking(move || {
+                let _ = t.lock().unwrap().run();
+            })
+            .await
+            .map_err(|e| format!("Tracker 任务失败: {}", e))?;
+        }
 
-    // 再等待一段时间，确保所有数据都已处理
-    info!("再次等待数据处理完成...");
-    let _ = sleep(Duration::from_secs(5)).await;
-    
-    // 再次检查流状态
-    show_stream_status().await?;
+        // ── 写入帧 ──
+        write_frame(&mut writer, i, n_frames).await?;
+    }
 
+    info!("所有帧处理完成，保存文件...");
+    writer.save()?;
+    info!("已保存到 output/visualize.db");
     Ok(())
 }
 
-async fn send_points_async(points: Vec<[f32; 3]>) {
-    for point in points {
-        let _ = send_point(point[0], point[2], point[1]).await;
-    }
-}
+async fn write_frame(writer: &mut FrameWriter, frame: usize, total: usize) -> Result<(), Box<dyn std::error::Error>> {
+    writer.begin_frame(frame);
 
-async fn send_boxes_async(boxes: Vec<perple::cloud::CldBud>) {
-    for bound in boxes {
-        let edges = bound.the_box.edges_z_up();
-        for edge in edges {
-            let _ = send_segment(edge[0], edge[1]).await;
-        }
-    }
-}
-
-async fn show_stream_status() -> Result<(), Box<dyn std::error::Error>> {
     let swapl = global_swapl();
 
-    let cloud_in_world_stream = swapl.cloud_in_world.lock().await;
-
-    let cld_objs_stream = swapl.cld_objs.lock().await;
-
-    // 准备异步任务
-    let point_task = if let Some(frame) = cloud_in_world_stream.get_at(0) {
-        info!("  点云数据对象数量: {}", frame.len());
-        let points = frame.clone();
-        drop(cloud_in_world_stream); // 释放锁
-        Some(tokio::spawn(async move {
-            send_points_async(points).await;
-        }))
+    // ── 点云（暖白，语义层） ──
+    let cloud_stream = swapl.clouds_out.lock().unwrap();
+    if let Some(cloud) = cloud_stream.peek_latest() {
+        println!("  帧 {}/{} | 点云: {} points", frame + 1, total, cloud.len());
+        writer.write_cloud(&cloud, "point_cloud", 5000);
     } else {
         drop(cloud_in_world_stream);
         None
@@ -81,25 +78,43 @@ async fn show_stream_status() -> Result<(), Box<dyn std::error::Error>> {
 
     // 准备3D框发送任务
     let box_task = if let Some(bounds) = cld_objs_stream.get_at(0) {
-        info!("  3D检测结果对象数量: {}", bounds.len());
+        println!("  3D检测结果对象数量: {}", bounds.len());
         let bounds_data = bounds.clone();
         drop(cld_objs_stream); // 释放锁
         Some(tokio::spawn(async move {
             send_boxes_async(bounds_data).await;
         }))
     } else {
-        drop(cld_objs_stream);
-        None
-    };
-
-    // 等待所有异步任务完成
-    if let Some(task) = point_task {
-        let _ = task.await;
+        println!("  帧 {}/{} | 目标: 无", frame + 1, total);
     }
+    drop(target_stream);
 
-    if let Some(task) = box_task {
-        let _ = task.await;
-    }
-
+    writer.end_frame();
     Ok(())
+}
+
+fn write_targets(writer: &mut FrameWriter, targets: &[Target]) {
+    for target in targets.iter() {
+        let tag = format!("{} | {} | {} | {:.1}m/s",
+            target.id, target.class_type, target.classification, target.speed);
+        writer.write_box(&target.the_box, "disabled", &tag);
+    }
+}
+
+fn write_speed_arrows(writer: &mut FrameWriter, targets: &[Target]) {
+    for target in targets {
+        if target.speed > 0.5 {
+            let center = target.the_box.center();
+            let scale = (target.speed * 2.0).min(10.0);
+            let dx = target.velocity[0] / target.speed * scale;
+            let dy = target.velocity[1] / target.speed * scale;
+            let dz = target.velocity[2] / target.speed * scale;
+
+            writer.write_line(
+                [center.x, center.y, center.z],
+                [center.x + dx, center.y + dy, center.z + dz],
+                "trajectory",
+            );
+        }
+    }
 }

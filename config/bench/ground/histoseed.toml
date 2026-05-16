@@ -1,0 +1,36 @@
+name = "直方图种子平面拟合"
+type = "histoseed"
+preprocessor = "passthrough"
+
+[quick]
+frames = 1
+params = [
+  { expand = 0.10, distance = 0.2, iterations = 50 },
+  { expand = 0.10, distance = 0.3, iterations = 100 },
+  { expand = 0.20, distance = 0.2, iterations = 50 },
+  { expand = 0.20, distance = 0.3, iterations = 100 },
+]
+
+[full]
+frames = 10
+params = [
+  { expand = 0.05, distance = 0.1, iterations = 50 },
+  { expand = 0.05, distance = 0.2, iterations = 100 },
+  { expand = 0.05, distance = 0.3, iterations = 50 },
+  { expand = 0.10, distance = 0.1, iterations = 100 },
+  { expand = 0.10, distance = 0.2, iterations = 50 },
+  { expand = 0.10, distance = 0.3, iterations = 100 },
+  { expand = 0.20, distance = 0.1, iterations = 50 },
+  { expand = 0.20, distance = 0.2, iterations = 100 },
+  { expand = 0.20, distance = 0.3, iterations = 50 },
+  { expand = 0.30, distance = 0.1, iterations = 100 },
+  { expand = 0.30, distance = 0.2, iterations = 50 },
+  { expand = 0.30, distance = 0.3, iterations = 100 },
+]
+
+[stats]
+fastest_ms = 9.441400000000002
+slowest_ms = 18.376
+avg_ms = 13.619258333333327
+median_ms = 13.39065
+last_run = "1778747722"

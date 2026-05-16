@@ -40,34 +40,23 @@ impl Box2D {
     pub fn is_valid(&self) -> bool {
         self.width() > 0.0 && self.height() > 0.0
     }
-}
 
-/// 2D目标检测结果
-///
-/// 表示一个检测到的对象，包括边界框、类别ID、类别名称和置信度。
-#[derive(Debug, Clone, Default)]
-pub struct Detection2D {
-    pub the_box: Box2D,
-    pub class_id: u32,
-    pub class_name: String,
-    pub confidence: f32,
-}
+    /// 计算与另一个 2D 框的 IoU（交并比）
+    pub fn iou(&self, other: &Self) -> f32 {
+        let inter_x1 = self.x1.max(other.x1);
+        let inter_y1 = self.y1.max(other.y1);
+        let inter_x2 = self.x2.min(other.x2);
+        let inter_y2 = self.y2.min(other.y2);
 
-impl Detection2D {
-    /// 创建一个新的检测结果
-    ///
-    /// # 参数
-    /// * `the_box` - 边界框
-    /// * `class_id` - 类别ID
-    /// * `class_name` - 类别名称
-    /// * `confidence` - 置信度
-    pub fn new(the_box: Box2D, class_id: u32, class_name: String, confidence: f32) -> Self {
-        Self {
-            the_box,
-            class_id,
-            class_name,
-            confidence,
-        }
+        let inter_w = (inter_x2 - inter_x1).max(0.0);
+        let inter_h = (inter_y2 - inter_y1).max(0.0);
+        let inter_area = inter_w * inter_h;
+
+        let self_area = self.area();
+        let other_area = other.area();
+        let union_area = self_area + other_area - inter_area;
+
+        if union_area <= 0.0 { 0.0 } else { inter_area / union_area }
     }
 }
 
@@ -91,6 +80,19 @@ impl Box3D {
             width,
             height,
         }
+    }
+
+    /// 到目标点的 XY 平面距离（忽略 Z）
+    pub fn xy_distance_to(&self, target: [f32; 3]) -> f32 {
+        let c = self.center();
+        let dx = c.x - target[0];
+        let dy = c.y - target[1];
+        (dx * dx + dy * dy).sqrt()
+    }
+
+    /// 中心是否在以 origin 为圆心、max_range 为半径的 XY 圆内
+    pub fn is_in_xy_range(&self, origin: [f32; 3], max_range: f32) -> bool {
+        self.xy_distance_to(origin) <= max_range
     }
 
     /// 从平移和欧拉角创建Tag3D
@@ -199,13 +201,15 @@ impl Box3D {
         Ok(())
     }
 
-    /// 从点云创建包围盒
-    pub fn cloud2box(&mut self, cloud3d: &Vec<[f32; 3]>) {
+    /// 从点云计算 AABB（轴对齐包围盒）
+    ///
+    /// 接受任意 slice，自动 clamp 最小边长到 `min_edge`（米），
+    /// 避免退化为零体积盒导致渲染异常。
+    pub fn from_cloud_aabb(cloud3d: &[[f32; 3]], min_edge: f32) -> Self {
         if cloud3d.is_empty() {
-            return;
+            return Self::empty_box();
         }
 
-        // 简单的AABB实现 - 计算点云在世界坐标系中的边界
         let mut x_min = cloud3d[0][0];
         let mut x_max = cloud3d[0][0];
         let mut y_min = cloud3d[0][1];
@@ -213,27 +217,30 @@ impl Box3D {
         let mut z_min = cloud3d[0][2];
         let mut z_max = cloud3d[0][2];
 
-        for point in cloud3d {
-            x_min = x_min.min(point[0]);
-            x_max = x_max.max(point[0]);
-            y_min = y_min.min(point[1]);
-            y_max = y_max.max(point[1]);
-            z_min = z_min.min(point[2]);
-            z_max = z_max.max(point[2]);
+        for p in &cloud3d[1..] {
+            x_min = x_min.min(p[0]);
+            x_max = x_max.max(p[0]);
+            y_min = y_min.min(p[1]);
+            y_max = y_max.max(p[1]);
+            z_min = z_min.min(p[2]);
+            z_max = z_max.max(p[2]);
         }
 
-        // 计算中心点坐标
-        let center_x = (x_min + x_max) / 2.0;
-        let center_y = (y_min + y_max) / 2.0;
-        let center_z = (z_min + z_max) / 2.0;
+        let cx = (x_min + x_max) * 0.5;
+        let cy = (y_min + y_max) * 0.5;
+        let cz = (z_min + z_max) * 0.5;
 
-        // 设置包围盒的位姿矩阵（无旋转，仅平移）
-        self.pose = Matrix4::new_translation(&Vector3::new(center_x, center_y, center_z));
+        Box3D {
+            pose: Matrix4::new_translation(&Vector3::new(cx, cy, cz)),
+            length: (x_max - x_min).max(min_edge),
+            width:  (y_max - y_min).max(min_edge),
+            height: (z_max - z_min).max(min_edge),
+        }
+    }
 
-        // 设置尺寸
-        self.length = x_max - x_min;
-        self.width = y_max - y_min;
-        self.height = z_max - z_min;
+    /// 从点云创建包围盒（旧接口，委托给 `from_cloud_aabb`）
+    pub fn cloud2box(&mut self, cloud3d: &Vec<[f32; 3]>) {
+        *self = Self::from_cloud_aabb(cloud3d, 0.0);
     }
 
     /// 从2D点云创建包围盒（俯视视角）
@@ -266,9 +273,14 @@ impl Box3D {
         self.height = f32::MAX; // 在Z方向上无限延伸
     }
 
-    /// 获取包围盒的中心点
-    pub fn center(&self) -> Point3<f32> {
-        Point3::new(self.pose[(0, 3)], self.pose[(1, 3)], self.pose[(2, 3)])
+    /// 获取包围盒中心点（世界坐标系）
+    pub fn center(&self) -> Vector3<f32> {
+        Vector3::new(self.pose[(0, 3)], self.pose[(1, 3)], self.pose[(2, 3)])
+    }
+
+    /// 获取包围盒尺寸（长、宽、高）
+    pub fn shape(&self) -> Vector3<f32> {
+        Vector3::new(self.length, self.width, self.height)
     }
 
     pub fn center_single(&self) -> [f32; 3] {
@@ -626,154 +638,3 @@ impl Box3D {
     }
 }
 
-/// 3D边界框结构
-///
-/// 表示一个3D空间中的边界框，用于包围点云中的对象。
-#[derive(Debug, Clone, Copy, Default)]
-pub struct AABB3D {
-    pub x_min: f32,
-    pub x_max: f32,
-    pub y_min: f32,
-    pub y_max: f32,
-    pub z_min: f32,
-    pub z_max: f32,
-}
-
-impl AABB3D {
-    /// 创建一个空的边界框
-    pub fn empty_box() -> Self {
-        Self {
-            x_min: 0.0,
-            x_max: 0.0,
-            y_min: 0.0,
-            y_max: 0.0,
-            z_min: 0.0,
-            z_max: 0.0,
-        }
-    }
-
-    /// 创建一个新的边界框
-    ///
-    /// # 参数
-    /// * `x_min` - X轴最小值
-    /// * `x_max` - X轴最大值
-    /// * `y_min` - Y轴最小值
-    /// * `y_max` - Y轴最大值
-    /// * `z_min` - Z轴最小值
-    /// * `z_max` - Z轴最大值
-    pub fn new(x_min: f32, x_max: f32, y_min: f32, y_max: f32, z_min: f32, z_max: f32) -> Self {
-        Self {
-            x_min,
-            x_max,
-            y_min,
-            y_max,
-            z_min,
-            z_max,
-        }
-    }
-
-    pub fn contains(&self, point: [f32; 3]) -> bool {
-        point[0] >= self.x_min
-            && point[0] <= self.x_max
-            && point[1] >= self.y_min
-            && point[1] <= self.y_max
-            && point[2] >= self.z_min
-            && point[2] <= self.z_max
-    }
-
-    pub fn near(&self, point: &[f32; 3], distance: f32) -> bool {
-        // 使用 clamp 找到点在边界框上的最近点
-        let x = point[0].clamp(self.x_min, self.x_max);
-        let y = point[1].clamp(self.y_min, self.y_max);
-        let z = point[2].clamp(self.z_min, self.z_max);
-
-        // 计算欧几里得距离的平方
-        let dx = x - point[0];
-        let dy = y - point[1];
-        let dz = z - point[2];
-
-        dx * dx + dy * dy + dz * dz <= distance * distance
-    }
-
-    pub fn expand(&mut self, point: &[f32; 3]) {
-        self.x_min = self.x_min.min(point[0]);
-        self.x_max = self.x_max.max(point[0]);
-        self.y_min = self.y_min.min(point[1]);
-        self.y_max = self.y_max.max(point[1]);
-        self.z_min = self.z_min.min(point[2]);
-        self.z_max = self.z_max.max(point[2]);
-    }
-
-    pub fn merge(&mut self, other: &Self) {
-        self.x_min = self.x_min.min(other.x_min);
-        self.x_max = self.x_max.max(other.x_max);
-        self.y_min = self.y_min.min(other.y_min);
-        self.y_max = self.y_max.max(other.y_max);
-        self.z_min = self.z_min.min(other.z_min);
-        self.z_max = self.z_max.max(other.z_max);
-    }
-
-    pub fn iou(&self, other: &Self) -> f32 {
-        // 计算交集区域的边界
-        let inter_x_min = self.x_min.max(other.x_min);
-        let inter_x_max = self.x_max.min(other.x_max);
-        let inter_y_min = self.y_min.max(other.y_min);
-        let inter_y_max = self.y_max.min(other.y_max);
-        let inter_z_min = self.z_min.max(other.z_min);
-        let inter_z_max = self.z_max.min(other.z_max);
-
-        // 检查是否有交集
-        if inter_x_min >= inter_x_max || inter_y_min >= inter_y_max || inter_z_min >= inter_z_max {
-            return 0.0;
-        }
-
-        // 计算交集体积
-        let intersection_volume =
-            (inter_x_max - inter_x_min) * (inter_y_max - inter_y_min) * (inter_z_max - inter_z_min);
-
-        // 计算两个盒子的体积
-        let self_volume = self.volume();
-        let other_volume = other.volume();
-
-        // 计算并集体积
-        let union_volume = self_volume + other_volume - intersection_volume;
-
-        // 返回交并比
-        if union_volume == 0.0 {
-            0.0
-        } else {
-            intersection_volume / union_volume
-        }
-    }
-
-    pub fn volume(&self) -> f32 {
-        (self.x_max - self.x_min) * (self.y_max - self.y_min) * (self.z_max - self.z_min)
-    }
-}
-
-/// 3D目标检测结果
-///
-/// 表示一个检测到的对象，包括边界框、类别ID和类别名称。
-#[derive(Clone)]
-pub struct Detection3D {
-    pub the_box: AABB3D,
-    pub class_id: u32,
-    pub class_name: String,
-}
-
-impl Detection3D {
-    /// 创建一个新的检测结果
-    pub fn new() -> Self {
-        Self {
-            the_box: AABB3D::empty_box(),
-            class_id: 0,
-            class_name: String::new(),
-        }
-    }
-}
-
-impl Default for Detection3D {
-    fn default() -> Self {
-        Self::new()
-    }
-}

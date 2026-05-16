@@ -4,7 +4,7 @@ use std::mem::MaybeUninit;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use tokio::sync::Mutex;
+use std::sync::Mutex;
 
 use crate::config::fixif;
 
@@ -53,12 +53,6 @@ pub struct Cream<IofActor: Default + Send + Clone, OofActor: Default + Send + Cl
     pub in_stream: Eap<Stream<IofActor>>,
     pub out_stream: Eap<Stream<OofActor>>,
 }
-
-// 定义类型别名简化常见的流类型
-pub type StreamPtr<T> = Eap<Stream<T>>;
-
-// 为常用的流类型定义特定别名
-pub type DataStream<T> = StreamPtr<T>;
 
 impl<T: Default + Send + Clone> Stream<T> {
     pub fn new() -> Self {
@@ -218,6 +212,13 @@ impl<T: Default + Send + Clone> Stream<T> {
         }
     }
 
+    /// 返回最新写入的数据（不移动指针），没有数据时返回 None
+    pub fn peek_latest(&self) -> Option<T> {
+        let w = self.write_index.load(Ordering::Acquire);
+        let latest = if w == 0 { self.capacity - 1 } else { w - 1 };
+        unsafe { self.pool[latest].assume_init_ref().clone() }
+    }
+
     /// 获取当前读取位置的索引，不移动读取指针
     pub fn read_index(&self) -> usize {
         self.read_index.load(Ordering::Acquire)
@@ -241,45 +242,43 @@ impl<IofActor: Default + Send + Clone, OofActor: Default + Send + Clone> Cream<I
     }
 
     /// 从输入流读取一个数据项并返回。这是主要的消费入口。
-    pub async fn read(&self) -> Option<IofActor> {
-        self.in_stream.lock().await.read()
+    pub fn read(&self) -> Option<IofActor> {
+        self.in_stream.lock().unwrap().read()
     }
 
     /// 提交对输入流的读取操作，移动读取指针。
-    pub async fn commit_read(&self) -> Result<(), StreamError> {
-        self.in_stream.lock().await.commit_read()
+    pub fn commit_read(&self) -> Result<(), StreamError> {
+        self.in_stream.lock().unwrap().commit_read()
     }
 
     /// 向输出流写入一个数据项。
-    pub async fn write(&self, data: OofActor) -> Result<(), StreamError> {
-        self.out_stream.lock().await.write(data)
+    pub fn write(&self, data: OofActor) -> Result<(), StreamError> {
+        self.out_stream.lock().unwrap().write(data)
     }
 
     /// 提交对输出流的写入操作，移动写入指针。
-    pub async fn commit_write(&self) -> Result<(), StreamError> {
-        self.out_stream.lock().await.commit_write()
+    pub fn commit_write(&self) -> Result<(), StreamError> {
+        self.out_stream.lock().unwrap().commit_write()
     }
 
     /// 从输出流接收一个数据项。
-    /// receive 的缩减写法
-    pub async fn reciv(&self) -> Option<OofActor> {
-        self.out_stream.lock().await.read()
+    pub fn reciv(&self) -> Option<OofActor> {
+        self.out_stream.lock().unwrap().read()
     }
 
     /// 提交对输出流的接收操作，移动接收指针。
-    pub async fn commit_reciv(&self) -> Result<(), StreamError> {
-        self.out_stream.lock().await.commit_read()
+    pub fn commit_reciv(&self) -> Result<(), StreamError> {
+        self.out_stream.lock().unwrap().commit_read()
     }
 
     /// 将一个数据项交付到输出流（等同于提交写入操作）。
-    /// deliver 的缩减写法
-    pub async fn deliv(&self, data: OofActor) -> Result<(), StreamError> {
-        self.out_stream.lock().await.write(data)
+    pub fn deliv(&self, data: OofActor) -> Result<(), StreamError> {
+        self.out_stream.lock().unwrap().write(data)
     }
 
     /// 提交对输出流的交付操作，移动交付指针。
-    pub async fn commit_deliv(&self) -> Result<(), StreamError> {
-        self.out_stream.lock().await.commit_write()
+    pub fn commit_deliv(&self) -> Result<(), StreamError> {
+        self.out_stream.lock().unwrap().commit_write()
     }
 
     /// 获取处理者的输入流引用
@@ -293,4 +292,50 @@ impl<IofActor: Default + Send + Clone, OofActor: Default + Send + Clone> Cream<I
     pub fn share_ooa(&self) -> Eap<Stream<OofActor>> {
         self.out_stream.clone()
     }
+}
+
+// ─── DualBuffer ───────────────────────────────────────────────────────────────
+
+/// 双缓冲，分离检测阶段（producer）和后融合阶段（consumer）的读写锁域。
+///
+/// 检测阶段写 `producer`，后融合阶段读 `consumer`，两阶段用不同的 `std::sync::Mutex` 保护，
+/// 完全消除跨阶段锁竞争。在串行 swap 点原子性交换 producer/consumer。
+pub struct DualBuffer<T> {
+    producer: std::sync::Mutex<T>,
+    consumer: std::sync::Mutex<T>,
+}
+
+impl<T: Default> DualBuffer<T> {
+    pub fn new() -> Self {
+        Self {
+            producer: std::sync::Mutex::new(T::default()),
+            consumer: std::sync::Mutex::new(T::default()),
+        }
+    }
+
+    /// 返回 producer 锁（检测阶段：Lidar/Camera 写入）
+    pub fn producer(&self) -> &std::sync::Mutex<T> {
+        &self.producer
+    }
+
+    /// 返回 consumer 锁（后融合阶段：Fuse/Tracker 读取）
+    pub fn consumer(&self) -> &std::sync::Mutex<T> {
+        &self.consumer
+    }
+
+    /// 原子性交换 producer 和 consumer。
+    /// 在检测阶段完成后、后融合阶段开始前调用。
+    pub fn swap(&self) {
+        let mut p = self.producer.lock().unwrap();
+        let mut c = self.consumer.lock().unwrap();
+        std::mem::swap(&mut *p, &mut *c);
+    }
+}
+
+/// `Arc<DualBuffer<T>>` 类型别名，方便在多任务间共享。
+pub type DualBuf<T> = Arc<DualBuffer<T>>;
+
+/// 创建新的双缓冲（`Arc` 包装）。
+pub fn new_dual_buf<T: Default>() -> DualBuf<T> {
+    Arc::new(DualBuffer::new())
 }
