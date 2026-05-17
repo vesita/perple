@@ -29,6 +29,16 @@
 /// 空间索引：bev（鸟瞰图栅格）— XY 平面栅格化
 use super::WallPickStrategy;
 
+// 梯度二进制方向（EDLines 核心：用 |gx| vs |gy| 判断边缘方向，避免三角函数）
+const EDGE_VERTICAL: u8 = 1;   // |gx| >= |gy|: 梯度垂直 → 边缘水平 → 左右追踪
+const EDGE_HORIZONTAL: u8 = 2; // |gy| > |gx|: 梯度水平 → 边缘垂直 → 上下追踪
+
+// 边缘绘制步进方向
+const LEFT: u8 = 3;
+const RIGHT: u8 = 4;
+const UP: u8 = 5;
+const DOWN: u8 = 6;
+
 pub struct BevEdLines {
     /// BEV 分辨率（米/像素）
     resolution: f32,
@@ -134,49 +144,41 @@ impl WallPickStrategy for BevEdLines {
             }
         }
 
-        // ── 2. Sobel 梯度 ──
-        let grad_mag = sobel_magnitude(&img, size, size);
-        let grad_angle = sobel_angle(&img, size, size);
+        // ── 2. Sobel 梯度 + 二进制方向（无三角函数）──
+        let (grad_mag, grad_dir) = sobel_gradient(&img, size, size);
 
         let max_mag = grad_mag.iter().fold(0.0f32, |a, &b| a.max(b));
         if max_mag < 1e-6 { return (0, Vec::new()); }
         let mag_threshold = max_mag * self.grad_threshold;
-        let anchor_mag_threshold = max_mag * self.anchor_threshold;
 
-        // ── 3. 锚点检测（ED 核心）──
-        // 沿梯度方向检查是否局部极大值
+        // ── 3. 锚点检测（NMS + 二进制方向）──
+        // 沿梯度方向检查是否为局部极大值（参考 anchorThresh=0 默认值）
         let mut is_anchor = vec![false; size * size];
-        for y in 1..size - 1 {
-            for x in 1..size - 1 {
+        for y in 2..size - 2 {
+            for x in 2..size - 2 {
                 let i = y * size + x;
-                if grad_mag[i] < anchor_mag_threshold { continue; }
+                if grad_mag[i] < mag_threshold { continue; }
 
-                let angle = grad_angle[i];
-                // 梯度方向单位向量（指向梯度幅值增大方向）
-                let gx = angle.cos();
-                let gy = angle.sin();
-
-                // 取梯度方向的两个邻域像素（最近邻近似）
-                let (nx1, ny1) = neighbor_step(gx, gy);
-                let nx1_clamp = (x as i32 + nx1).clamp(0, size as i32 - 1) as usize;
-                let ny1_clamp = (y as i32 + ny1).clamp(0, size as i32 - 1) as usize;
-                // 反方向
-                let nx2_clamp = (x as i32 - nx1).clamp(0, size as i32 - 1) as usize;
-                let ny2_clamp = (y as i32 - ny1).clamp(0, size as i32 - 1) as usize;
-
-                let mag = grad_mag[i];
-                let mag1 = grad_mag[ny1_clamp * size + nx1_clamp];
-                let mag2 = grad_mag[ny2_clamp * size + nx2_clamp];
-
-                if mag >= mag1 && mag >= mag2 {
-                    is_anchor[i] = true;
+                match grad_dir[i] {
+                    EDGE_VERTICAL => {
+                        // |gx|>=|gy|: 梯度水平 → 检查左右邻域极大值
+                        if grad_mag[i] >= grad_mag[i - 1] && grad_mag[i] >= grad_mag[i + 1] {
+                            is_anchor[i] = true;
+                        }
+                    }
+                    EDGE_HORIZONTAL => {
+                        // |gy|>|gx|: 梯度垂直 → 检查上下邻域极大值
+                        if grad_mag[i] >= grad_mag[i - size] && grad_mag[i] >= grad_mag[i + size] {
+                            is_anchor[i] = true;
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
 
         // ── 4. 边缘绘制（Edge Drawing）──
-        // 从锚点出发双向追踪
-        let mut edges = vec![f32::NEG_INFINITY; size * size]; // 存储链 ID（用 float 方便与其他逻辑互操作）
+        let mut edges = vec![f32::NEG_INFINITY; size * size];
         let mut chains: Vec<Vec<(usize, usize)>> = Vec::new();
 
         // 所有锚点按梯度幅值降序
@@ -191,27 +193,21 @@ impl WallPickStrategy for BevEdLines {
         anchor_list.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
 
         for &(ax, ay, _) in &anchor_list {
-            if edges[ay * size + ax].is_finite() { continue; } // 已被其他链覆盖
+            if edges[ay * size + ax].is_finite() { continue; }
 
             let mut chain = Vec::new();
-            // 从锚点的双侧方向追踪，先走一个方向再走另一个方向
-            // 边缘方向 = 梯度方向 + 90°
-            let edge_angle = grad_angle[ay * size + ax] + std::f32::consts::PI / 2.0;
-            let (ed_x, ed_y) = (edge_angle.cos(), edge_angle.sin());
+            // 从二进制方向确定边缘追踪方向
+            // EDGE_VERTICAL(|gx|>=|gy|): 梯度水平 → 边缘垂直 → 上下追踪
+            // EDGE_HORIZONTAL(|gy|>|gx|): 梯度垂直 → 边缘水平 → 左右追踪
+            let (d1, d2) = match grad_dir[ay * size + ax] {
+                EDGE_VERTICAL => (UP, DOWN),
+                EDGE_HORIZONTAL => (LEFT, RIGHT),
+                _ => continue,
+            };
 
-            // 正向：沿 (ed_x, ed_y) 方向
-            walk_edge_chain(
-                &grad_mag, &grad_angle, size, size, mag_threshold,
-                ax, ay, ed_x, ed_y, &mut edges, &mut chain
-            );
+            walk_edge_chain(&grad_mag, &grad_dir, size, size, mag_threshold, ax, ay, d1, &mut edges, &mut chain);
+            walk_edge_chain(&grad_mag, &grad_dir, size, size, mag_threshold, ax, ay, d2, &mut edges, &mut chain);
 
-            // 反向：沿 (-ed_x, -ed_y) 方向
-            walk_edge_chain(
-                &grad_mag, &grad_angle, size, size, mag_threshold,
-                ax, ay, -ed_x, -ed_y, &mut edges, &mut chain
-            );
-
-            // 如果链太短则丢弃
             if chain.len() < self.min_chain_len {
                 for &(cx, cy) in &chain {
                     edges[cy * size + cx] = f32::NEG_INFINITY;
@@ -326,107 +322,70 @@ impl WallPickStrategy for BevEdLines {
 /// 每一步从 3 个候选像素中选梯度幅值最高的作为下一步。
 fn walk_edge_chain(
     grad_mag: &[f32],
-    grad_angle: &[f32],
+    grad_dir: &[u8],
     w: usize,
     h: usize,
     mag_threshold: f32,
     sx: usize,
     sy: usize,
-    ed_x: f32,
-    ed_y: f32,
+    dir: u8,
     edges: &mut [f32],
     chain: &mut Vec<(usize, usize)>,
 ) {
-    // 先把锚点加入链（仅在首次调用时）
     if chain.is_empty() {
         chain.push((sx, sy));
-        edges[sy * w + sx] = -1.0; // 临时标记
+        edges[sy * w + sx] = -1.0;
     }
 
-    let mut x = sx as i32;
-    let mut y = sy as i32;
+    let (mut x, mut y) = (sx as i32, sy as i32);
+    let (step_x, step_y) = match dir {
+        LEFT => (-1, 0),
+        RIGHT => (1, 0),
+        UP => (0, -1),
+        DOWN => (0, 1),
+        _ => return,
+    };
+    let (fw_x, fw_y) = (step_x, step_y);
+    let (ro_x, ro_y) = (step_x + step_y, step_y - step_x);
+    let (lo_x, lo_y) = (step_x - step_y, step_y + step_x);
 
     loop {
-        // 边缘方向确定主前进方向
-        let (step_x, step_y) = ed_step(ed_x, ed_y);
-
-        // 3 个候选像素：正前方 + 侧偏
-        let candidates = [
-            (x + step_x, y + step_y),                     // 正前方
-            (x + step_x + step_y, y + step_y - step_x),   // 右偏
-            (x + step_x - step_y, y + step_y + step_x),   // 左偏
-        ];
-
-        // 过滤有效候选，选梯度幅值最高的
         let mut best_i = None;
-        let mut best_mag = mag_threshold; // 必须超过阈值
+        let mut best_mag = mag_threshold;
 
-        // 优先选择方向与当前边缘方向最一致且未使用的高梯度像素
-        for (_idx, &(cx, cy)) in candidates.iter().enumerate() {
-            if cx < 1 || cx >= w as i32 - 1 || cy < 1 || cy >= h as i32 - 1 { continue; }
-            let ci = cy as usize * w + cx as usize;
-            if edges[ci].is_finite() { continue; } // 已属于其它链
-
-            let mag = grad_mag[ci];
-            if mag > best_mag {
-                // 检查角度一致性（方向差 < 90°）
-                let angle_diff = edge_angle_diff(grad_angle[ci], grad_angle[y as usize * w + x as usize]);
-                if angle_diff < std::f32::consts::PI / 2.0 {
-                    best_mag = mag;
-                    best_i = Some((cx, cy));
+        // 3 个候选像素：正前方 + 两侧偏，选梯度幅值最高且未使用
+        let cands = [
+            (x + fw_x, y + fw_y),
+            (x + ro_x, y + ro_y),
+            (x + lo_x, y + lo_y),
+        ];
+        for &(cx, cy) in &cands {
+            if cx >= 1 && cx < w as i32 - 1 && cy >= 1 && cy < h as i32 - 1 {
+                let ci = cy as usize * w + cx as usize;
+                if !edges[ci].is_finite() {
+                    let mag = grad_mag[ci];
+                    if mag > best_mag { best_mag = mag; best_i = Some((cx, cy)); }
                 }
             }
         }
 
         match best_i {
             Some((nx, ny)) => {
+                let ni = ny as usize * w + nx as usize;
+                // 边缘方向一致性检验：边缘类型必须匹配步进方向
+                match dir {
+                    LEFT | RIGHT => if grad_dir[ni] != EDGE_HORIZONTAL { break; },
+                    UP | DOWN => if grad_dir[ni] != EDGE_VERTICAL { break; },
+                    _ => {}
+                }
                 chain.push((nx as usize, ny as usize));
-                edges[ny as usize * w + nx as usize] = -1.0;
+                edges[ni] = -1.0;
                 x = nx;
                 y = ny;
-                // 更新边缘方向为当前点的梯度方向
-                let new_edge_angle = grad_angle[y as usize * w + x as usize] + std::f32::consts::PI / 2.0;
-                // 取与当前方向一致的朝向（不反向）
-                let dot = new_edge_angle.cos() * ed_x + new_edge_angle.sin() * ed_y;
-                if dot >= 0.0 {
-                    // 保持原有 ed_x, ed_y，或者说保留原参考方向
-                }
-                // 继续
             }
-            None => break, // 无法继续
+            None => break,
         }
     }
-}
-
-/// 根据梯度方向向量确定主像素步进方向
-fn ed_step(ed_x: f32, ed_y: f32) -> (i32, i32) {
-    let abs_x = ed_x.abs();
-    let abs_y = ed_y.abs();
-    if abs_x >= abs_y {
-        // 水平主导
-        (if ed_x > 0.0 { 1 } else { -1 }, 0)
-    } else {
-        // 垂直主导
-        (0, if ed_y > 0.0 { 1 } else { -1 })
-    }
-}
-
-/// 沿梯度方向取邻域步进
-fn neighbor_step(gx: f32, gy: f32) -> (i32, i32) {
-    let abs_x = gx.abs();
-    let abs_y = gy.abs();
-    if abs_x >= abs_y {
-        (if gx > 0.0 { 1 } else { -1 }, 0)
-    } else {
-        (0, if gy > 0.0 { 1 } else { -1 })
-    }
-}
-
-/// 两条边缘方向之间的夹角（忽略朝向）
-fn edge_angle_diff(a: f32, b: f32) -> f32 {
-    // 梯度角度模 π
-    let diff = ((a + std::f32::consts::PI / 2.0) - (b + std::f32::consts::PI / 2.0)).abs() % std::f32::consts::PI;
-    diff.min(std::f32::consts::PI - diff)
 }
 
 // ─── 曲率分裂 ──────────────────────────────────────────
@@ -492,37 +451,32 @@ fn split_recursive(
 
 // ─── 图像处理辅助 ──────────────────────────────────────
 
-fn sobel_magnitude(src: &[u8], w: usize, h: usize) -> Vec<f32> {
-    let mut mag = vec![0.0f32; src.len()];
+/// 单次 Sobel 计算，返回梯度幅值（|gx|+|gy|）和二进制方向（避免 atan2/cos/sin）
+fn sobel_gradient(src: &[u8], w: usize, h: usize) -> (Vec<f32>, Vec<u8>) {
+    let n = src.len();
+    let mut mag = vec![0.0f32; n];
+    let mut dir = vec![0u8; n];
     for y in 1..h - 1 {
         for x in 1..w - 1 {
             let i = y * w + x;
-            let gx = -1.0 * src[i - w - 1] as f32 + 1.0 * src[i - w + 1] as f32
-                     -2.0 * src[i - 1] as f32     + 2.0 * src[i + 1] as f32
-                     -1.0 * src[i + w - 1] as f32 + 1.0 * src[i + w + 1] as f32;
-            let gy = -1.0 * src[i - w - 1] as f32 - 2.0 * src[i - w] as f32 - 1.0 * src[i - w + 1] as f32
-                     +1.0 * src[i + w - 1] as f32 + 2.0 * src[i + w] as f32 + 1.0 * src[i + w + 1] as f32;
-            mag[i] = (gx * gx + gy * gy).sqrt();
-        }
-    }
-    mag
-}
+            let gx = -1i32 * src[i - w - 1] as i32 + 1 * src[i - w + 1] as i32
+                     -2 * src[i - 1] as i32     + 2 * src[i + 1] as i32
+                     -1 * src[i + w - 1] as i32 + 1 * src[i + w + 1] as i32;
+            let gy = -1i32 * src[i - w - 1] as i32 - 2 * src[i - w] as i32 - 1 * src[i - w + 1] as i32
+                     +1 * src[i + w - 1] as i32 + 2 * src[i + w] as i32 + 1 * src[i + w + 1] as i32;
 
-fn sobel_angle(src: &[u8], w: usize, h: usize) -> Vec<f32> {
-    let mut angle = vec![0.0f32; src.len()];
-    for y in 1..h - 1 {
-        for x in 1..w - 1 {
-            let i = y * w + x;
-            let gx = -1.0 * src[i - w - 1] as f32 + 1.0 * src[i - w + 1] as f32
-                     -2.0 * src[i - 1] as f32     + 2.0 * src[i + 1] as f32
-                     -1.0 * src[i + w - 1] as f32 + 1.0 * src[i + w + 1] as f32;
-            let gy = -1.0 * src[i - w - 1] as f32 - 2.0 * src[i - w] as f32 - 1.0 * src[i - w + 1] as f32
-                     +1.0 * src[i + w - 1] as f32 + 2.0 * src[i + w] as f32 + 1.0 * src[i + w + 1] as f32;
-            let a = gy.atan2(gx);
-            angle[i] = if a < 0.0 { a + std::f32::consts::PI } else { a };
+            let gx_abs = gx.abs() as f32;
+            let gy_abs = gy.abs() as f32;
+            mag[i] = gx_abs + gy_abs;
+
+            if gx_abs >= gy_abs {
+                dir[i] = EDGE_VERTICAL;
+            } else {
+                dir[i] = EDGE_HORIZONTAL;
+            }
         }
     }
-    angle
+    (mag, dir)
 }
 
 /// PCA 矩形拟合（同 bev_lsd）

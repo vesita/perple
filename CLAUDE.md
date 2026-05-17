@@ -116,7 +116,7 @@ Raw Cloud (~20k pts)
         → YOLO fusion + Tracking → Detection Results
 ```
 
-Key insight: image-based wall detection (BevLsd/BevEdLines) outperforms all geometric methods (RANSAC, CC, normal-based, SVD).
+Key insight: image-based wall detection (BevEdLines > BevLsd > BevHough) outperforms all geometric methods. BevEdLines achieves Person F1 0.762 (P=85.1%, R=69.0%) vs BevLsd 0.686 (P=84.5%, R=57.8%) — edlines' fragmented edge chains better preserve near-wall pedestrian points.
 
 ### Key Fixes
 
@@ -125,7 +125,7 @@ Key insight: image-based wall detection (BevLsd/BevEdLines) outperforms all geom
 - **YOLO label smoothing**: `yolo_smooth.rs` + integrated in `main.rs` and `eval_labeled.rs` — frame-to-frame momentum filter on YOLO "person" labels, reducing label flicker. No significant impact on P/R/F1 metrics (verified by 3×3 runs).
 - **Config override system `config.rs`**: Added `update_from_toml()` with `PartialConfig` structs + `init_config()` with `OnceLock`, replacing compile-time-only config. **Bug**: `Option<T>` fields (`min_points_per_cluster`, `max_points_per_node`, `max_tree_depth`) need `Some()` wrapping — the `update_cluster_field!` macro's `value.clone()` produces `T`, not `Option<T>`.
 - **Multi-frame accumulation** (tested, abandoned): Merging N frames of non-ground points before clustering increased Person Recall +5.8pp but caused FP explosion (135→538) as accumulated clusters produced oversized boxes that passed geometry fallback.
-- **Default strategy changed to `prune_qt`**: Replaced `dbscan_qt` after comprehensive 9-strategy benchmark (408 frames). prune_qt improves Person Precision 61→78% (+17pp), reduces FP by 54% (437→199), and raises F1 from 0.589 to 0.674. The factory was also updated to read `merge_patience` and `min_points_per_cluster` from config instead of hardcoded values.
+- **Default wall strategy `bev_edlines` (binary direction)**: Refactored from angle-based (atan2/cos/sin) to binary direction (`|gx| >= |gy|` → EDGE_VERTICAL/HORIZONTAL), matching C++ reference. Removes all trigonometry, uses `|gx|+|gy|` magnitude (faster: ~14ms vs 17ms for bev_lsd). Current default config: `wall_strategy="bev_edlines"`, `wall_distance=0.08`. Replaced `dbscan_qt` after comprehensive 9-strategy benchmark (408 frames). prune_qt improves Person Precision 61→78% (+17pp), reduces FP by 54% (437→199), and raises F1 from 0.589 to 0.674. The factory was also updated to read `merge_patience` and `min_points_per_cluster` from config instead of hardcoded values.
 
 - `src/cloud/wall.rs` — WallPickStrategy trait + XYGrid shared infra + wall module root: `bev_lsd` (active), `bev_edlines` (active), and `bev_hough` (reserved)
 - `src/cloud/wall/bev_lsd.rs` — BEV image + LSD 风格区域生长墙体检测
