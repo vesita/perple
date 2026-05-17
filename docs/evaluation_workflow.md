@@ -523,8 +523,36 @@ cargo run --release --example eval_pr_curve -- --output ./output/pr_curve
 
 408 帧共 1224 个 GT Pedestrian（均在 0~10m 范围内）：
 
-- **误分类（空间命中但 label 错误）**: ~135-198 (11-16%) → 空间匹配到但被标记为 obstacle（几何 fallback 未覆盖或 trick 条件不满足）
-- **漏检（空间未命中）**: ~352-389 (29-31%) → LiDAR 预处理阶段丢失（地面/墙体误删、遮挡、聚类截断）
-- **误报 FP**: 在 min_pts=5, denoise=0.20 配置下约 135（person 过滤后），主要是 YOLO 误检 + 噪声聚类经几何 fallback 误判
+- **误分类（空间命中但 label 错误）**: ~114-134 (9-11%) → 空间匹配到但被标记为 obstacle（几何 fallback 未覆盖或 trick 条件不满足）
+- **漏检（空间未命中）**: ~237-260 (19-21%) → LiDAR 预处理阶段丢失（地面/墙体误删、遮挡、聚类截断）
+- **误报 FP**: Person 过滤后约 148-187，主要是 YOLO 误检 + 噪声聚类经几何 fallback 误判
 
-**当前主要瓶颈：** Person Recall ~52-57%（空间 Recall ~71%），差距主要在稀疏远距离行人（8-10m）的聚类点数不足、以及被地面/墙体过滤误删。高 precision 配置（min_pts=5, denoise=0.20）的 FP 已控制在较低水平但 recall 受限。
+**当前主要瓶颈：** Person Recall ~69%（空间 Recall ~79%），差距主要在稀疏远距离行人（8-10m）的聚类点数不足、以及被地面/墙体过滤误删。二进制方向 EDLines 将 Recall 从 66.4% 提升到 69.0%，FP 维持低位。
+
+### 7.8 BevEdLines 优化实验
+
+在二进制方向重构基础上，尝试了三项算法级增强（参考 C++ EDLines 参考实现 `opencv_idz`）：
+
+| # | 优化 | 实现 | 参数 |
+|---|------|------|------|
+| 1 | BEV 高斯模糊 | 可分离 1D 卷积（5×5 邻域，边界 clamp），在 BEV 归一化后、Sobel 前执行 | `gaussian_sigma=0.8` |
+| 2 | 锚点阈值偏移 | NMS 比较时增加 `max_mag × anchor_threshold` 偏移量，抑制弱边缘 | `anchor_threshold=0.04` |
+| 3 | 线段拟合误差校验 | 计算链像素到主轴的垂直 RMS 距离，过滤曲线段/锯齿链 | `max_fit_error=0.5` |
+
+三项通过 `BevEdLines::with_optimizations()` 统一启用。
+
+**评估结果（408 帧，中心距 0.5m，三次运行均值）：**
+
+| 指标 | 基线 | 优化版 | Δ |
+|------|:---:|:---:|:---:|
+| Spatial Recall | 78.8% | 80.6% | +1.8pp |
+| Spatial Precision | 58.8% | 59.0% | +0.2pp |
+| Spatial F1 | 0.673 | 0.682 | +0.009 |
+| Person Recall | 69.0% | 71.7% | +2.7pp |
+| Person Precision | 85.1% | 82.4% | -2.7pp |
+| Person F1 | 0.762 | **0.767** | +0.005 |
+| 空间 TP | 964 | 988 | +24 |
+| Person FP | 148 | 187 | +39 |
+| 误分类率 | 10.9% | 9.3% | -1.6pp |
+
+**结论：收益不足以设为默认。** Person F1 提升 0.005 在 YOLO 非确定性波动范围内（~0.02），Person TP +30 的同时 FP +39 导致 Precision 下降 2.7pp。代价是增加了高斯卷积和 RMS 计算的算力开销。三项优化保留为 `with_optimizations()` 可选接口供后续调参实验。
