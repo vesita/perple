@@ -72,12 +72,23 @@ cargo run --release --example eval_labeled -- \
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `--iou` | 0.15 | IoU 匹配阈值 |
-| `--center-dist` | 0.0 (关闭) | 中心距匹配阈值(m)，开启后替代 IoU |
+| `--iou` | 0.15 | IoU 匹配阈值（仅 `--center-dist 0` 时生效） |
+| `--center-dist` | 0.5 | **中心距匹配阈值(m)，默认开启。** 中心距 0.5m 是行人类小目标的最稳定匹配方式（见下方说明） |
+| `--bev-iou` | false | 使用 BEV 2D IoU 替代 AABB IoU。与 `--center-dist 0` 配合使用 |
 | `--frames` | 全部 | 评测帧数 |
 | `--skip` | 0 | 跳过的初始帧数 |
 | `--output` | 自动 | 输出目录 |
 | `--disable-yolo-smooth` | false | 关闭 YOLO 帧间标签平滑（测试平滑影响时用） |
+
+**三种匹配方式说明：**
+
+| 方式 | 命令 | 适用场景 | 行人 0~10m 典型 F1 |
+|------|------|----------|:---:|
+| **中心距 0.5m（默认/推荐）** | `--center-dist 0.5` | **行人类小目标，与 nuScenes 一致** | **0.68~0.75** |
+| BEV 2D IoU | `--center-dist 0 --bev-iou --iou 0.30` | 需要 2D 空间精度的场景，与 KITTI BEV 评估类似 | 0.39~0.43 |
+| 3D AABB IoU | `--center-dist 0 --iou 0.15` | 传统 3D 目标检测评估（注意 AABB 膨胀导致 IoU 虚高） | 0.42~0.57 |
+
+> **关于评估方法的选择：** 行人检测评估中，3D IoU（无论是 AABB 近似还是真 OBB）对小目标过于敏感——行人体积约 0.6×0.6×1.8m（~0.65m³），15cm 的定位误差即可使 3D IoU 从 1.0 降至 ~0.45。成熟基准（nuScenes、KITTI 行人）均采用中心距或 BEV IoU。本系统默认使用**中心距 0.5m**，与 nuScenes 一致，同时在可用时提供 `--bev-iou` 选项。
 
 **评估维度：** 输出两个层级的指标：
 
@@ -137,8 +148,9 @@ cargo run --release --example eval_ablation -- --config ./experiment.toml
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `--iou` | 0.15 | IoU 匹配阈值 |
-| `--center-dist` | 0.0 (关闭) | 中心距匹配阈值(m) |
+| `--iou` | 0.15 | IoU 匹配阈值（仅在 `--center-dist 0` 时生效） |
+| `--center-dist` | 0.5 | 中心距匹配阈值(m)，开启后替代 IoU |
+| `--bev-iou` | false | 使用 BEV 2D IoU 替代 AABB IoU（需配合 `--center-dist 0`） |
 | `--frames` | 全部 | 评测帧数 |
 | `--output` | 自动 | 输出目录 |
 | `--config` | 无 | 完整 TOML 配置文件路径 |
@@ -268,9 +280,13 @@ cargo run --example eval_pipeline -- --start 200 --end 906 --fold-size 100
 # Step 1: 运行管线（获取原始数据）
 cargo run --release -- --frames 408 --output ./output/final
 
-# Step 2: 精度评估（中心距 0.5m，输出双维度指标）
+# Step 2: 精度评估（中心距 0.5m，默认）
 cargo run --release --example eval_labeled -- \
     --center-dist 0.5 --output ./output/final_eval
+
+# Step 2b: BEV IoU 评估（可选）
+cargo run --release --example eval_labeled -- \
+    --center-dist 0 --bev-iou --iou 0.30 --output ./output/bev_eval
 
 # Step 3: PR 曲线（20 个阈值，双模式）
 cargo run --release --example eval_pr_curve -- --output ./output/pr_curve
@@ -310,8 +326,8 @@ cargo run --release --example eval_pr_curve -- --output ./output/pr_curve
 | `geo_pass_threshold` | 6 | 几何验证连续通过帧数 |
 | `geo_fail_threshold` | 5 | 几何验证连续失败帧数 |
 | `geo_speed_threshold` | 0.6 | 速度激活阈值(m/s) |
-| `wall_distance` | 0.08 | BevEdLines 距离阈值 |
-| `wall_angle_tolerance` | 30.0° | 墙体检测角度容差 |
+| `wall_distance` | 0.08 | BevEdLines 墙体提取点到直线距离阈值（米） |
+| `wall_strategy` | `"bev_edlines"` | 墙体提取策略: `bev_lsd` / `bev_edlines` / `bev_hough` |
 
 **后聚类过滤链** (`clusters_to_cldbuds`):
 
@@ -352,13 +368,15 @@ cargo run --release --example eval_pr_curve -- --output ./output/pr_curve
 
 ```
 ── Person 过滤 (仅 class_type == "person") ──
-  GT: 1224  | 检测:  904  | TP:  717  FP:  187  FN:  507
-  Precision: 79.3%  | Recall: 58.6%  | F1: 0.674
+  GT: 1224  | 检测:  955  | TP:  813  FP:  142  FN:  411
+  Precision: 85.1%  | Recall: 66.4%  | F1: 0.746
 
 ── 全部类别 (All Classes) ──
-  GT: 1224  | 检测: 1648  | TP:  863  FP:  785  FN:  361
-  Precision: 52.4%  | Recall: 70.5%  | F1: 0.601
+  GT: 1224  | 检测: 1525  | TP:  937  FP:  588  FN:  287
+  Precision: 61.4%  | Recall: 76.6%  | F1: 0.682
 ```
+
+> **注：** 以上为中心距 0.5m 匹配的最新结果。不同评估方式对指标有显著影响：中心距 0.5m 的 F1（0.746/0.682）显著高于 AABB IoU（~0.57）和 BEV IoU 0.3（~0.39），这是因为 IoU 类评估对行人小目标过于敏感，15cm 定位误差即可使 IoU 从 1.0 降至 ~0.45。中心距匹配（nuScenes 标准）消除了 IoU 的体积敏感性，是行人类检测最稳定的评估方式。
 
 **改进对比（与旧默认 dbscan_qt 相比）：**
 

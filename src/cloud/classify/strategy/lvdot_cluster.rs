@@ -1,5 +1,5 @@
 use super::ClusteringStrategy;
-use crate::cloud::wall::{WallPickStrategy, BevEdLines, XYGrid, cluster_obstacles_with_indices, xy_dbscan};
+use crate::cloud::wall::{WallPickStrategy, BevLsd, XYGrid, cluster_obstacles_with_indices, xy_dbscan};
 
 /// LV-DOT 风格聚类策略（lvdot_grid）：墙体提取 → 体素占用下采样 → DBSCAN。
 ///
@@ -32,7 +32,7 @@ pub struct LvdotClusterStrategy {
 impl LvdotClusterStrategy {
     pub fn new() -> Self {
         Self {
-            wall: Box::new(BevEdLines::with_params(0.05, 20).with_min_extent(0.0)),
+            wall: Box::new(BevLsd::with_params(0.05, 20).with_min_extent(0.0)),
             skip_wall: false,
             voxel_size: 0.10,
             min_occ: 3,

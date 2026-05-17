@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use perple::bench::{BenchStrategy, BenchStats, BenchHarness, BenchRecorder, FrameData, GroundPreprocessor};
 use perple::cloud::wall::{
-    WallPickStrategy, BevEdLines, XYGrid,
+    WallPickStrategy, BevLsd, XYGrid,
 };
 use perple::cloud::classify::strategy::{ClusteringStrategy, DbscanStrategy};
 use perple::config::fixif;
@@ -70,8 +70,8 @@ impl PipelineBenchCase {
     /// 创建对应索引的墙体策略（每次 new 一个，避免 clone 问题）
     fn create_wall(&self) -> Option<Box<dyn WallPickStrategy>> {
         match self.wall {
-            Some(0) => Some(Box::new(BevEdLines::with_params(0.05, 20))),
-            Some(1) => Some(Box::new(BevEdLines::with_params(0.08, 20))),
+            Some(0) => Some(Box::new(BevLsd::with_params(0.05, 20))),
+            Some(1) => Some(Box::new(BevLsd::with_params(0.08, 20))),
             _ => None,
         }
     }

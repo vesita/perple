@@ -23,14 +23,14 @@ upside_down = true         # 点云 Z 轴是否上下翻转（LiDAR 安装朝下
 has_ceiling = false        # 是否有天花板（配合 [cluster].ceiling_filter 使用）
 
 # 墙体提取策略（用于追踪管线，bench 使用 config/bench/wall/*.toml）
-wall_strategy = "bev_edlines"   # 墙体提取策略: bev_edlines / ransac_l2_grid / dbscan_l2_qt_dif / ...
+wall_strategy = "bev_edlines"   # 墙体提取策略: bev_lsd / bev_edlines / bev_hough / ...
 wall_distance = 0.08         # RansacL2Grid 距离阈值
 wall_iterations = 50         # RansacL2Grid RANSAC 迭代次数
 wall_max_walls = 30          # 最大墙体平面数（RansacL2Grid 每帧保留的墙面数上限）
 wall_eps = 0.20              # DbscanL2QtDif BFS 合并距离
 wall_min_pts = 16            # DbscanL2QtDif 叶节点最小点数（密度中心门槛）
 wall_min_z_span = 1.0        # 墙面最小 Z 跨度
-wall_angle_tolerance = 30.0  # BevEdLines 区域生长角度容差（度）
+wall_angle_tolerance = 30.0  # BevLsd 区域生长角度容差（度）
 
 # 点云聚类参数
 [cluster]

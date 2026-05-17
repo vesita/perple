@@ -1,15 +1,15 @@
-/// BevEdLines 参数扫描 Bench + 检测框输出。
+/// BevLsd 参数扫描 Bench + 检测框输出。
 ///
-/// 管线：地面提取 → 降噪 → BevEdLines 墙体检测 → XY DBSCAN(固定参数) 后聚类
+/// 管线：地面提取 → 降噪 → BevLsd 墙体检测 → XY DBSCAN(固定参数) 后聚类
 /// 对所有参数组合输出检测框到 SQLite，供可视化查看。
 ///
 /// 用法：
-///   cargo run --example bev_edlines_bench
-///   cargo run --example bev_edlines_bench -- --frames=5
+///   cargo run --example bev_lsd_bench
+///   cargo run --example bev_lsd_bench -- --frames=5
 use std::time::Instant;
 
 use perple::bench::{CliArgs, BenchRecorder, mats, CLUSTER_PALETTE};
-use perple::cloud::wall::{BevEdLines, WallPickStrategy, cluster_obstacles_with_indices};
+use perple::cloud::wall::{BevLsd, WallPickStrategy, cluster_obstacles_with_indices};
 use perple::optional::data_loader::DataLoader;
 use perple::swapl::global_swapl;
 use perple::utils::boxes::Box3D;
@@ -23,7 +23,7 @@ const CLUSTER_MIN_PTS: usize = 3;
 // ── 参数组合 ──────────────────────────────────────────────
 
 #[derive(Clone)]
-struct EdlinesParams {
+struct LsdParams {
     distance: f32,
     min_wall_pts: usize,
     grad_threshold: f32,
@@ -31,17 +31,17 @@ struct EdlinesParams {
     min_extent: f32,
 }
 
-fn label(p: &EdlinesParams) -> String {
+fn label(p: &LsdParams) -> String {
     format!("d{:.2}_g{:.3}", p.distance, p.grad_threshold)
 }
 
-fn generate_params() -> Vec<EdlinesParams> {
+fn generate_params() -> Vec<LsdParams> {
     let distances = [0.06f32, 0.08];
     let grad_thresholds = [0.05f32, 0.08, 0.10];
     let mut params = Vec::new();
     for &d in &distances {
         for &g in &grad_thresholds {
-            params.push(EdlinesParams {
+            params.push(LsdParams {
                 distance: d,
                 min_wall_pts: 20,
                 grad_threshold: g,
@@ -63,7 +63,7 @@ struct FrameResult {
     n_clusters: usize,
     cluster_pts: usize,
     noise_pts: usize,
-    edlines_ms: f64,
+    wall_ms: f64,
     cluster_ms: f64,
     total_ms: f64,
 }
@@ -77,7 +77,7 @@ struct AggregatedResult {
     avg_clusters: f64,
     avg_cluster_pts: f64,
     avg_noise: f64,
-    avg_edlines_ms: f64,
+    avg_wall_ms: f64,
     avg_cluster_ms: f64,
     avg_total_ms: f64,
     frames: Vec<FrameResult>,
@@ -143,11 +143,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     loader.load().await?;
 
     let params = generate_params();
-    println!("BevEdLines 参数扫描 ({} 组合 × {} 帧)", params.len(), frame_limit);
+    println!("BevLsd 参数扫描 ({} 组合 × {} 帧)", params.len(), frame_limit);
     println!("后聚类: 网格连通域 cell={:.2} min_pts={}", CLUSTER_CELL, CLUSTER_MIN_PTS);
     println!();
 
-    let out_base = "output/bench/bev_edlines_bench";
+    let out_base = "output/bench/bev_lsd_bench";
     std::fs::create_dir_all(out_base)?;
     let mut recorders: Vec<Option<BenchRecorder>> = params.iter().map(|p| {
         let dir = format!("{}/{}", out_base, label(p));
@@ -181,12 +181,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         for (pi, p) in params.iter().enumerate() {
             let wall_start = Instant::now();
             let mut cloud_copy = non_ground.clone();
-            let mut ed = BevEdLines::with_params(p.distance, p.min_wall_pts)
+            let mut ed = BevLsd::with_params(p.distance, p.min_wall_pts)
                 .with_min_extent(p.min_extent)
                 .with_grad_threshold(p.grad_threshold)
                 .with_angle_tolerance(p.angle_tolerance);
             let (n_wall, _) = ed.pick(&mut cloud_copy);
-            let edlines_ms = wall_start.elapsed().as_secs_f64() * 1000.0;
+            let wall_ms = wall_start.elapsed().as_secs_f64() * 1000.0;
 
             let remaining = &cloud_copy[n_wall..];
 
@@ -211,9 +211,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 n_clusters,
                 cluster_pts,
                 noise_pts,
-                edlines_ms,
+                wall_ms,
                 cluster_ms,
-                total_ms: edlines_ms + cluster_ms,
+                total_ms: wall_ms + cluster_ms,
             });
         }
     }
@@ -226,7 +226,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
     println!("{}", "=".repeat(120));
     println!("{:<20} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8}",
-        "参数", "墙面点", "障碍簇", "簇点数", "噪声点", "EDms", "聚类ms", "合计ms");
+        "参数", "墙面点", "障碍簇", "簇点数", "噪声点", "墙体ms", "聚类ms", "合计ms");
     println!("{}", "=".repeat(120));
 
     let mut sorted: Vec<(String, Vec<FrameResult>)> = accum.into_iter().collect();
@@ -243,13 +243,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let avg_clusters: f64 = results.iter().map(|r| r.n_clusters as f64).sum::<f64>() / n;
         let avg_cluster_pts: f64 = results.iter().map(|r| r.cluster_pts as f64).sum::<f64>() / n;
         let avg_noise: f64 = results.iter().map(|r| r.noise_pts as f64).sum::<f64>() / n;
-        let avg_ed: f64 = results.iter().map(|r| r.edlines_ms).sum::<f64>() / n;
+        let avg_wall: f64 = results.iter().map(|r| r.wall_ms).sum::<f64>() / n;
         let avg_cl: f64 = results.iter().map(|r| r.cluster_ms).sum::<f64>() / n;
         let avg_total: f64 = results.iter().map(|r| r.total_ms).sum::<f64>() / n;
 
         println!("{:<20} {:>7.0} {:>7.1} {:>7.0} {:>7.0} {:>8.2} {:>8.2} {:>8.2}",
             lbl, avg_wall, avg_clusters, avg_cluster_pts, avg_noise,
-            avg_ed, avg_cl, avg_total);
+            avg_wall, avg_cl, avg_total);
 
         let parts: Vec<&str> = lbl.split('_').collect();
         let d: f32 = parts[0].trim_start_matches('d').parse().unwrap_or(0.0);
@@ -263,7 +263,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             avg_clusters,
             avg_cluster_pts,
             avg_noise,
-            avg_edlines_ms: avg_ed,
+            avg_wall_ms: avg_wall,
             avg_cluster_ms: avg_cl,
             avg_total_ms: avg_total,
             frames: results.clone(),

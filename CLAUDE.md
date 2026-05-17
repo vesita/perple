@@ -111,12 +111,12 @@ The point cloud processing pipeline: ground extraction → wall extraction → c
 ```
 Raw Cloud (~20k pts)
   → Ground Extraction (GroundPickStrategy: peak_scan/histogram/ransac)
-    → Wall Extraction (WallPickStrategy: bev_edlines, image-based edge detection)
+    → Wall Extraction (WallPickStrategy: bev_lsd / bev_edlines, image-based edge detection)
       → Post-Clustering (ClusteringStrategy: prune_qt/dbscan_qt/lvdot/xy_dbscan/cc/ransac/seq, denoise internalized)
         → YOLO fusion + Tracking → Detection Results
 ```
 
-Key insight: image-based wall detection (BevEdLines) outperforms all geometric methods (RANSAC, CC, normal-based, SVD). Pipeline simplified by removing pre/post denoising as fixed stages — each clustering strategy handles its own denoise.
+Key insight: image-based wall detection (BevLsd/BevEdLines) outperforms all geometric methods (RANSAC, CC, normal-based, SVD).
 
 ### Key Fixes
 
@@ -127,8 +127,9 @@ Key insight: image-based wall detection (BevEdLines) outperforms all geometric m
 - **Multi-frame accumulation** (tested, abandoned): Merging N frames of non-ground points before clustering increased Person Recall +5.8pp but caused FP explosion (135→538) as accumulated clusters produced oversized boxes that passed geometry fallback.
 - **Default strategy changed to `prune_qt`**: Replaced `dbscan_qt` after comprehensive 9-strategy benchmark (408 frames). prune_qt improves Person Precision 61→78% (+17pp), reduces FP by 54% (437→199), and raises F1 from 0.589 to 0.674. The factory was also updated to read `merge_patience` and `min_points_per_cluster` from config instead of hardcoded values.
 
-- `src/cloud/wall.rs` — WallPickStrategy trait + XYGrid shared infra + wall module root: only `bev_edlines` (active) and `bev_hough` (reserved) remain
-- `src/cloud/wall/bev_edlines.rs` — BEV image + OpenCV EDLines 边缘检测墙体提取
+- `src/cloud/wall.rs` — WallPickStrategy trait + XYGrid shared infra + wall module root: `bev_lsd` (active), `bev_edlines` (active), and `bev_hough` (reserved)
+- `src/cloud/wall/bev_lsd.rs` — BEV image + LSD 风格区域生长墙体检测
+- `src/cloud/wall/bev_edlines.rs` — BEV image + EDLines 锚点检测链式追踪墙体检测
 - `src/cloud/wall/bev_hough.rs` — Hough 变换备选
 - `src/cloud/classify/core.rs` — Three-stage pipeline: ground → wall → cluster (no denoise stages)
 - `src/yolo_smooth.rs` — YOLO 帧间标签平滑模块（Camera→Fuse 间介入）

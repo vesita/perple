@@ -21,7 +21,7 @@ use perple::bench::{
     config::{load_task_strategies, param_dirname, get_f32, get_i64},
 };
 use perple::cloud::wall::{
-    WallPickStrategy, BevEdLines,
+    WallPickStrategy, BevLsd, BevEdLines,
 };
 use perple::cloud::classify::strategy::{ClusteringStrategy, XYGridDBSCAN};
 use perple::cloud::ground::{GroundPickStrategy, PeakScan};
@@ -107,8 +107,21 @@ impl WallPipelineCase {
 
 fn build_wall_from_toml(strategy_type: &str, p: &toml::Table) -> Box<dyn WallPickStrategy> {
     match strategy_type {
-        _ => {
+        "bev_edlines" => {
             let mut s = BevEdLines::with_params(get_f32(p, "distance"), get_i64(p, "min_wall_pts") as usize);
+            if let Some(ext) = p.get("min_extent").and_then(|v| v.as_float()) {
+                s = s.with_min_extent(ext as f32);
+            }
+            if let Some(gt) = p.get("grad_threshold").and_then(|v| v.as_float()) {
+                s = s.with_grad_threshold(gt as f32);
+            }
+            if let Some(at) = p.get("anchor_threshold").and_then(|v| v.as_float()) {
+                s = s.with_anchor_threshold(at as f32);
+            }
+            Box::new(s)
+        }
+        _ => {
+            let mut s = BevLsd::with_params(get_f32(p, "distance"), get_i64(p, "min_wall_pts") as usize);
             if let Some(ext) = p.get("min_extent").and_then(|v| v.as_float()) {
                 s = s.with_min_extent(ext as f32);
             }
@@ -168,7 +181,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let wall = build_wall_from_toml(&entry.strategy_type, &entry.params);
         let name = format!("{}_{}", entry.strategy_type, entry.dirname);
 
-        let dummy_wall = Box::new(BevEdLines::with_params(0.05, 20));
+        let dummy_wall = Box::new(BevLsd::with_params(0.05, 20));
         let cluster = XYGridDBSCAN::with_params(dummy_wall, 0.30, 3, 12.0, 0.15, 3)
             .with_pre_extracted_wall();
 

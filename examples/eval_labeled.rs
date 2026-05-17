@@ -115,6 +115,7 @@ fn match_frame(
     iou_threshold: f32,
     center_dist_threshold: f32,
     hungarian_buf: &mut Vec<Vec<f64>>,
+    use_bev_iou: bool,
 ) -> FrameMatch {
     let n_det = detections.len();
     let use_center = center_dist_threshold > 0.0;
@@ -142,7 +143,7 @@ fn match_frame(
                     cost[i][j] = dist as f64;
                 }
             } else {
-                let iou = det.the_box.iou(gt_box);
+                let iou = if use_bev_iou { det.the_box.bev_iou(gt_box) } else { det.the_box.iou(gt_box) };
                 if iou >= iou_threshold {
                     cost[i][j] = (1.0 - iou as f64).max(0.0);
                 }
@@ -235,6 +236,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|i| args.get(i + 1))
         .and_then(|s| s.parse().ok())
         .unwrap_or(0.15);
+    let bev_iou: bool = args.iter().any(|a| a == "--bev-iou");
     let center_dist: f32 = args.iter()
         .position(|a| a == "--center-dist")
         .and_then(|i| args.get(i + 1))
@@ -377,7 +379,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         total_det_count += targets_all.len();
 
         // ── 匈牙利匹配（所有检测参与） ────────────────────────────────────
-        let fm = match_frame(&targets_all, gt_items.len(), &gt_boxes, iou_threshold, center_dist, &mut hungarian_buf);
+        let fm = match_frame(&targets_all, gt_items.len(), &gt_boxes, iou_threshold, center_dist, &mut hungarian_buf, bev_iou);
 
         // ── 按分类质量区分匹配 ────────────────────────────────────────────
         let mut tp_strict = 0usize;
@@ -512,6 +514,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[derive(Serialize)]
     struct Output {
         iou_threshold: f32,
+        use_bev_iou: bool,
         n_frames: usize,
         n_gt: usize,
         // strict (person-only)
@@ -553,6 +556,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let output = Output {
         iou_threshold,
+        use_bev_iou: bev_iou,
         n_frames,
         n_gt: total_gt_count,
         n_detections: total_det_person,

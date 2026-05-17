@@ -3,7 +3,7 @@ use serde::Serialize;
 use super::recorder::BenchRecorder;
 use crate::cloud::ground::{GroundPickStrategy, create_ground_strategy};
 use crate::cloud::wall::WallPickStrategy;
-use crate::cloud::wall::BevEdLines;
+use crate::cloud::wall::BevLsd;
 use crate::cloud::ground::PeakScan;
 use crate::cloud::denoise::{DenoiseStrategy, RadiusOutlierRemoval};
 
@@ -136,7 +136,7 @@ impl WallPreprocessor {
         Self::new(
             Box::new(PeakScan::new()),
             Box::new(RadiusOutlierRemoval::new(0.30, 3)),
-            Box::new(BevEdLines::with_params(0.08, 20)),
+            Box::new(BevLsd::with_params(0.08, 20)),
         )
     }
 }
@@ -177,7 +177,7 @@ impl GroundWallPreprocessor {
     pub fn default() -> Self {
         Self::new(
             Box::new(PeakScan::new()),
-            Box::new(BevEdLines::with_params(0.08, 20)),
+            Box::new(BevLsd::with_params(0.08, 20)),
         )
     }
 }

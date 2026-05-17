@@ -1,6 +1,6 @@
 use super::ClusteringStrategy;
 use crate::cloud::classify::quadtree::QuadTreeNode;
-use crate::cloud::wall::{WallPickStrategy, BevEdLines, cluster_obstacles_with_indices};
+use crate::cloud::wall::{WallPickStrategy, BevLsd, cluster_obstacles_with_indices};
 
 /// 剪叶四叉树聚类策略（prune_qt）。
 ///
@@ -34,7 +34,7 @@ pub struct PruneQt {
 impl PruneQt {
     pub fn new() -> Self {
         Self {
-            wall: Box::new(BevEdLines::with_params(0.05, 20).with_min_extent(0.0)),
+            wall: Box::new(BevLsd::with_params(0.05, 20).with_min_extent(0.0)),
             skip_wall: false,
             use_box_filter: false,
             box_cell_size: 0.30,

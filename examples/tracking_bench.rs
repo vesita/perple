@@ -27,7 +27,7 @@ use perple::cloud::classify::strategy::{
     DbscanStrategy, RangeImageStrategy,
     XYGridDBSCAN, LvdotClusterStrategy, PruneQt,
 };
-use perple::cloud::wall::{WallPickStrategy, BevEdLines};
+use perple::cloud::wall::{WallPickStrategy, BevLsd};
 use perple::cloud::CldBud;
 use perple::config::fixif;
 use perple::tracker::core::Tracker;
@@ -216,7 +216,7 @@ impl BenchStrategy for TrackingBenchCase {
 fn build_strategies() -> Vec<Box<dyn ClusteringStrategy>> {
     let cfg = fixif();
     let wall: Box<dyn WallPickStrategy> = Box::new(
-        BevEdLines::with_params(0.05, 20).with_min_extent(0.0),
+        BevLsd::with_params(0.05, 20).with_min_extent(0.0),
     );
 
     vec![

@@ -10,7 +10,7 @@ use perple::cloud::classify::strategy::{
     ClusteringStrategy, CcCluster, RansacCluster, SeqCluster,
     DbscanStrategy, DbscanGrid, RangeImageStrategy, XYGridDBSCAN, LvdotClusterStrategy, PruneQt,
 };
-use perple::cloud::wall::{WallPickStrategy, BevEdLines};
+use perple::cloud::wall::{WallPickStrategy, BevLsd};
 use perple::config::fixif;
 use perple::utils::boxes::Box3D;
 use redra_client::spawn_point;
@@ -185,7 +185,7 @@ fn build_cluster_strategy(cli: &CliArgs) -> Box<dyn ClusteringStrategy> {
     let min_occ = cli.get("min-occ", 3usize);
     let cell_size = cli.get("cell-size", 0.30f32);
     let wall: Box<dyn WallPickStrategy> = Box::new(
-        BevEdLines::with_params(0.05, 20).with_min_extent(0.0),
+        BevLsd::with_params(0.05, 20).with_min_extent(0.0),
     );
     match strat.as_str() {
         "cc_grid" | "cc" => Box::new(CcCluster::new(cell_size, min_pts).with_denoise(0.20, 3)),
@@ -205,7 +205,7 @@ fn build_cluster_strategy(cli: &CliArgs) -> Box<dyn ClusteringStrategy> {
 
 fn build_cluster_from_toml(strategy_type: &str, p: &toml::Table) -> Box<dyn ClusteringStrategy> {
     let wall: Box<dyn WallPickStrategy> = Box::new(
-        BevEdLines::with_params(0.05, 20).with_min_extent(0.0),
+        BevLsd::with_params(0.05, 20).with_min_extent(0.0),
     );
     match strategy_type {
         "cc_grid" | "cc" => {
@@ -327,11 +327,11 @@ fn output_json_or_table(strategies: &[Box<dyn BenchStrategy>], json: bool) {
 fn build_wall_strategy(cli: &CliArgs) -> Box<dyn WallPickStrategy> {
     let wall = cli.get("wall", "edlines".to_string());
     match wall.as_str() {
-        "edlines" | "bev_edlines" => Box::new(BevEdLines::new()),
+        "edlines" | "bev_lsd" => Box::new(BevLsd::new()),
         "hough" | "bev_hough" => Box::new(perple::cloud::wall::BevHough::new()),
         _ => {
-            eprintln!("未知墙体策略 '{}'，使用 bev_edlines", wall);
-            Box::new(BevEdLines::new())
+            eprintln!("未知墙体策略 '{}'，使用 bev_lsd", wall);
+            Box::new(BevLsd::new())
         }
     }
 }

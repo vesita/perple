@@ -595,6 +595,140 @@ impl Box3D {
         }
     }
 
+    /// 计算包围盒体积
+    pub fn volume(&self) -> f32 {
+        self.length * self.width * self.height
+    }
+
+    /// 获取局部坐标轴在世界坐标系中的方向向量
+    fn axes(&self) -> [Vector3<f32>; 3] {
+        [
+            Vector3::new(self.pose[(0, 0)], self.pose[(1, 0)], self.pose[(2, 0)]),
+            Vector3::new(self.pose[(0, 1)], self.pose[(1, 1)], self.pose[(2, 1)]),
+            Vector3::new(self.pose[(0, 2)], self.pose[(1, 2)], self.pose[(2, 2)]),
+        ]
+    }
+
+    /// 获取 6 个面平面（向内法线 + 平面常数 d），满足 normal·p + d ≥ 0 表示在盒内
+    fn face_planes(&self) -> [(Vector3<f32>, f32); 6] {
+        let axes = self.axes();
+        let c = self.center();
+        let hl = self.length / 2.0;
+        let hw = self.width / 2.0;
+        let hh = self.height / 2.0;
+        [
+            (-axes[0],  axes[0].dot(&c) + hl),   // +x 面（向内 -x）
+            ( axes[0], -axes[0].dot(&c) + hl),   // -x 面（向内 +x）
+            (-axes[1],  axes[1].dot(&c) + hw),   // +y 面（向内 -y）
+            ( axes[1], -axes[1].dot(&c) + hw),   // -y 面（向内 +y）
+            (-axes[2],  axes[2].dot(&c) + hh),   // +z 面（向内 -z）
+            ( axes[2], -axes[2].dot(&c) + hh),   // -z 面（向内 +z）
+        ]
+    }
+
+    /// 获取 12 个三角形（6 个面各 2 个），顶点为世界坐标，从外部看逆时针绕向
+    fn triangles(&self) -> Vec<[Point3<f32>; 3]> {
+        let hl = self.length / 2.0;
+        let hw = self.width / 2.0;
+        let hh = self.height / 2.0;
+        // 局部顶点
+        let lv: [Point3<f32>; 8] = [
+            Point3::new(-hl, -hw, -hh),
+            Point3::new( hl, -hw, -hh),
+            Point3::new( hl,  hw, -hh),
+            Point3::new(-hl,  hw, -hh),
+            Point3::new(-hl, -hw,  hh),
+            Point3::new( hl, -hw,  hh),
+            Point3::new( hl,  hw,  hh),
+            Point3::new(-hl,  hw,  hh),
+        ];
+        // 变换到世界坐标
+        let v: Vec<Point3<f32>> = lv.iter().map(|p| self.pose.transform_point(p)).collect();
+        vec![
+            [v[4], v[5], v[6]], [v[4], v[6], v[7]], // +z
+            [v[1], v[0], v[3]], [v[1], v[3], v[2]], // -z
+            [v[1], v[2], v[6]], [v[1], v[6], v[5]], // +x
+            [v[0], v[4], v[7]], [v[0], v[7], v[3]], // -x
+            [v[3], v[7], v[6]], [v[3], v[6], v[2]], // +y
+            [v[0], v[1], v[5]], [v[0], v[5], v[4]], // -y
+        ]
+    }
+
+    /// 真 3D OBB 交并比（通过三角形网格裁剪计算交集体积）
+    ///
+    /// 使用 Sutherland-Hodgman 风格裁剪：
+    /// 1. 将 `other` 的 12 个三角形依次裁剪到 `self` 的 6 个面内
+    /// 2. 再裁剪到 `other` 的 6 个面内（保证交集位于两盒内）
+    /// 3. 计算剩余三角形网格的封闭体积
+    pub fn obb_iou(&self, other: &Self) -> f32 {
+        let tri_b = other.triangles();
+        let planes_a = self.face_planes();
+        let planes_b = other.face_planes();
+
+        let mut current: Vec<[Point3<f32>; 3]> = tri_b;
+        let mut next = Vec::new();
+
+        // 用 A 的 6 个面裁剪 B 的三角形
+        for (n, d) in &planes_a {
+            next.clear();
+            for &tri in &current {
+                clip_triangle_by_plane(tri, n, *d, &mut next);
+            }
+            if next.is_empty() {
+                return 0.0;
+            }
+            std::mem::swap(&mut current, &mut next);
+        }
+
+        // 再用 B 的 6 个面裁剪（保证交集位于 B 内）
+        for (n, d) in &planes_b {
+            next.clear();
+            for &tri in &current {
+                clip_triangle_by_plane(tri, n, *d, &mut next);
+            }
+            if next.is_empty() {
+                return 0.0;
+            }
+            std::mem::swap(&mut current, &mut next);
+        }
+
+        let intersection_vol = triangle_mesh_volume(&current);
+        let vol_a = self.volume();
+        let vol_b = other.volume();
+        let union_vol = vol_a + vol_b - intersection_vol;
+
+        if union_vol <= 1e-12 { 0.0 } else { intersection_vol / union_vol }
+    }
+
+    /// BEV (Bird's Eye View) 2D IoU — 投影到 XY 平面计算 2D 交并比
+    ///
+    /// 将两个 OBB 的 8 个顶点投影到 XY 平面，取 2D 凸包，
+    /// 用 Sutherland-Hodgman 计算交集多边形面积。
+    /// 行人检测推荐使用 BEV IoU 而非 3D IoU（行人体积小，3D IoU 过于敏感）。
+    pub fn bev_iou(&self, other: &Self) -> f32 {
+        let poly1 = self.bev_projection();
+        let poly2 = other.bev_projection();
+
+        let intersection = clip_polygon_2d(&poly1, &poly2);
+        if intersection.len() < 3 {
+            return 0.0;
+        }
+
+        let inter_area = polygon_area_2d(&intersection);
+        let area1 = polygon_area_2d(&poly1);
+        let area2 = polygon_area_2d(&poly2);
+        let union_area = area1 + area2 - inter_area;
+
+        if union_area <= 1e-12 { 0.0 } else { inter_area / union_area }
+    }
+
+    /// 将 Box3D 投影到 XY 平面，返回 2D 凸包顶点（逆时针绕向）
+    fn bev_projection(&self) -> Vec<(f32, f32)> {
+        let verts = self.vertices();
+        let projected: Vec<(f32, f32)> = verts.iter().map(|p| (p.x, p.y)).collect();
+        convex_hull_2d(&projected)
+    }
+
     /// 合并两个Box3D对象
     ///
     /// # 参数
@@ -636,5 +770,194 @@ impl Box3D {
 
         merged_box
     }
+}
+
+// ─── OBB IoU 辅助函数 ─────────────────────────────────────────
+
+/// 用一个半平面裁剪一个三角形，输出 0/1/2 个新三角形。
+///
+/// 半平面定义为 `normal·p + d ≥ 0`（内侧），normal 为向内法线。
+fn clip_triangle_by_plane(
+    tri: [Point3<f32>; 3],
+    normal: &Vector3<f32>,
+    d: f32,
+    out: &mut Vec<[Point3<f32>; 3]>,
+) {
+    let dists = [
+        normal.dot(&tri[0].coords) + d,
+        normal.dot(&tri[1].coords) + d,
+        normal.dot(&tri[2].coords) + d,
+    ];
+
+    let inside = [dists[0] >= -1e-9, dists[1] >= -1e-9, dists[2] >= -1e-9];
+    let n_inside = inside.iter().filter(|&&x| x).count();
+
+    match n_inside {
+        3 => out.push(tri),
+        0 => {}
+        1 => {
+            let i = inside.iter().position(|&x| x).unwrap();
+            let i1 = (i + 1) % 3;
+            let i2 = (i + 2) % 3;
+            let p1 = intersect_edge(tri[i], tri[i1], dists[i], dists[i1]);
+            let p2 = intersect_edge(tri[i], tri[i2], dists[i], dists[i2]);
+            out.push([tri[i], p1, p2]);
+        }
+        2 => {
+            let o = inside.iter().position(|&x| !x).unwrap();
+            let i1 = (o + 1) % 3;
+            let i2 = (o + 2) % 3;
+            let p1 = intersect_edge(tri[i1], tri[o], dists[i1], dists[o]);
+            let p2 = intersect_edge(tri[i2], tri[o], dists[i2], dists[o]);
+            out.push([tri[i1], tri[i2], p1]);
+            out.push([tri[i2], p2, p1]);
+        }
+        _ => unreachable!(),
+    }
+}
+
+/// 计算线段上两点与半平面交点（内→外的插值参数）。
+fn intersect_edge(
+    inside: Point3<f32>,
+    outside: Point3<f32>,
+    d_inside: f32,
+    d_outside: f32,
+) -> Point3<f32> {
+    let t = (d_inside / (d_inside - d_outside)).clamp(0.0, 1.0);
+    inside + (outside - inside) * t
+}
+
+/// 计算封闭三角形网格体积（散度定理）。
+fn triangle_mesh_volume(triangles: &[[Point3<f32>; 3]]) -> f32 {
+    let mut volume = 0.0;
+    for tri in triangles {
+        let v0 = tri[0].coords;
+        let v1 = tri[1].coords;
+        let v2 = tri[2].coords;
+        volume += v0.dot(&v1.cross(&v2));
+    }
+    (volume / 6.0).abs()
+}
+
+// ─── BEV IoU 2D 辅助函数 ────────────────────────────────────
+
+/// 计算 2D 凸多边形面积（Shoelace 公式）
+fn polygon_area_2d(poly: &[(f32, f32)]) -> f32 {
+    let n = poly.len();
+    if n < 3 {
+        return 0.0;
+    }
+    let mut area = 0.0;
+    for i in 0..n {
+        let j = (i + 1) % n;
+        area += poly[i].0 * poly[j].1;
+        area -= poly[j].0 * poly[i].1;
+    }
+    area.abs() / 2.0
+}
+
+/// 2D 线段交点（参数 t，沿 ab 方向）
+fn intersect_2d(
+    a: (f32, f32), b: (f32, f32),
+    c: (f32, f32), d: (f32, f32),
+) -> (f32, f32) {
+    let denom = (b.0 - a.0) * (d.1 - c.1) - (b.1 - a.1) * (d.0 - c.0);
+    if denom.abs() < 1e-12 {
+        return ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0); // fallback
+    }
+    let t = ((c.0 - a.0) * (d.1 - c.1) - (c.1 - a.1) * (d.0 - c.0)) / denom;
+    let t = t.clamp(0.0, 1.0);
+    (a.0 + t * (b.0 - a.0), a.1 + t * (b.1 - a.1))
+}
+
+/// 2D Sutherland-Hodgman：用 clipping 多边形裁剪 subject 多边形（均为凸多边形，CCW）
+fn clip_polygon_2d(subject: &[(f32, f32)], clipping: &[(f32, f32)]) -> Vec<(f32, f32)> {
+    let mut output = subject.to_vec();
+    if output.is_empty() {
+        return output;
+    }
+
+    let n = clipping.len();
+    for i in 0..n {
+        if output.is_empty() {
+            return output;
+        }
+        let input = output;
+        output = Vec::new();
+
+        let p1 = clipping[i];
+        let p2 = clipping[(i + 1) % n];
+        let edge_x = p2.0 - p1.0;
+        let edge_y = p2.1 - p1.1;
+
+        for j in 0..input.len() {
+            let curr = input[j];
+            let prev = input[(j + input.len() - 1) % input.len()];
+
+            let curr_inside = edge_x * (curr.1 - p1.1) - edge_y * (curr.0 - p1.0) >= 0.0;
+            let prev_inside = edge_x * (prev.1 - p1.1) - edge_y * (prev.0 - p1.0) >= 0.0;
+
+            if curr_inside {
+                if !prev_inside {
+                    output.push(intersect_2d(prev, curr, p1, p2));
+                }
+                output.push(curr);
+            } else if prev_inside {
+                output.push(intersect_2d(prev, curr, p1, p2));
+            }
+        }
+    }
+    output
+}
+
+/// 2D 凸包（Monotone Chain / Andrew 算法）
+fn convex_hull_2d(points: &[(f32, f32)]) -> Vec<(f32, f32)> {
+    if points.len() <= 1 {
+        return points.to_vec();
+    }
+
+    let mut pts = points.to_vec();
+    pts.sort_by(|a, b| {
+        a.0.partial_cmp(&b.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+    });
+
+    // 下凸包
+    let mut lower: Vec<(f32, f32)> = Vec::new();
+    for &p in &pts {
+        while lower.len() >= 2 {
+            let a = lower[lower.len() - 2];
+            let b = lower[lower.len() - 1];
+            let cross = (b.0 - a.0) * (p.1 - a.1) - (b.1 - a.1) * (p.0 - a.0);
+            if cross <= 0.0 {
+                lower.pop();
+            } else {
+                break;
+            }
+        }
+        lower.push(p);
+    }
+
+    // 上凸包
+    let mut upper: Vec<(f32, f32)> = Vec::new();
+    for &p in pts.iter().rev() {
+        while upper.len() >= 2 {
+            let a = upper[upper.len() - 2];
+            let b = upper[upper.len() - 1];
+            let cross = (b.0 - a.0) * (p.1 - a.1) - (b.1 - a.1) * (p.0 - a.0);
+            if cross <= 0.0 {
+                upper.pop();
+            } else {
+                break;
+            }
+        }
+        upper.push(p);
+    }
+
+    lower.pop();
+    upper.pop();
+    lower.extend(upper);
+    lower
 }
 

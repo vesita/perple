@@ -1,0 +1,26 @@
+name = "BEV LSD 线段检测墙体 (bev_lsd)"
+type = "bev_lsd"
+preprocessor = "wall"
+
+[quick]
+frames = 1
+params = [
+  { distance = 0.08, min_wall_pts = 30 },
+  { distance = 0.10, min_wall_pts = 30 },
+  { distance = 0.12, min_wall_pts = 30 },
+]
+
+[full]
+frames = 10
+params = [
+  { distance = 0.05, min_wall_pts = 20 },
+  { distance = 0.05, min_wall_pts = 30 },
+  { distance = 0.08, min_wall_pts = 20 },
+  { distance = 0.08, min_wall_pts = 30 },
+  { distance = 0.10, min_wall_pts = 20 },
+  { distance = 0.10, min_wall_pts = 30 },
+  { distance = 0.10, min_wall_pts = 40 },
+  { distance = 0.12, min_wall_pts = 20 },
+  { distance = 0.12, min_wall_pts = 30 },
+  { distance = 0.15, min_wall_pts = 30 },
+]

@@ -36,6 +36,7 @@ struct Args {
     out_prefix: String,
     iou_threshold: f32,
     center_dist: f32,
+    bev_iou: bool,
     /// TOML 覆盖字符串（地面参数等顶层字段）
     ground_toml: Option<String>,
     /// TOML 覆盖字符串（聚类参数 → [cluster] 段）
@@ -71,6 +72,7 @@ fn parse_args() -> Args {
         center_dist: get(&args, "--center-dist")
             .and_then(|s| s.parse().ok())
             .unwrap_or(0.5),
+        bev_iou: args.iter().any(|a| a == "--bev-iou"),
         ground_toml: get(&args, "--ground-toml"),
         cluster_toml: get(&args, "--cluster-toml"),
         denoise_toml: get(&args, "--denoise-toml"),
@@ -162,6 +164,7 @@ fn match_frame(
     iou_threshold: f32,
     center_dist_threshold: f32,
     hungarian_buf: &mut Vec<Vec<f64>>,
+    use_bev_iou: bool,
 ) -> FrameMatch {
     let n_det = detections.len();
     let use_center = center_dist_threshold > 0.0;
@@ -184,7 +187,7 @@ fn match_frame(
                     cost[i][j] = dist as f64;
                 }
             } else {
-                let iou = det.the_box.iou(gt_box);
+                let iou = if use_bev_iou { det.the_box.bev_iou(gt_box) } else { det.the_box.iou(gt_box) };
                 if iou >= iou_threshold {
                     cost[i][j] = (1.0 - iou as f64).max(0.0);
                 }
@@ -470,7 +473,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // ─────────────────────────────────────────────────────────────────
         let fm_all = match_frame(
             &targets_all, gt_items.len(), &all_gt_boxes,
-            args.iou_threshold, args.center_dist, &mut hungarian_buf,
+            args.iou_threshold, args.center_dist, &mut hungarian_buf, args.bev_iou,
         );
         overall_all.tp += fm_all.tp;
         overall_all.fp += fm_all.fp;
@@ -506,7 +509,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if !person_gt.is_empty() || !targets_person.is_empty() {
             let fm_p = match_frame(
                 &targets_person, person_gt.len(), &person_gt_boxes,
-                args.iou_threshold, args.center_dist, &mut hungarian_buf,
+                args.iou_threshold, args.center_dist, &mut hungarian_buf, args.bev_iou,
             );
             overall_person.tp += fm_p.tp;
             overall_person.fp += fm_p.fp;

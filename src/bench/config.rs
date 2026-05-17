@@ -117,7 +117,8 @@ pub fn param_dirname(strategy_type: &str, params: &toml::Table) -> String {
                 format!("{}_ht{:.2}", base, float(params, "hough_threshold"))
             } else { base }
         },
-        "bev_edlines" => format!("d{:.2}_m{}", float(params, "distance"), int(params, "min_wall_pts")),
+        "bev_lsd" => format!("d{:.2}_m{}", float(params, "distance"), int(params, "min_wall_pts")),
+        "bev_edlines" => format!("d{:.2}_m{}_a{:.2}", float(params, "distance"), int(params, "min_wall_pts"), float(params, "anchor_threshold")),
         "nrm_pca_grid" => format!("c{:.2}_z{:.2}", float(params, "cell_size"), float(params, "normal_threshold")),
         "nrm_l2_grid" => format!("c{:.2}_r{:.2}", float(params, "cell_size"), float(params, "max_rms")),
         "nrm_pca_qt" => format!("p{}_z{:.2}", int(params, "max_pts_per_node"), float(params, "normal_threshold")),

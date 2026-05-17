@@ -10,7 +10,7 @@
 use std::time::Instant;
 
 use perple::cloud::ground::create_ground_strategy;
-use perple::cloud::wall::{BevEdLines, WallPickStrategy};
+use perple::cloud::wall::{BevLsd, WallPickStrategy};
 use perple::optional::data_loader::DataLoader;
 use perple::swapl::global_swapl;
 use perple::bench::compute_median;
@@ -86,7 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // 对每个配置运行一次
         for &max_pts in CONFIGS {
             for &(dist, iter) in RANSAC_PARAMS {
-                let mut strat = BevEdLines::with_params(dist, 10)
+                let mut strat = BevLsd::with_params(dist, 10)
                     .with_min_extent(0.5);
 
                 let mut pts = non_ground.clone();
@@ -191,7 +191,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
          帧数: {frame_count}\n\
          总运行: {n_runs}\n\
          总耗时: {total_sec:.1}s\n\
-         策略: BevEdLines\n\
+         策略: BevLsd\n\
          细分量: {:?}\n\
          RANSAC 参数: {:?}\n\
          输出: {}\n",

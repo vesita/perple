@@ -1,8 +1,10 @@
 pub mod l2_util;
 
 mod bev_hough;
+mod bev_lsd;
 mod bev_edlines;
 
+pub use bev_lsd::BevLsd;
 pub use bev_edlines::BevEdLines;
 pub use bev_hough::BevHough;
 

@@ -6,7 +6,7 @@ use perple::bench::{
     mats, CLUSTER_PALETTE,
 };
 use perple::cloud::wall::{
-    WallPickStrategy, BevEdLines, BevHough,
+    WallPickStrategy, BevLsd, BevEdLines, BevHough,
     cluster_obstacles_with_indices,
 };
 use perple::utils::boxes::Box3D;
@@ -171,7 +171,7 @@ impl BenchStrategy for WallBenchCase {
 }
 
 fn build_wall_strategy(cli: &CliArgs) -> Box<dyn WallPickStrategy> {
-    let strat = cli.get::<String>("strategy", "bev_edlines".to_string());
+    let strat = cli.get::<String>("strategy", "bev_lsd".to_string());
     let distance = cli.get("distance", 0.05f32);
     match strat.as_str() {
         "bev_hough" => {
@@ -182,8 +182,14 @@ fn build_wall_strategy(cli: &CliArgs) -> Box<dyn WallPickStrategy> {
             if ht > 0.0 { s = s.with_hough_threshold(ht); }
             Box::new(s)
         },
-        _ => {
+        "bev_edlines" => {
             let mut s = BevEdLines::with_params(distance, cli.get("min-wall-pts", 30usize));
+            let ext = cli.get("min-extent", 0.0f32);
+            if ext > 0.0 { s = s.with_min_extent(ext); }
+            Box::new(s)
+        },
+        _ => {
+            let mut s = BevLsd::with_params(distance, cli.get("min-wall-pts", 30usize));
             let ext = cli.get("min-extent", 0.0f32);
             if ext > 0.0 { s = s.with_min_extent(ext); }
             let gt = cli.get("grad-threshold", 0.0f32);
@@ -207,8 +213,21 @@ fn build_wall_from_toml(strategy_type: &str, p: &toml::Table) -> Box<dyn WallPic
             }
             Box::new(s)
         },
-        _ => {
+        "bev_edlines" => {
             let mut s = BevEdLines::with_params(perple::bench::get_f32(p, "distance"), perple::bench::get_i64(p, "min_wall_pts") as usize);
+            if let Some(ext) = p.get("min_extent").and_then(|v| v.as_float()) {
+                s = s.with_min_extent(ext as f32);
+            }
+            if let Some(gt) = p.get("grad_threshold").and_then(|v| v.as_float()) {
+                s = s.with_grad_threshold(gt as f32);
+            }
+            if let Some(at) = p.get("anchor_threshold").and_then(|v| v.as_float()) {
+                s = s.with_anchor_threshold(at as f32);
+            }
+            Box::new(s)
+        },
+        _ => {
+            let mut s = BevLsd::with_params(perple::bench::get_f32(p, "distance"), perple::bench::get_i64(p, "min_wall_pts") as usize);
             if let Some(ext) = p.get("min_extent").and_then(|v| v.as_float()) {
                 s = s.with_min_extent(ext as f32);
             }
@@ -246,7 +265,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match effective_mode {
         BenchMode::Single => {
-            let name = cli.get::<String>("strategy", "bev_edlines".to_string());
+            let name = cli.get::<String>("strategy", "bev_lsd".to_string());
             let min_box_pts = cli.get("min-box-pts", 20usize);
             let mut strategies: Vec<Box<dyn BenchStrategy>> = vec![
                 Box::new(WallBenchCase::new(&name, build_wall_strategy(&cli), min_box_pts))
