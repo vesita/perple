@@ -1,12 +1,18 @@
+# -*- coding: utf-8 -*-
 """运行 40 次 eval_labeled，收集指标，绘制运行时间 & 准确度曲线"""
 
 import subprocess
 import json
 import csv
 import time
+import locale
+import sys
 import threading
 import concurrent.futures
 from pathlib import Path
+
+# Python 自身 stdout 输出 UTF-8（解决管道捕获时中文乱码）
+sys.stdout.reconfigure(encoding='utf-8')
 
 OUTPUT_DIR = Path("output/batch_40")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -64,9 +70,12 @@ def read_metrics(run_dir: Path) -> dict:
 
 
 # 预编译 — 避免并发时 cargo 文件锁串行
-BINARY = "E:/code/perple/target/release/examples/eval_labeled.exe"
-subprocess.run(["cargo", "build", "--release", "--example", "eval_labeled"],
-               check=True, cwd="E:/code/perple")
+BINARY = Path("E:/code/perple/target/release/examples/eval_labeled.exe")
+if not BINARY.exists():
+    subprocess.run(["cargo", "build", "--release", "--example", "eval_labeled"],
+                   check=True, cwd="E:/code/perple")
+else:
+    print(f"Binary already exists: {BINARY}")
 
 
 def run_single(run_id: int) -> dict:
@@ -84,7 +93,13 @@ def run_single(run_id: int) -> dict:
     )
 
     elapsed = time.time() - t0
-    stdout = result.stdout.decode('utf-8', errors='replace')
+    # Rust 输出为 UTF-8，尝试解码；若失败回退到系统编码（如 cp936）
+    raw = result.stdout
+    try:
+        stdout = raw.decode('utf-8')
+    except UnicodeDecodeError:
+        sys_enc = locale.getpreferredencoding(do_setlocale=False)
+        stdout = raw.decode(sys_enc, errors='replace')
 
     # Print progress line from output
     for line in stdout.split('\n'):
@@ -140,121 +155,178 @@ def write_csv(results: list[dict]):
     print(f"\nResults saved to {RESULTS_FILE}")
 
 
-def plot_results(results: list[dict]):
+def smart_fmt(v):
+    """Auto-select decimal places based on magnitude."""
+    if abs(v) >= 100: return f"{v:.0f}"
+    if abs(v) >= 1: return f"{v:.1f}"
+    if abs(v) >= 0.01: return f"{v:.4f}"
+    return f"{v:.6f}"
+
+
+def _setup_chinese_font():
+    import matplotlib.pyplot as plt
+    # 论文格式：SimHei（黑体）用于中文，Times New Roman 用于英文/数字
+    plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'DejaVu Sans']
+    plt.rcParams['font.family'] = 'sans-serif'
+    plt.rcParams['axes.unicode_minus'] = False
+
+
+def plot_single_metric(results, runs, values, ylabel, title, filename,
+                       color='C0', ylim=None, unit=''):
+    """Plot a single metric with mean line, std band, and annotations."""
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     import numpy as np
 
-    runs = [r['run_id'] for r in results]
+    _setup_chinese_font()
 
-    # Figure 1: Speed curve (running time per run)
-    fig, axes = plt.subplots(2, 1, figsize=(14, 10))
+    fig, ax = plt.subplots(figsize=(10, 5))
+    mean_val = np.mean(values)
+    std_val = np.std(values)
 
-    ax = axes[0]
-    times = [r.get('elapsed_s', 0) for r in results]
-    wall = [r.get('wall_clock', 0) for r in results]
-    ax.plot(runs, times, 'b-o', label='Pipeline Time (s)', markersize=4, linewidth=1)
-    ax.plot(runs, wall, 'c--s', label='Wall Clock (s)', markersize=4, linewidth=1)
-    mean_t = np.mean(times)
-    ax.axhline(mean_t, color='gray', linestyle=':', alpha=0.7)
-    ax.text(0.98, mean_t, f'mean={mean_t:.1f}s', transform=ax.get_yaxis_transform(),
-            ha='left', va='bottom', fontsize=8, color='gray')
-    ax.set_ylabel('Time (s)')
-    ax.set_title(f'Run Time per Eval ({FRAMES} frames)')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
+    ax.plot(runs, values, color=color, marker='o', markersize=5, linewidth=1.2, label=title)
+    ax.axhline(mean_val, color=color, linestyle='--', linewidth=1, alpha=0.7)
+    ax.fill_between(runs, mean_val - std_val, mean_val + std_val,
+                    color=color, alpha=0.12, label=f'±1σ ({smart_fmt(std_val)}{unit})')
+
+    # Annotation box
+    text = f'均值: {smart_fmt(mean_val)}{unit}\n标准差: {smart_fmt(std_val)}{unit}'
+    ax.text(0.97, 0.95, text, transform=ax.transAxes, fontsize=12,
+            verticalalignment='top', horizontalalignment='right',
+            bbox=dict(boxstyle='round,pad=0.4', facecolor='wheat', alpha=0.6))
+
+    ax.set_xlabel('Run', fontsize=14)
+    ax.set_ylabel(ylabel, fontsize=14)
+    ax.set_title(title, fontsize=16, fontweight='bold')
+    ax.tick_params(labelsize=12)
     ax.set_xlim(0.5, N_RUNS + 0.5)
-
-    # Figure 2: Person detections count over runs
-    ax = axes[1]
-    dets = [r.get('person_detections', 0) for r in results]
-    ax.plot(runs, dets, 'm-o', markersize=4, linewidth=1)
-    mean_d = np.mean(dets)
-    ax.axhline(mean_d, color='gray', linestyle=':', alpha=0.7)
-    ax.text(0.98, mean_d, f'mean={mean_d:.0f}', transform=ax.get_yaxis_transform(),
-            ha='left', va='bottom', fontsize=8, color='gray')
-    ax.set_xlabel('Run #')
-    ax.set_ylabel('Person Detections')
-    ax.set_title('YOLO Person Detection Count Variability (non-determinism)')
-    ax.grid(True, alpha=0.3)
-    ax.set_xlim(0.5, N_RUNS + 0.5)
+    if ylim:
+        ax.set_ylim(*ylim)
+    ax.grid(True, alpha=0.25)
+    ax.legend(fontsize=11, loc='lower right')
 
     plt.tight_layout()
-    plt.savefig(PLOT_SPEED, dpi=150)
-    print(f"Speed plot saved to {PLOT_SPEED}")
+    filepath = OUTPUT_DIR / filename
+    plt.savefig(filepath, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    print(f"  √ {filepath.name}")
 
-    # Figure 2: Person accuracy curves (P/R/F1 over runs)
-    fig, axes = plt.subplots(3, 1, figsize=(14, 12))
 
-    # Subplot 1: Person P/R/F1
-    ax = axes[0]
-    precisions = [r.get('person_precision', 0) for r in results]
-    recalls = [r.get('person_recall', 0) for r in results]
-    f1s = [r.get('person_f1', 0) for r in results]
-    ax.plot(runs, precisions, 'g-o', label='Precision', markersize=4, linewidth=1)
-    ax.plot(runs, recalls, 'b-o', label='Recall', markersize=4, linewidth=1)
-    ax.plot(runs, f1s, 'r-o', label='F1', markersize=4, linewidth=1)
-    mean_f1 = np.mean(f1s)
-    ax.axhline(mean_f1, color='red', linestyle=':', alpha=0.5)
-    ax.text(0.98, mean_f1, f'F1 mean={mean_f1:.3f}', transform=ax.get_yaxis_transform(),
-            ha='left', va='bottom', fontsize=8, color='red')
-    ax.set_ylabel('Percentage')
-    ax.set_title('Person-Only Metrics (Precision / Recall / F1)')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    ax.set_ylim(0, 100)
-    ax.set_xlim(0.5, N_RUNS + 0.5)
+def plot_results(results: list[dict]):
+    import numpy as np
 
-    # Subplot 2: Spatial P/R/F1
-    ax = axes[1]
-    sp_prec = [r.get('spatial_precision', 0) for r in results]
-    sp_rec = [r.get('spatial_recall', 0) for r in results]
-    sp_f1 = [r.get('spatial_f1', 0) for r in results]
-    ax.plot(runs, sp_prec, 'g-o', label='Precision', markersize=4, linewidth=1)
-    ax.plot(runs, sp_rec, 'b-o', label='Recall', markersize=4, linewidth=1)
-    ax.plot(runs, sp_f1, 'r-o', label='F1', markersize=4, linewidth=1)
-    mean_sf1 = np.mean(sp_f1)
-    ax.axhline(mean_sf1, color='red', linestyle=':', alpha=0.5)
-    ax.text(0.98, mean_sf1, f'F1 mean={mean_sf1:.3f}', transform=ax.get_yaxis_transform(),
-            ha='left', va='bottom', fontsize=8, color='red')
-    ax.set_ylabel('Percentage')
-    ax.set_title('Spatial (All Detections) Metrics')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    ax.set_ylim(0, 100)
-    ax.set_xlim(0.5, N_RUNS + 0.5)
+    runs = [r['run_id'] for r in results]
 
-    # Subplot 3: TP/FP/FN trends
-    ax = axes[2]
+    # ── Person F1 ──
+    plot_single_metric(
+        results, runs, [r.get('person_f1', 0) for r in results],
+        'F1 值', '行人检测 F1 分数 (Person F1)',
+        'fig_person_f1.png', color='#d62728', ylim=(0, 1))
+
+    # ── Person Precision ──
+    plot_single_metric(
+        results, runs, [r.get('person_precision', 0) for r in results],
+        '精确率 (%)', '行人检测精确率 (Person Precision)',
+        'fig_person_precision.png', color='#2ca02c', ylim=(50, 100), unit='%')
+
+    # ── Person Recall ──
+    plot_single_metric(
+        results, runs, [r.get('person_recall', 0) for r in results],
+        '召回率 (%)', '行人检测召回率 (Person Recall)',
+        'fig_person_recall.png', color='#1f77b4', ylim=(0, 100), unit='%')
+
+    # ── Spatial F1 ──
+    plot_single_metric(
+        results, runs, [r.get('spatial_f1', 0) for r in results],
+        'F1 值', '空间匹配 F1 分数 (Spatial F1)',
+        'fig_spatial_f1.png', color='#9467bd', ylim=(0, 1))
+
+    # ── TP / FP / FN (combined on one axis, separate lines) ──
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    _setup_chinese_font()
+
+    fig, ax = plt.subplots(figsize=(10, 5))
     tps = [r.get('person_tp', 0) for r in results]
     fps = [r.get('person_fp', 0) for r in results]
     fns = [r.get('person_fn', 0) for r in results]
-    ax.plot(runs, tps, 'b-o', label='TP', markersize=4, linewidth=1)
-    ax.plot(runs, fps, 'r-o', label='FP', markersize=4, linewidth=1)
-    ax.plot(runs, fns, color='gray', marker='o', label='FN', markersize=4, linewidth=1)
-    mean_tp = np.mean(tps)
-    mean_fp = np.mean(fps)
-    mean_fn = np.mean(fns)
-    ax.axhline(mean_tp, color='blue', linestyle=':', alpha=0.4)
-    ax.axhline(mean_fp, color='red', linestyle=':', alpha=0.4)
-    ax.axhline(mean_fn, color='gray', linestyle=':', alpha=0.4)
-    ax.text(0.98, mean_tp, f'TP mean={mean_tp:.0f}', transform=ax.get_yaxis_transform(),
-            ha='left', va='bottom', fontsize=8, color='blue')
-    ax.text(0.98, mean_fp, f'FP mean={mean_fp:.0f}', transform=ax.get_yaxis_transform(),
-            ha='left', va='bottom', fontsize=8, color='red')
-    ax.text(0.98, mean_fn, f'FN mean={mean_fn:.0f}', transform=ax.get_yaxis_transform(),
-            ha='left', va='bottom', fontsize=8, color='gray')
-    ax.set_xlabel('Run #')
-    ax.set_ylabel('Count')
-    ax.set_title('TP / FP / FN per Run')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
+
+    ax.plot(runs, tps, 'o-', color='#2ca02c', markersize=5, linewidth=1.2, label='TP (正确检测)')
+    ax.plot(runs, fps, 's-', color='#d62728', markersize=5, linewidth=1.2, label='FP (误检)')
+    ax.plot(runs, fns, '^-', color='#7f7f7f', markersize=5, linewidth=1.2, label='FN (漏检)')
+
+    for vals, color, label in [(tps, '#2ca02c', 'TP'), (fps, '#d62728', 'FP'), (fns, '#7f7f7f', 'FN')]:
+        m, s = np.mean(vals), np.std(vals)
+        ax.axhline(m, color=color, linestyle='--', linewidth=0.8, alpha=0.5)
+        ax.text(0.97, m, f'{label} μ={smart_fmt(m)} σ={smart_fmt(s)}',
+                transform=ax.get_yaxis_transform(), fontsize=9,
+                va='bottom', ha='left', color=color)
+
+    ax.set_xlabel('运行次数', fontsize=14)
+    ax.set_ylabel('计数', fontsize=14)
+    ax.set_title('行人检测 TP / FP / FN 分布', fontsize=16, fontweight='bold')
+    ax.tick_params(labelsize=12)
     ax.set_xlim(0.5, N_RUNS + 0.5)
+    ax.grid(True, alpha=0.25)
+    ax.legend(fontsize=12)
 
     plt.tight_layout()
-    plt.savefig(PLOT_ACCURACY, dpi=150)
-    print(f"Accuracy plot saved to {PLOT_ACCURACY}")
+    plt.savefig(OUTPUT_DIR / 'fig_tp_fp_fn.png', dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    print(f"  √ fig_tp_fp_fn.png")
+
+    # ── Runtime ──
+    plot_single_metric(
+        results, runs, [r.get('elapsed_s', 0) for r in results],
+        '耗时 (s)', '单次评估处理耗时 (408 帧)',
+        'fig_runtime.png', color='#1f77b4', unit='s')
+
+    # ── Detections count ──
+    plot_single_metric(
+        results, runs, [r.get('person_detections', 0) for r in results],
+        '检测数', 'YOLO 行人检测数量',
+        'fig_detections.png', color='#ff7f0e')
+
+    # ── Summary table ──
+    fig, ax = plt.subplots(figsize=(12, 4))
+    ax.axis('off')
+
+    keys = [
+        ('person_f1', 'Person F1'),
+        ('person_precision', 'Person Precision (%)'),
+        ('person_recall', 'Person Recall (%)'),
+        ('spatial_f1', 'Spatial F1'),
+        ('person_tp', 'TP'),
+        ('person_fp', 'FP'),
+        ('person_fn', 'FN'),
+        ('elapsed_s', '耗时 (s)'),
+        ('person_detections', '检测数'),
+    ]
+    cell_text = []
+    for key, label in keys:
+        vals = [r.get(key, 0) for r in results]
+        m, s = np.mean(vals), np.std(vals)
+        cell_text.append([label, smart_fmt(m), smart_fmt(s)])
+
+    table = ax.table(cellText=cell_text, colLabels=['指标', '均值', '标准差'],
+                     loc='center', cellLoc='center')
+    table.auto_set_font_size(False)
+    table.set_fontsize(13)
+    table.scale(1, 1.8)
+    for (row, col), cell in table.get_celld().items():
+        if row == 0:
+            cell.set_facecolor('#40466e')
+            cell.set_text_props(color='white', fontweight='bold')
+        elif row % 2 == 0:
+            cell.set_facecolor('#f0f0f0')
+
+    ax.set_title('40 次运行评估汇总', fontsize=16, fontweight='bold', pad=20)
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR / 'fig_summary_table.png', dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    print(f"  √ fig_summary_table.png")
 
 
 def print_summary(results: list[dict]):
@@ -292,9 +364,8 @@ def print_summary(results: list[dict]):
 
 
 def main():
-    MAX_WORKERS = 4
-    print(f"Running {N_RUNS}x eval_labeled (center-dist={CENTER_DIST}, frames={FRAMES})")
-    print(f"Concurrency: {MAX_WORKERS} workers")
+    MAX_WORKERS = 2
+    print(f"Running {N_RUNS}x eval_labeled (center-dist={CENTER_DIST}, frames={FRAMES}) — {MAX_WORKERS} 路并行")
     print(f"Output: {OUTPUT_DIR}")
 
     results = [None] * N_RUNS
@@ -315,15 +386,13 @@ def main():
             if f.exception():
                 print(f"  Worker failed: {f.exception()}")
 
-    # Final sort by run_id
-    results.sort(key=lambda r: r.get('run_id', 0) if r else 0)
-    valid_results = [r for r in results if r is not None]
-
-    print_summary(valid_results)
+    results.sort(key=lambda r: r['run_id'] if r else 0)
+    valid = [r for r in results if r]
+    print_summary(valid)
 
     print("\nGenerating plots...")
     try:
-        plot_results(valid_results)
+        plot_results(valid)
     except Exception as e:
         import traceback
         traceback.print_exc()

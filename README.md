@@ -13,6 +13,10 @@
 | F1 | **0.762** | 0.673 |
 | FP | 148 | 675 |
 
+### 致谢
+
+墙体提取模块的 EDLines 算法参考了 [opencv_idz](https://github.com/DemonFromRussia/opencv_idz) 项目中的 C++ 参考实现（Akinlar & Topal, 2011），在此表示感谢。
+
 ### 关键特性
 
 - **三级点云处理**: 地面提取（PeakScan）→ 墙体提取（BevEdLines）→ 聚类（PruneQt）
