@@ -56,7 +56,8 @@ pub struct BevEdLines {
     min_extent: f32,
     /// 梯度幅值阈值比例 [0, 1]，相对最大梯度，默认 0.05
     grad_threshold: f32,
-    /// 锚点检测阈值比例，低于此不产生锚点
+    /// 锚点检测阈值比例（相对最大梯度），低于此不产生锚点。
+    /// NMS 检查：`grad_mag[i] >= grad_mag[neighbor] + max_mag * anchor_threshold`
     anchor_threshold: f32,
     /// 边缘链最少像素数
     min_chain_len: usize,
@@ -64,6 +65,10 @@ pub struct BevEdLines {
     max_curvature_error: f32,
     /// 矩形最小长宽比
     min_length_ratio: f32,
+    /// BEV 图高斯模糊 σ（像素），0 = 不模糊，推荐 0.8~1.5
+    gaussian_sigma: f32,
+    /// 线段拟合最大 RMS 误差（像素），0 = 不校验，推荐 0.5~1.0
+    max_fit_error: f32,
 }
 
 impl BevEdLines {
@@ -77,10 +82,12 @@ impl BevEdLines {
             min_z_span: 1.0,
             min_extent: 0.7,
             grad_threshold: 0.05,
-            anchor_threshold: 0.08,
+            anchor_threshold: 0.0,
             min_chain_len: 15,
             max_curvature_error: 2.0,
             min_length_ratio: 2.5,
+            gaussian_sigma: 0.0,
+            max_fit_error: 0.0,
         }
     }
 
@@ -105,6 +112,24 @@ impl BevEdLines {
 
     pub fn with_chain_min_length(mut self, len: usize) -> Self {
         self.min_chain_len = len;
+        self
+    }
+
+    pub fn with_gaussian_blur(mut self, sigma: f32) -> Self {
+        self.gaussian_sigma = sigma;
+        self
+    }
+
+    pub fn with_fit_error_threshold(mut self, err: f32) -> Self {
+        self.max_fit_error = err;
+        self
+    }
+
+    /// 启用所有优化：高斯模糊 0.8 + 锚点阈值 0.04 + 拟合误差校验 0.5
+    pub fn with_optimizations(mut self) -> Self {
+        self.gaussian_sigma = 0.8;
+        self.anchor_threshold = 0.04;
+        self.max_fit_error = 0.5;
         self
     }
 }
@@ -144,15 +169,24 @@ impl WallPickStrategy for BevEdLines {
             }
         }
 
+        // ── 可选高斯模糊 ──
+        let img = if self.gaussian_sigma > 0.0 {
+            gaussian_blur(&img, size, size, self.gaussian_sigma)
+        } else {
+            img
+        };
+
         // ── 2. Sobel 梯度 + 二进制方向（无三角函数）──
         let (grad_mag, grad_dir) = sobel_gradient(&img, size, size);
 
         let max_mag = grad_mag.iter().fold(0.0f32, |a, &b| a.max(b));
         if max_mag < 1e-6 { return (0, Vec::new()); }
         let mag_threshold = max_mag * self.grad_threshold;
+        let anchor_mag_threshold = max_mag * self.anchor_threshold;
 
         // ── 3. 锚点检测（NMS + 二进制方向）──
-        // 沿梯度方向检查是否为局部极大值（参考 anchorThresh=0 默认值）
+        // 沿梯度方向检查是否为局部极大值
+        // 当 anchor_threshold > 0 时增加阈值偏移，抑制弱边缘锚点
         let mut is_anchor = vec![false; size * size];
         for y in 2..size - 2 {
             for x in 2..size - 2 {
@@ -162,13 +196,17 @@ impl WallPickStrategy for BevEdLines {
                 match grad_dir[i] {
                     EDGE_VERTICAL => {
                         // |gx|>=|gy|: 梯度水平 → 检查左右邻域极大值
-                        if grad_mag[i] >= grad_mag[i - 1] && grad_mag[i] >= grad_mag[i + 1] {
+                        if grad_mag[i] >= grad_mag[i - 1] + anchor_mag_threshold
+                            && grad_mag[i] >= grad_mag[i + 1] + anchor_mag_threshold
+                        {
                             is_anchor[i] = true;
                         }
                     }
                     EDGE_HORIZONTAL => {
                         // |gy|>|gx|: 梯度垂直 → 检查上下邻域极大值
-                        if grad_mag[i] >= grad_mag[i - size] && grad_mag[i] >= grad_mag[i + size] {
+                        if grad_mag[i] >= grad_mag[i - size] + anchor_mag_threshold
+                            && grad_mag[i] >= grad_mag[i + size] + anchor_mag_threshold
+                        {
                             is_anchor[i] = true;
                         }
                     }
@@ -231,6 +269,11 @@ impl WallPickStrategy for BevEdLines {
                 let (cx, cy, length, width, angle) = fit_rectangle(seg);
                 if length < 3.0 || width < 0.5 { continue; }
                 if length / width < self.min_length_ratio { continue; }
+                // 可选拟合误差校验：过滤曲线段或锯齿链
+                if self.max_fit_error > 0.0 {
+                    let rms = fit_rms_error(seg, cx, cy, angle);
+                    if rms > self.max_fit_error { continue; }
+                }
                 line_segments.push((cx, cy, length, width, angle));
             }
         }
@@ -451,6 +494,49 @@ fn split_recursive(
 
 // ─── 图像处理辅助 ──────────────────────────────────────
 
+/// 高斯模糊（可分离 1D 卷积，边界 clamp）
+fn gaussian_blur(src: &[u8], w: usize, h: usize, sigma: f32) -> Vec<u8> {
+    let radius = (sigma * 2.5).ceil() as i32;
+    let size = (2 * radius + 1) as usize;
+    let mut kernel = vec![0.0f32; size];
+    let mut sum = 0.0f32;
+    for i in 0..size {
+        let x = (i as i32 - radius) as f32;
+        let g = (-0.5 * x * x / (sigma * sigma)).exp();
+        kernel[i] = g;
+        sum += g;
+    }
+    for k in &mut kernel { *k /= sum; }
+
+    let mut tmp = vec![0.0f32; w * h];
+
+    // 水平方向模糊
+    for y in 0..h {
+        for x in 0..w {
+            let mut val = 0.0f32;
+            for ki in 0..size {
+                let sx = (x as i32 + ki as i32 - radius).clamp(0, w as i32 - 1) as usize;
+                val += src[y * w + sx] as f32 * kernel[ki];
+            }
+            tmp[y * w + x] = val;
+        }
+    }
+
+    // 垂直方向模糊
+    let mut out = vec![0u8; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            let mut val = 0.0f32;
+            for ki in 0..size {
+                let sy = (y as i32 + ki as i32 - radius).clamp(0, h as i32 - 1) as usize;
+                val += tmp[sy * w + x] * kernel[ki];
+            }
+            out[y * w + x] = val.round().clamp(0.0, 255.0) as u8;
+        }
+    }
+    out
+}
+
 /// 单次 Sobel 计算，返回梯度幅值（|gx|+|gy|）和二进制方向（避免 atan2/cos/sin）
 fn sobel_gradient(src: &[u8], w: usize, h: usize) -> (Vec<f32>, Vec<u8>) {
     let n = src.len();
@@ -477,6 +563,23 @@ fn sobel_gradient(src: &[u8], w: usize, h: usize) -> (Vec<f32>, Vec<u8>) {
         }
     }
     (mag, dir)
+}
+
+/// 计算边缘链像素到拟合直线的垂直 RMS 距离（像素）
+///
+/// line 由 (cx, cy, angle) 定义，方向向量为 (cos_a, sin_a)。
+/// 垂直距离 = |-(x-cx)*sin_a + (y-cy)*cos_a|
+fn fit_rms_error(region: &[(usize, usize)], cx: f32, cy: f32, angle: f32) -> f32 {
+    let sin_a = angle.sin();
+    let cos_a = angle.cos();
+    let mut sum_sq = 0.0f32;
+    for &(x, y) in region {
+        let dx = x as f32 - cx;
+        let dy = y as f32 - cy;
+        let perp = -(dx * sin_a) + (dy * cos_a);
+        sum_sq += perp * perp;
+    }
+    (sum_sq / region.len() as f32).sqrt()
 }
 
 /// PCA 矩形拟合（同 bev_lsd）
