@@ -5,7 +5,6 @@ use crate::{
         CldBud,
         classify::cluster::Cluster,
         classify::strategy::{LvdotClusterStrategy, PruneQt, XYGridDBSCAN},
-        denoise::{DenoiseStrategy, RadiusOutlierRemoval},
         ground::{GroundPickStrategy, create_ground_strategy},
         wall::{WallPickStrategy, XYGrid, BevLsd, BevEdLines, BevHough},
     },
@@ -93,7 +92,7 @@ impl Classify {
         };
 
         // ─── 1. 地面提取 ──────────────────────────────────────────────────
-        let (slice_index, _grounds, _ground_plane) = self.ground_strategy.pick(&mut target);
+        let (slice_index, grounds, _ground_plane) = self.ground_strategy.pick(&mut target);
         println!("完成地面提取，已过滤 {} 个点", slice_index);
 
         // ─── 2. 墙体提取 ──────────────────────────────────────────────────
@@ -153,7 +152,18 @@ impl Classify {
             }
         }
 
-        // ─── 5. 输出 cld_buds_raw（仅障碍物簇，不含地面/墙体） ────────────
+        // ─── 5. 输出地面/墙体 buds ─────────────────────────────────────────
+        *self.ground_buds_out.producer().lock().unwrap() = grounds;
+        let wall_buds: Vec<CldBud> = if n_wall > 0 {
+            let mut box3d = Box3D::empty_box();
+            box3d.cloud2box(&target[slice_index..slice_index + n_wall].to_vec());
+            vec![CldBud::new(box3d, 1, "wall".to_string(), 1.0)]
+        } else {
+            Vec::new()
+        };
+        *self.wall_buds_out.producer().lock().unwrap() = wall_buds;
+
+        // ─── 6. 输出 cld_buds_raw（仅障碍物簇，不含地面/墙体） ────────────
         // 检测阶段写 DualBuf producer（后融合阶段通过 consumer 读）
         *self.cld_buds_raw.producer().lock().unwrap() = self.cluster.to_cldbuds();
         Ok(())

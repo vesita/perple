@@ -3,10 +3,11 @@
 墙体策略对比分析：BevLsd vs BevEdLine
 
 输出：
-  1. wall_projection.png     — BEV 投影对比（密度 + 墙点分类）
-  2. accuracy_strict.png     — 严格精度对比（P/R/F1 + 标准差）
-  3. accuracy_spatial.png    — 空间精度对比（P/R/F1 + 标准差）
-  4. speed_comparison.png    — 速度对比（平均耗时 + 标准差）
+  1. bev_density.png         — 独立 BEV 密度热力图
+  2. wall_projection.png     — BEV 投影对比（密度 + 墙点分类，空心/实心对比）
+  3. accuracy_strict.png     — 严格精度对比（P/R/F1 + 标准差）
+  4. accuracy_spatial.png    — 空间精度对比（P/R/F1 + 标准差）
+  5. speed_comparison.png    — 速度对比（平均耗时 + 标准差）
 
 用法：
   .venv/Scripts/python.exe scripts/wall_strategy_analysis.py
@@ -90,18 +91,41 @@ def load_non_ground(path="output/wall_compare_viz/non_ground.json"):
     with open(path, encoding="utf-8") as f:
         return json.load(f)  # list of [x, y, z]
 
-def plot_wall_projection(viz, non_ground):
-    """生成 BEV 投影对比图：密度热力图 + 各策略墙点/非墙点分类."""
+def get_bev_density(viz):
+    """从 JSON 数据重建 BEV 密度网格."""
     bev = viz["bev"]
     size = bev["size"]
-    max_range = bev["max_range"]
-    density = np.array(bev["density"], dtype=np.float32).reshape(size, size)
+    return np.array(bev["density"], dtype=np.float32).reshape(size, size)
+
+def plot_bev_density(viz):
+    """生成独立的 BEV 密度热力图."""
+    density = get_bev_density(viz)
+    max_range = viz["bev"]["max_range"]
+    extent = [-max_range, max_range, -max_range, max_range]
+
+    fig, ax = plt.subplots(figsize=(6, 5.5))
+    ax.imshow(density, origin="lower", extent=extent, cmap="Greys")
+    ax.set_xlim(-max_range, max_range)
+    ax.set_ylim(-max_range, max_range)
+    ax.set_aspect("equal")
+    ax.set_title("BEV 点云密度")
+    ax.set_xlabel("X (m)")
+    ax.set_ylabel("Y (m)")
+    plt.tight_layout()
+    out_path = OUT_DIR / "bev_density.png"
+    fig.savefig(out_path)
+    print(f"[BEV密度] → {out_path}")
+    plt.close(fig)
+
+
+def plot_wall_projection(viz, non_ground):
+    """生成 BEV 投影对比图：密度热力图 + 各策略墙点/非墙点分类."""
+    density = get_bev_density(viz)
+    max_range = viz["bev"]["max_range"]
+    extent = [-max_range, max_range, -max_range, max_range]
     pts = np.array(non_ground, dtype=np.float32)  # (N, 3)
 
-    extent = [-max_range, max_range, -max_range, max_range]
-    strategies = viz["strategies"]
-
-    strategies = [s for s in strategies if s["name"] in STRATEGY_LABELS]
+    strategies = [s for s in viz["strategies"] if s["name"] in STRATEGY_LABELS]
     n_strat = len(strategies)
     fig, axes = plt.subplots(1, n_strat, figsize=(6 * n_strat, 5.5))
     if n_strat == 1:
@@ -112,22 +136,23 @@ def plot_wall_projection(viz, non_ground):
         label = STRATEGY_LABELS.get(name, name)
 
         # 背景：BEV 密度
-        ax.imshow(density, origin="lower", extent=extent, cmap="Greys", alpha=0.6)
+        ax.imshow(density, origin="lower", extent=extent, cmap="Greys", alpha=0.5)
 
-        # 非墙点（灰色小点）
+        # 非墙点：空心圆（边框可见，内部透明，透过圆圈能看到背景）
         nw_idx = strat["non_wall_indices"]
-        if nw_idx:
+        if len(nw_idx):
             nw_pts = pts[nw_idx]
-            ax.scatter(nw_pts[:, 0], nw_pts[:, 1], s=1.0, c="#AAAAAA",
-                       alpha=0.4, linewidths=0, label="非墙面点")
+            ax.scatter(nw_pts[:, 0], nw_pts[:, 1], s=3.0,
+                       facecolors="none", edgecolors="#888888",
+                       alpha=0.5, linewidths=0.3, label="非墙面点 (空心)")
 
-        # 墙点（彩色）
+        # 墙点：实心色点（高不透明度，覆盖背景）
         w_idx = strat["wall_indices"]
-        if w_idx:
+        if len(w_idx):
             w_pts = pts[w_idx]
-            ax.scatter(w_pts[:, 0], w_pts[:, 1], s=1.5,
+            ax.scatter(w_pts[:, 0], w_pts[:, 1], s=5.0,
                        c=STRATEGY_COLORS.get(name, "#E74C3C"),
-                       alpha=0.7, linewidths=0, label="墙面点")
+                       alpha=0.9, linewidths=0, label="墙面点 (实心)")
 
         ax.set_xlim(-max_range, max_range)
         ax.set_ylim(-max_range, max_range)
@@ -135,7 +160,7 @@ def plot_wall_projection(viz, non_ground):
         ax.set_title(f"{label}  ({strat['n_wall']} 墙面点)")
         ax.set_xlabel("X (m)")
         ax.set_ylabel("Y (m)")
-        ax.legend(loc="upper right", markerscale=4, fontsize=9)
+        ax.legend(loc="upper right", markerscale=10, fontsize=9)
         ax.grid(True, alpha=0.2)
 
     plt.tight_layout()
@@ -325,6 +350,7 @@ def main():
     if os.path.exists(viz_path) and os.path.exists(ng_path):
         viz = load_wall_viz(viz_path)
         non_ground = load_non_ground(ng_path)
+        plot_bev_density(viz)
         plot_wall_projection(viz, non_ground)
     else:
         print(f"  [跳过] 缺少可视化数据 (需先运行 wall_compare_viz)")

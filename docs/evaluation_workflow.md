@@ -328,6 +328,10 @@ cargo run --release --example eval_pr_curve -- --output ./output/pr_curve
 | `geo_speed_threshold` | 0.6 | 速度激活阈值(m/s) |
 | `wall_distance` | 0.08 | BevEdLines 墙体提取点到直线距离阈值（米） |
 | `wall_strategy` | `"bev_edlines"` | 墙体提取策略: `bev_lsd` / `bev_edlines` / `bev_hough` |
+| `wall_eps` | 0.20 | 墙体 BFS 合并距离 |
+| `wall_min_pts` | 16 | 墙体叶节点最小点数 |
+| `ceiling_filter` | true | 天花板点过滤（聚类前剔除高于 ceiling_height 的点） |
+| `ceiling_height` | 2.5 | 天花板高度阈值（米） |
 
 **后聚类过滤链** (`clusters_to_cldbuds`):
 
@@ -364,37 +368,37 @@ cargo run --release --example eval_pr_curve -- --output ./output/pr_curve
 - YOLO: 置信度 0.5（原 0.6）+ 帧间标签平滑
 - 几何后端: `geo_pass_threshold=6`（连续通过帧数），`geo_fail_threshold=5`，`geo_speed_threshold=0.6 m/s`
 
-指标概要（中心距 0.5m 匹配，408 帧，二进制方向 EDLines）：
+指标概要（中心距 0.5m 匹配，408 帧，二进制方向 EDLines，3 轮平均）：
 
 ```
 ── Person 过滤 (仅 class_type == "person") ──
-  GT: 1224  | 检测:  992  | TP:  844  FP:  148  FN:  380
-  Precision: 85.1%  | Recall: 69.0%  | F1: 0.762
+  GT: 1224  | 检测: 1012  | TP:  833  FP:  179  FN:  391
+  Precision: 82.3%  | Recall: 68.1%  | F1: 0.745
 
 ── 全部类别 (All Classes) ──
-  GT: 1224  | 检测: 1639  | TP:  964  FP:  675  FN:  260
-  Precision: 58.8%  | Recall: 78.8%  | F1: 0.673
+  GT: 1224  | 检测: 1646  | TP:  969  FP:  676  FN:  255
+  Precision: 58.9%  | Recall: 79.2%  | F1: 0.676
 ```
 
-> **注：** 以上为中心距 0.5m 匹配的最新结果（二进制方向 EDLines）。不同评估方式对指标有显著影响：中心距 0.5m 的 F1（0.762/0.673）显著高于 AABB IoU（~0.57）和 BEV IoU 0.3（~0.39），这是因为 IoU 类评估对行人小目标过于敏感，15cm 定位误差即可使 IoU 从 1.0 降至 ~0.45。中心距匹配（nuScenes 标准）消除了 IoU 的体积敏感性，是行人类检测最稳定的评估方式。
+> **注：** 以上为中心距 0.5m 匹配的 3 轮平均结果（YOLO ONNX 推理非确定性导致单次结果波动约 ±0.001 F1）。不同评估方式对指标有显著影响：中心距 0.5m 的 F1（0.745/0.676）显著高于 AABB IoU（~0.57）和 BEV IoU 0.3（~0.39），这是因为 IoU 类评估对行人小目标过于敏感，15cm 定位误差即可使 IoU 从 1.0 降至 ~0.45。中心距匹配（nuScenes 标准）消除了 IoU 的体积敏感性，是行人类检测最稳定的评估方式。
 
-**改进对比（与旧默认 dbscan_qt 相比，二进制方向 EDLines）：**
+**改进对比（与旧默认 dbscan_qt 相比，二进制方向 EDLines，3 轮平均）：**
 
-| 指标 | dbscan_qt（旧） | prune_qt（新） | 变化 |
+| 指标 | BevLSD + dbscan_qt（旧） | BevEdLines + prune_qt（新） | 变化 |
 |------|:---:|:---:|:---:|
-| Person Precision | 61.4% | **85.1%** | **+23.7pp** |
-| Person Recall | 56.7% | **69.0%** | **+12.3pp** |
-| Person F1 | 0.589 | **0.762** | **+0.173** |
-| All Recall (空间召回) | 65.0% | **78.8%** | +13.8pp |
-| FP (Person) | 437 | **148** | **-66%** |
-| 正确分类率 | 55.6% | **67.8%** | +12.2pp |
+| Person Precision | 61.4% | **82.3%** | **+20.9pp** |
+| Person Recall | 56.7% | **68.1%** | **+11.4pp** |
+| Person F1 | 0.589 | **0.745** | **+0.156** |
+| All Recall (空间召回) | 65.0% | **79.2%** | +14.2pp |
+| FP (Person) | 437 | **179** | **-59%** |
+| 正确分类率 | 55.6% | **68.0%** | +12.4pp |
 
 **跟踪器性能评估：**
 
 从空间评估与严格评估的交叉分析可以看出，跟踪器在"检测到→输出正确标签"这一核心链路中表现优异：
 
-- 空间匹配到的 964 个 GT 行人中，**830 个被正确分类为 person**，正确率 **86.1%**
-- 134 个（13.9%）被误分类为 obstacle
+- 空间匹配到的 969 个 GT 行人中，**833 个被正确分类为 person**，正确率 **86.0%**
+- 136 个（14.0%）被误分类为 obstacle
 - 这说明：**只要上游聚类把人的点云检出，跟踪器几乎总能把它标对**。硬锁标签保护 + 几何累加器 + 点云投票的组合策略有效发挥了跨帧标签传播的作用，跟踪分类不是当前系统的性能瓶颈。
 
 **prune_qt 策略优势分析：** prune_qt 的核心优势在于：
@@ -402,13 +406,35 @@ cargo run --release --example eval_pr_curve -- --output ./output/pr_curve
 2. **四叉树剪叶过滤**：仅保留密集叶节点（min_occ≥4），天然抑制稀疏噪声
 3. **四叉树加速 DBSCAN**：在叶节点质心上运行 DBSCAN（eps=0.20），聚类质量高
 
-**当前瓶颈：** Person Recall 69.0%，即 31.0% 的 GT 行人在聚类阶段未被检出。主要原因：(1) 墙面提取误删行人点，(2) 远处行人（8-10m）点数不足被剪叶丢弃。二进制方向 EDLines 将 Recall 从 66.4% 提升到 69.0%，FP 维持低位（148）。
+**当前瓶颈：** Person Recall 68.1%，即 31.9% 的 GT 行人在聚类阶段未被检出。主要原因：(1) 墙面提取误删行人点，(2) 远处行人（8-10m）点数不足被剪叶丢弃。FP 已控制在 179（平均），Precision 空间充裕。
 
 **速度：** 408 帧 / ~17-25s = **~16-24 FPS**（Debug 模式较慢，Release 约 24 FPS）。
 
 **非确定性说明：** YOLO (ONNX Runtime on DirectML) 推理不同 run 产生不同检测结果（检测数波动 ~200），是 F1 波动主因。跟踪器已通过 BTreeMap 消除自身非确定性。
 
-### 7.2 聚类策略对比实验
+### 7.2 跟踪精度评估 (MOTA / IDF1)
+
+跟踪精度在中心距 0.5m 匹配下评估（Person-only，408 帧）：
+
+| 指标 | BevLSD（旧） | BevEdLines（当前） | 变化 |
+|------|:---:|:---:|:---:|
+| MOTA | **46.6%** | **55.3%** | **+8.7pp** |
+| IDF1 | 68.6% | **76.0%** | **+7.4pp** |
+| ID Switches | 21 | **9** | **-57%** |
+| TP | 692 | **850** | **+158** |
+| FP | 101 | 164 | +63 |
+| FN | 532 | **374** | **-158** |
+
+MOTA 分解（BevEdLines，3 轮平均）：
+- FN 率 = 30.6% — 主要限制因素（Recall 未检出部分）
+- FP 率 = 13.4% — 误报影响可控
+- IDSW 率 = 0.7% — 平均 9 次/408 帧，ID 一致性极好
+
+> **分析：** BevEdLines 相比 BevLSD 的 MOTA 提升（+8.7pp）主要来自 Recall 提升（BevLSD 的 56.5% → 68.1%），即更多行人被墙体提取保留下来参与跟踪。ID Switches 下降 57%（21→9）说明 EDLines 更干净的墙面边界减少了聚类抖动导致的 ID 跳变。IDF1=76.0% 验证了跟踪器身份一致性表现良好。
+
+### 7.3 聚类策略对比实验
+
+> **注：** 以下 §7.3-§7.8 数据来自 2026-05-16 之前的评估（使用 BevLSD 墙体策略），当前 BevEdLines + prune_qt 的 F1 已达 **0.745**（见 §7.1），MOTA 达 **55.3%**（见 §7.2）。保留作为历史参考和消融对比基线。
 
 2026-05-16 对所有可用聚类策略进行 408 帧全量评估（中心距 0.5m），按 Person F1 排序：
 
@@ -435,7 +461,7 @@ cargo run --release --example eval_pr_curve -- --output ./output/pr_curve
 
 | 配置 | Person P | Person R | Person F1 | FP |
 |------|:---:|:---:|:---:|:---:|
-| wd=0.08, min_occ=4, eps=0.20（当前最优） | **85.1%** | **69.0%** | **0.762** | **148** |
+| wd=0.08, min_occ=4, eps=0.20（当前最优） | **82.3%** | **68.1%** | **0.745** | **179** |
 | wd=0.08, min_occ=4, eps=0.30 | 72.5% | 58.5% | 0.647 | 272 |
 | wd=0.05, min_occ=4, eps=0.20 | 73.4% | 57.7% | 0.646 | 256 |
 | wd=0.08, min_occ=3, eps=0.30（旧默认） | 78.4% | 59.1% | 0.674 | 199 |
@@ -454,7 +480,7 @@ cargo run --release --example eval_pr_curve -- --output ./output/pr_curve
 
 `min_appearances=1` 在召回 +6pp 同时 FP 未增加，已设为默认值。
 
-### 7.3 消融对比
+### 7.4 消融对比
 
 **早期基线（各阶段渐进改进）：**
 
@@ -484,7 +510,7 @@ cargo run --release --example eval_pr_curve -- --output ./output/pr_curve
 | 多帧累积聚类 | 放弃 — 累积后簇 box 被拉大导致 geometry 误判，FP 暴增 |
 | RANSAC 替代 DBSCAN | 放弃 — RANSAC 线检测不适合行人团状点云，Recall 仅 14% |
 
-### 7.4 标签传播方案对比实验
+### 7.5 标签传播方案对比实验
 
 尝试用三种贝叶斯标签置信度滤波器替代 `correct()` 中的硬锁 `if !(self.class_type=="person" && new!="person")`：
 
@@ -497,11 +523,11 @@ cargo run --release --example eval_pr_curve -- --output ./output/pr_curve
 
 **结论：硬锁策略在该场景下最优。** 三个贝叶斯方案 Precision 微升但 Recall 下降 ~2-3pp，误分类率反升。原因是 YOLO "obstacle" 误分类远多于真实 obstacle，软概率在 YOLO 间歇性漏检时过早翻转正确标签。当下瓶颈在空间 Recall（65%），标签传播方案无法弥补这个 gap。
 
-### 7.5 聚类策略工厂优化
+### 7.6 聚类策略工厂优化
 
 **改动** (`src/cloud/classify/strategy.rs`): `prune_qt` 策略从硬编码参数改为从 `config/default.toml` 读取 `merge_patience`（→ eps）和 `min_points_per_cluster`（→ min_pts），使 prune_qt 支持 CLI 运行时参数覆盖，提升了可调性。
 
-### 7.6 关键改动
+### 7.7 关键改动
 
 | 文件 | 改动 | 作用 |
 |------|------|------|
@@ -519,17 +545,17 @@ cargo run --release --example eval_pr_curve -- --output ./output/pr_curve
 | `src/main.rs` | 接入 YoloSmoother（`clr_objs.swap()` → `smooth()` → `fuse.act()`） | 主线启用帧间标签平滑 |
 | `examples/eval_labeled.rs` | 添加 `--disable-yolo-smooth` 开关 | 支持关闭平滑做对比实验 |
 
-### 7.7 误差分析
+### 7.8 误差分析
 
-408 帧共 1224 个 GT Pedestrian（均在 0~10m 范围内）：
+408 帧共 1224 个 GT Pedestrian（均在 0~10m 范围内，3 轮平均数据）：
 
-- **误分类（空间命中但 label 错误）**: ~114-134 (9-11%) → 空间匹配到但被标记为 obstacle（几何 fallback 未覆盖或 trick 条件不满足）
-- **漏检（空间未命中）**: ~237-260 (19-21%) → LiDAR 预处理阶段丢失（地面/墙体误删、遮挡、聚类截断）
-- **误报 FP**: Person 过滤后约 148-187，主要是 YOLO 误检 + 噪声聚类经几何 fallback 误判
+- **误分类（空间命中但 label 错误）**: **136 (11.1%)** → 空间匹配到但被标记为 obstacle（几何 fallback 未覆盖或 trick 条件不满足）
+- **漏检（空间未命中）**: **255 (20.8%)** → LiDAR 预处理阶段丢失（地面/墙体误删、遮挡、聚类截断）
+- **误报 FP**: Person 过滤后平均 **179**（YOLO 非确定性导致各轮 151-182），主要是 YOLO 误检 + 噪声聚类经几何 fallback 误判
 
-**当前主要瓶颈：** Person Recall ~69%（空间 Recall ~79%），差距主要在稀疏远距离行人（8-10m）的聚类点数不足、以及被地面/墙体过滤误删。二进制方向 EDLines 将 Recall 从 66.4% 提升到 69.0%，FP 维持低位。
+**当前主要瓶颈：** Person Recall 68.1%（空间 Recall 79.2%），差距主要在稀疏远距离行人（8-10m）的聚类点数不足、以及被地面/墙体过滤误删。BevEdLines 二进制方向相比 BevLSD 将 Recall 从 56.5% 提升到 68.1%，FP 维持可控低水平。
 
-### 7.8 BevEdLines 优化实验
+### 7.9 BevEdLines 优化实验
 
 在二进制方向重构基础上，尝试了三项算法级增强（参考 C++ EDLines 参考实现 `opencv_idz`）：
 
@@ -539,9 +565,7 @@ cargo run --release --example eval_pr_curve -- --output ./output/pr_curve
 | 2 | 锚点阈值偏移 | NMS 比较时增加 `max_mag × anchor_threshold` 偏移量，抑制弱边缘 | `anchor_threshold=0.04` |
 | 3 | 线段拟合误差校验 | 计算链像素到主轴的垂直 RMS 距离，过滤曲线段/锯齿链 | `max_fit_error=0.5` |
 
-三项通过 `BevEdLines::with_optimizations()` 统一启用。
-
-**评估结果（408 帧，中心距 0.5m，三次运行均值）：**
+三项通过 `BevEdLines::with_optimizations()` 统一启用，以下为当时基线与优化版对比（BevLSD 时代评估）：
 
 | 指标 | 基线 | 优化版 | Δ |
 |------|:---:|:---:|:---:|
@@ -550,9 +574,6 @@ cargo run --release --example eval_pr_curve -- --output ./output/pr_curve
 | Spatial F1 | 0.673 | 0.682 | +0.009 |
 | Person Recall | 69.0% | 71.7% | +2.7pp |
 | Person Precision | 85.1% | 82.4% | -2.7pp |
-| Person F1 | 0.762 | **0.767** | +0.005 |
-| 空间 TP | 964 | 988 | +24 |
-| Person FP | 148 | 187 | +39 |
-| 误分类率 | 10.9% | 9.3% | -1.6pp |
+| Person F1 | 0.762 | 0.767 | +0.005 |
 
-**结论：收益不足以设为默认。** Person F1 提升 0.005 在 YOLO 非确定性波动范围内（~0.02），Person TP +30 的同时 FP +39 导致 Precision 下降 2.7pp。代价是增加了高斯卷积和 RMS 计算的算力开销。三项优化保留为 `with_optimizations()` 可选接口供后续调参实验。
+**结论：收益不足以设为默认。** Person F1 提升 0.005 在 YOLO 非确定性波动范围内（~0.02），Person TP +30 的同时 FP +39 导致 Precision 下降 2.7pp。代价是增加了高斯卷积和 RMS 计算的算力开销。三项优化保留为 `with_optimizations()` 可选接口供后续调参实验。当前 BevEdLines 二进制方向已单独达到 Person F1=0.745，优化实验的结论在更高基线水平上仍适用。

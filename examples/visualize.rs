@@ -66,28 +66,13 @@ async fn write_frame(writer: &mut FrameWriter, frame: usize, total: usize) -> Re
 
     let swapl = global_swapl();
 
-    // ── 点云（暖白，语义层） ──
+    // ── 点云 ──
     let cloud_stream = swapl.clouds_out.lock().unwrap();
     if let Some(cloud) = cloud_stream.peek_latest() {
         println!("  帧 {}/{} | 点云: {} points", frame + 1, total, cloud.len());
         writer.write_cloud(&cloud, "point_cloud", 5000);
-    } else {
-        drop(cloud_in_world_stream);
-        None
-    };
-
-    // 准备3D框发送任务
-    let box_task = if let Some(bounds) = cld_objs_stream.get_at(0) {
-        println!("  3D检测结果对象数量: {}", bounds.len());
-        let bounds_data = bounds.clone();
-        drop(cld_objs_stream); // 释放锁
-        Some(tokio::spawn(async move {
-            send_boxes_async(bounds_data).await;
-        }))
-    } else {
-        println!("  帧 {}/{} | 目标: 无", frame + 1, total);
     }
-    drop(target_stream);
+    drop(cloud_stream);
 
     writer.end_frame();
     Ok(())
