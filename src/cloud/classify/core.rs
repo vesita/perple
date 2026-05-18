@@ -6,7 +6,7 @@ use crate::{
         classify::cluster::Cluster,
         classify::strategy::{LvdotClusterStrategy, PruneQt, XYGridDBSCAN},
         ground::{GroundPickStrategy, create_ground_strategy},
-        wall::{WallPickStrategy, XYGrid, BevLsd, BevEdLines, BevHough},
+        wall::{WallPickStrategy, XYGrid, BevLsd, BevEdLines, BevHough, EdLinesRef},
     },
     color::ClrBud,
     swapl::global_swapl,
@@ -24,6 +24,8 @@ fn create_wall_strategy_from_config() -> Box<dyn WallPickStrategy> {
             .with_angle_tolerance(cfg.wall_angle_tolerance)
             .with_min_extent(0.5)),
         "bev_edlines" => Box::new(BevEdLines::with_params(cfg.wall_distance, 20)
+            .with_min_extent(0.5)),
+        "edlines_ref" => Box::new(EdLinesRef::with_params(cfg.wall_distance, 20)
             .with_min_extent(0.5)),
         "bev_hough" => Box::new(BevHough::with_params(cfg.wall_distance, 20)),
         _ => {
@@ -126,8 +128,12 @@ impl Classify {
                 self.cluster.set_strategy(Box::new(pre_extracted));
             }
             "lvdot_grid" | "lvdot" => {
+                let min_pts = cfg.cluster.min_points_per_cluster.unwrap_or(5) as usize;
                 self.cluster.set_strategy(Box::new(
-                    LvdotClusterStrategy::new().with_pre_extracted_wall(),
+                    LvdotClusterStrategy::new()
+                        .with_pre_extracted_wall()
+                        .with_voxel(cfg.cluster.voxel_size, cfg.cluster.min_occ)
+                        .with_dbscan(cfg.cluster.merge_patience, min_pts),
                 ));
             }
             "prune_qt" | "lvdot_qt" => {

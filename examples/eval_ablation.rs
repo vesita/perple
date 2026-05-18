@@ -39,6 +39,8 @@ struct Args {
     bev_iou: bool,
     /// TOML 覆盖字符串（地面参数等顶层字段）
     ground_toml: Option<String>,
+    /// TOML 覆盖字符串（墙体参数 → 顶层字段）
+    wall_toml: Option<String>,
     /// TOML 覆盖字符串（聚类参数 → [cluster] 段）
     cluster_toml: Option<String>,
     /// TOML 覆盖字符串（降噪参数 → [cluster] 段）
@@ -74,6 +76,7 @@ fn parse_args() -> Args {
             .unwrap_or(0.5),
         bev_iou: args.iter().any(|a| a == "--bev-iou"),
         ground_toml: get(&args, "--ground-toml"),
+        wall_toml: get(&args, "--wall-toml"),
         cluster_toml: get(&args, "--cluster-toml"),
         denoise_toml: get(&args, "--denoise-toml"),
         tracker_toml: get(&args, "--tracker-toml"),
@@ -245,6 +248,16 @@ fn build_override_toml(args: &Args) -> String {
 
     // 地面参数 → 顶层字段
     if let Some(ref s) = args.ground_toml {
+        for pair in s.split(',') {
+            let pair = pair.trim();
+            if !pair.is_empty() {
+                parts.push(pair.to_string());
+            }
+        }
+    }
+
+    // 墙体参数 → 顶层字段
+    if let Some(ref s) = args.wall_toml {
         for pair in s.split(',') {
             let pair = pair.trim();
             if !pair.is_empty() {

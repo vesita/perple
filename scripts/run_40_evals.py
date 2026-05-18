@@ -159,8 +159,8 @@ def smart_fmt(v):
     """Auto-select decimal places based on magnitude."""
     if abs(v) >= 100: return f"{v:.0f}"
     if abs(v) >= 1: return f"{v:.1f}"
-    if abs(v) >= 0.01: return f"{v:.4f}"
-    return f"{v:.6f}"
+    if abs(v) >= 0.01: return f"{v:.2f}"
+    return f"{v:.4f}"
 
 
 def _setup_chinese_font():
@@ -196,9 +196,8 @@ def plot_single_metric(results, runs, values, ylabel, title, filename,
             verticalalignment='top', horizontalalignment='right',
             bbox=dict(boxstyle='round,pad=0.4', facecolor='wheat', alpha=0.6))
 
-    ax.set_xlabel('Run', fontsize=14)
+    ax.set_xlabel('运行次数', fontsize=14)
     ax.set_ylabel(ylabel, fontsize=14)
-    ax.set_title(title, fontsize=16, fontweight='bold')
     ax.tick_params(labelsize=12)
     ax.set_xlim(0.5, N_RUNS + 0.5)
     if ylim:
@@ -218,11 +217,11 @@ def plot_results(results: list[dict]):
 
     runs = [r['run_id'] for r in results]
 
-    # ── Person F1 ──
+    # ── Person F1（转百分比）──
     plot_single_metric(
-        results, runs, [r.get('person_f1', 0) for r in results],
-        'F1 值', '行人检测 F1 分数 (Person F1)',
-        'fig_person_f1.png', color='#d62728', ylim=(0, 1))
+        results, runs, [r.get('person_f1', 0) * 100 for r in results],
+        'F1 (%)', '行人检测 F1 分数 (Person F1)',
+        'fig_person_f1.png', color='#d62728', ylim=(50, 100), unit='%')
 
     # ── Person Precision ──
     plot_single_metric(
@@ -236,11 +235,11 @@ def plot_results(results: list[dict]):
         '召回率 (%)', '行人检测召回率 (Person Recall)',
         'fig_person_recall.png', color='#1f77b4', ylim=(0, 100), unit='%')
 
-    # ── Spatial F1 ──
+    # ── Spatial F1（转百分比）──
     plot_single_metric(
-        results, runs, [r.get('spatial_f1', 0) for r in results],
-        'F1 值', '空间匹配 F1 分数 (Spatial F1)',
-        'fig_spatial_f1.png', color='#9467bd', ylim=(0, 1))
+        results, runs, [r.get('spatial_f1', 0) * 100 for r in results],
+        'F1 (%)', '空间匹配 F1 分数 (Spatial F1)',
+        'fig_spatial_f1.png', color='#9467bd', ylim=(50, 100), unit='%')
 
     # ── TP / FP / FN (combined on one axis, separate lines) ──
     import matplotlib
@@ -266,7 +265,6 @@ def plot_results(results: list[dict]):
 
     ax.set_xlabel('运行次数', fontsize=14)
     ax.set_ylabel('计数', fontsize=14)
-    ax.set_title('行人检测 TP / FP / FN 分布', fontsize=16, fontweight='bold')
     ax.tick_params(labelsize=12)
     ax.set_xlim(0.5, N_RUNS + 0.5)
     ax.grid(True, alpha=0.25)
@@ -289,44 +287,37 @@ def plot_results(results: list[dict]):
         '检测数', 'YOLO 行人检测数量',
         'fig_detections.png', color='#ff7f0e')
 
-    # ── Summary table ──
-    fig, ax = plt.subplots(figsize=(12, 4))
-    ax.axis('off')
+    # ── Precision / Recall / F1 三者合图 ──
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    _setup_chinese_font()
 
-    keys = [
-        ('person_f1', 'Person F1'),
-        ('person_precision', 'Person Precision (%)'),
-        ('person_recall', 'Person Recall (%)'),
-        ('spatial_f1', 'Spatial F1'),
-        ('person_tp', 'TP'),
-        ('person_fp', 'FP'),
-        ('person_fn', 'FN'),
-        ('elapsed_s', '耗时 (s)'),
-        ('person_detections', '检测数'),
-    ]
-    cell_text = []
-    for key, label in keys:
-        vals = [r.get(key, 0) for r in results]
-        m, s = np.mean(vals), np.std(vals)
-        cell_text.append([label, smart_fmt(m), smart_fmt(s)])
+    fig, ax = plt.subplots(figsize=(10, 5))
+    prec = [r.get('person_precision', 0) for r in results]
+    rec  = [r.get('person_recall', 0) for r in results]
+    f1   = [r.get('person_f1', 0) * 100 for r in results]
 
-    table = ax.table(cellText=cell_text, colLabels=['指标', '均值', '标准差'],
-                     loc='center', cellLoc='center')
-    table.auto_set_font_size(False)
-    table.set_fontsize(13)
-    table.scale(1, 1.8)
-    for (row, col), cell in table.get_celld().items():
-        if row == 0:
-            cell.set_facecolor('#40466e')
-            cell.set_text_props(color='white', fontweight='bold')
-        elif row % 2 == 0:
-            cell.set_facecolor('#f0f0f0')
+    ax.plot(runs, prec, 'o-', color='#2ca02c', markersize=4, linewidth=1.0,
+            label=f'精确率 μ={smart_fmt(np.mean(prec))}% σ={smart_fmt(np.std(prec))}%')
+    ax.plot(runs, rec,  's-', color='#1f77b4', markersize=4, linewidth=1.0,
+            label=f'召回率 μ={smart_fmt(np.mean(rec))}% σ={smart_fmt(np.std(rec))}%')
+    ax.plot(runs, f1,   '^-', color='#d62728', markersize=4, linewidth=1.0,
+            label=f'F1 μ={smart_fmt(np.mean(f1))}% σ={smart_fmt(np.std(f1))}%')
 
-    ax.set_title('40 次运行评估汇总', fontsize=16, fontweight='bold', pad=20)
+    ax.set_xlabel('运行次数', fontsize=14)
+    ax.set_ylabel('指标 (%)', fontsize=14)
+    ax.tick_params(labelsize=12)
+    ax.set_xlim(0.5, N_RUNS + 0.5)
+    ax.set_ylim(50, 100)
+    ax.grid(True, alpha=0.25)
+    ax.legend(fontsize=11, loc='lower right')
+
     plt.tight_layout()
-    plt.savefig(OUTPUT_DIR / 'fig_summary_table.png', dpi=300, bbox_inches='tight')
+    plt.savefig(OUTPUT_DIR / 'fig_prf_combined.png', dpi=300, bbox_inches='tight')
     plt.close(fig)
-    print(f"  √ fig_summary_table.png")
+    print(f"  √ fig_prf_combined.png")
+
 
 
 def print_summary(results: list[dict]):

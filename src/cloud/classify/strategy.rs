@@ -56,8 +56,12 @@ pub fn create_strategy() -> Box<dyn ClusteringStrategy> {
             Box::new(XYGridDBSCAN::new())
         }
         "lvdot_grid" | "lvdot" => {
-            log::info!("聚类策略: lvdot_grid (体素{:.2}m 占用>={})", cfg.cluster.voxel_size, 3);
-            Box::new(LvdotClusterStrategy::new())
+            let min_pts = cfg.cluster.min_points_per_cluster.unwrap_or(5) as usize;
+            log::info!("聚类策略: lvdot_grid (体素{:.2}m 占用>={}, eps={}, min_pts={})",
+                cfg.cluster.voxel_size, cfg.cluster.min_occ, cfg.cluster.merge_patience, min_pts);
+            Box::new(LvdotClusterStrategy::new()
+                .with_voxel(cfg.cluster.voxel_size, cfg.cluster.min_occ)
+                .with_dbscan(cfg.cluster.merge_patience, min_pts))
         }
         "prune_qt" | "lvdot_qt" => {
             let min_pts = cfg.cluster.min_points_per_cluster.unwrap_or(5) as usize;
