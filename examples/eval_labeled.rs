@@ -341,15 +341,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         camera = c_res.unwrap();
 
         let swapl = global_swapl();
-        swapl.cld_buds_raw.swap();
-        swapl.clr_objs.swap();
+        swapl.swap_pipeline();
         // YOLO 标签平滑（在 Camera→Fuse 之间）
         if !disable_yolo_smooth {
             yolo_smoother.smooth(&mut *swapl.clr_objs.consumer().lock().unwrap());
         }
-        swapl.clouds_filtered.swap();
-        swapl.ground_buds.swap();
-        swapl.wall_buds.swap();
 
         if i + 1 < n_frames {
             l_handle = Some(tokio::spawn(async move { let _ = lidar.act().await; lidar }));

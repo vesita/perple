@@ -372,13 +372,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // ── DualBuf 交换：检测阶段 → 后融合阶段 ─────────────────────────
         let swapl = global_swapl();
-        swapl.cld_buds_raw.swap();
-        swapl.clr_objs.swap();
+        swapl.swap_pipeline();
         // YOLO 标签平滑（在 Camera→Fuse 之间）
         yolo_smoother.smooth(&mut *swapl.clr_objs.consumer().lock().unwrap());
-        swapl.clouds_filtered.swap();
-        swapl.ground_buds.swap();
-        swapl.wall_buds.swap();
 
         // ── 提前启动下一帧检测（与后融合并行） ───────────────────────────
         if i + 1 < n_frames {

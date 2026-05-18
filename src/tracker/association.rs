@@ -226,40 +226,7 @@ pub(crate) fn update_object_point_clouds(
             let pts = if candidates.is_empty() {
                 extract_points_in_box(filter_points, last_box, max_points_per_obj)
             } else {
-                let verts = last_box.vertices();
-                let (mut x_min, mut x_max) = (verts[0].x, verts[0].x);
-                let (mut y_min, mut y_max) = (verts[0].y, verts[0].y);
-                let (mut z_min, mut z_max) = (verts[0].z, verts[0].z);
-                for v in &verts {
-                    x_min = x_min.min(v.x); x_max = x_max.max(v.x);
-                    y_min = y_min.min(v.y); y_max = y_max.max(v.y);
-                    z_min = z_min.min(v.z); z_max = z_max.max(v.z);
-                }
-                // 预计算逆矩阵（避免每点重复求逆）
-                let inv_pose = last_box.pose.try_inverse().unwrap_or_else(|| panic!("矩阵不可求逆"));
-                let hl = last_box.length / 2.0;
-                let hw = last_box.width / 2.0;
-                let hh = last_box.height / 2.0;
-                let c: Vec<[f32; 3]> = candidates.iter()
-                    .filter(|p| {
-                        p[0] >= x_min && p[0] <= x_max
-                            && p[1] >= y_min && p[1] <= y_max
-                            && p[2] >= z_min && p[2] <= z_max
-                            && {
-                                let local = inv_pose.transform_point(&Point3::new(p[0], p[1], p[2]));
-                                local.x >= -hl && local.x <= hl
-                                    && local.y >= -hw && local.y <= hw
-                                    && local.z >= -hh && local.z <= hh
-                            }
-                    })
-                    .copied()
-                    .collect();
-                if c.len() <= max_points_per_obj {
-                    c
-                } else {
-                    let step = c.len() / max_points_per_obj;
-                    c.into_iter().step_by(step).take(max_points_per_obj).collect()
-                }
+                extract_points_in_box(&candidates, last_box, max_points_per_obj)
             };
             if pts.is_empty() {
                 continue;

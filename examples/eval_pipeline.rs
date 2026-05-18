@@ -73,9 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // DualBuf swap: 检测阶段 → 后融合阶段
         let swapl = global_swapl();
-        swapl.cld_buds_raw.swap();
-        swapl.clr_objs.swap();
-        swapl.clouds_filtered.swap();
+        swapl.swap_pipeline();
 
         // 提前启动下一帧检测（与后融合并行）
         if i + 1 < n_total {

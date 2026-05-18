@@ -32,7 +32,7 @@ pub trait ClusteringStrategy: Send {
 }
 
 /// 策略工厂 — 根据配置创建对应的策略实例
-pub fn create_strategy() -> Box<dyn ClusteringStrategy> {
+pub fn create_strategy(pre_extracted_wall: bool) -> Box<dyn ClusteringStrategy> {
     let cfg = fixif();
     match cfg.cluster.strategy.as_str() {
         "cc_grid" | "cc" => {
@@ -59,16 +59,18 @@ pub fn create_strategy() -> Box<dyn ClusteringStrategy> {
             let min_pts = cfg.cluster.min_points_per_cluster.unwrap_or(5) as usize;
             log::info!("聚类策略: lvdot_grid (体素{:.2}m 占用>={}, eps={}, min_pts={})",
                 cfg.cluster.voxel_size, cfg.cluster.min_occ, cfg.cluster.merge_patience, min_pts);
-            Box::new(LvdotClusterStrategy::new()
+            let s = LvdotClusterStrategy::new()
                 .with_voxel(cfg.cluster.voxel_size, cfg.cluster.min_occ)
-                .with_dbscan(cfg.cluster.merge_patience, min_pts))
+                .with_dbscan(cfg.cluster.merge_patience, min_pts);
+            Box::new(if pre_extracted_wall { s.with_pre_extracted_wall() } else { s })
         }
         "prune_qt" | "lvdot_qt" => {
             let min_pts = cfg.cluster.min_points_per_cluster.unwrap_or(5) as usize;
             log::info!("聚类策略: prune_qt (min_occ={}, eps={}, min_pts={})",
                 cfg.cluster.min_occ, cfg.cluster.merge_patience, min_pts);
-            Box::new(PruneQt::new()
-                .with_params(cfg.cluster.min_occ, cfg.cluster.merge_patience, min_pts))
+            let s = PruneQt::new()
+                .with_params(cfg.cluster.min_occ, cfg.cluster.merge_patience, min_pts);
+            Box::new(if pre_extracted_wall { s.with_pre_extracted_wall() } else { s })
         }
         "dbscan_light" => {
             log::info!("聚类策略: dbscan_light (无内部下采样)");

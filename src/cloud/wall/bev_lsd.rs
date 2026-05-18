@@ -26,6 +26,7 @@
 /// 聚类策略：lsd（LSD 线段检测）— 图像域区域生长
 /// 几何检测：l2（2D 线拟合）— 点到直线距离分类
 /// 空间索引：bev（鸟瞰图栅格）— XY 平面栅格化
+use super::common::{bev_encode, fit_rectangle, classify_wall_points};
 use super::WallPickStrategy;
 use std::collections::VecDeque;
 
@@ -107,31 +108,7 @@ impl WallPickStrategy for BevLsd {
         let size = (2.0 * self.max_range / self.resolution) as usize;
 
         // ── 1. BEV 密度编码 ──
-        let mut bev = vec![0u32; size * size];
-        for p in cloud.iter() {
-            if p[0].abs() >= self.max_range || p[1].abs() >= self.max_range { continue; }
-            let x = ((p[0] + self.max_range) / self.resolution) as isize;
-            let y = ((p[1] + self.max_range) / self.resolution) as isize;
-            if x >= 0 && (x as usize) < size && y >= 0 && (y as usize) < size {
-                bev[y as usize * size + x as usize] += 1;
-            }
-        }
-
-        // log1p 归一化到 [0, 255]
-        let mut img_f32 = vec![0.0f32; size * size];
-        let mut max_val = 0.0f32;
-        for i in 0..bev.len() {
-            let l = (bev[i] as f32 + 1.0).ln();
-            img_f32[i] = l;
-            if l > max_val { max_val = l; }
-        }
-        let mut img = vec![0u8; size * size];
-        if max_val > 1e-6 {
-            let scale = 255.0 / max_val;
-            for i in 0..img_f32.len() {
-                img[i] = (img_f32[i] * scale) as u8;
-            }
-        }
+        let img = bev_encode(cloud, size, self.max_range, self.resolution);
 
         // ── 2. Sobel 梯度 ──
         let grad_mag = sobel_magnitude(&img, size, size);
@@ -220,67 +197,17 @@ impl WallPickStrategy for BevLsd {
         // ── 6. 墙体点分类 ──
         let mut total_wall = 0usize;
         let mut planes = Vec::new();
-        let wall_end = n;
 
         for &(cxp, cyp, length, _width, angle) in line_segments.iter().take(self.max_walls * 2) {
-            if total_wall >= wall_end { break; }
-
-            let half = length / 2.0;
-            let cos_a = angle.cos();
-            let sin_a = angle.sin();
-            let px1 = cxp - half * cos_a;
-            let py1 = cyp - half * sin_a;
-            let px2 = cxp + half * cos_a;
-            let py2 = cyp + half * sin_a;
-
-            let x1 = px1 * self.resolution - self.max_range;
-            let y1 = py1 * self.resolution - self.max_range;
-            let x2 = px2 * self.resolution - self.max_range;
-            let y2 = py2 * self.resolution - self.max_range;
-
-            let dx = x2 - x1;
-            let dy = y2 - y1;
-            let len_m = (dx * dx + dy * dy).sqrt();
-            if len_m < 1e-6 { continue; }
-
-            let rnx = -dy / len_m;
-            let rny = dx / len_m;
-            let rd = -(rnx * x1 + rny * y1);
-
-            let remaining = &cloud[total_wall..wall_end];
-            let mut inlier_rel = Vec::new();
-            let mut z_min = f32::MAX;
-            let mut z_max = f32::MIN;
-
-            for (i, p) in remaining.iter().enumerate() {
-                let dist = (rnx * p[0] + rny * p[1] + rd).abs();
-                if dist < self.distance {
-                    inlier_rel.push(i);
-                    if p[2] < z_min { z_min = p[2]; }
-                    if p[2] > z_max { z_max = p[2]; }
-                }
+            if let Some(plane) = classify_wall_points(
+                cloud, &mut total_wall,
+                cxp, cyp, length, angle,
+                self.resolution, self.max_range,
+                self.distance, self.min_wall_pts,
+                self.min_z_span, self.min_extent,
+            ) {
+                planes.push(plane);
             }
-
-            if inlier_rel.len() < self.min_wall_pts { continue; }
-            if z_max - z_min < self.min_z_span { continue; }
-
-            let line_dir_x = -rny;
-            let line_dir_y = rnx;
-            let (mut t_min, mut t_max) = (f32::MAX, f32::MIN);
-            for &rel_idx in &inlier_rel {
-                let t = remaining[rel_idx][0] * line_dir_x + remaining[rel_idx][1] * line_dir_y;
-                if t < t_min { t_min = t; }
-                if t > t_max { t_max = t; }
-            }
-            if t_max - t_min < self.min_extent { continue; }
-
-            let mut write = total_wall;
-            for &rel_idx in &inlier_rel {
-                cloud.swap(total_wall + rel_idx, write);
-                write += 1;
-            }
-            total_wall = write;
-            planes.push([rnx, rny, 0.0, rd]);
         }
 
         (total_wall, planes)
@@ -320,56 +247,6 @@ fn sobel_angle(src: &[u8], w: usize, h: usize) -> Vec<f32> {
         }
     }
     angle
-}
-
-fn fit_rectangle(region: &[(usize, usize)]) -> (f32, f32, f32, f32, f32) {
-    let n = region.len() as f32;
-    let mut cx = 0.0f32;
-    let mut cy = 0.0f32;
-    for &(x, y) in region {
-        cx += x as f32;
-        cy += y as f32;
-    }
-    cx /= n;
-    cy /= n;
-
-    let mut xx = 0.0f32;
-    let mut xy = 0.0f32;
-    let mut yy = 0.0f32;
-    for &(x, y) in region {
-        let dx = x as f32 - cx;
-        let dy = y as f32 - cy;
-        xx += dx * dx;
-        xy += dx * dy;
-        yy += dy * dy;
-    }
-
-    let angle = if xy.abs() > 1e-6 {
-        let trace = xx + yy;
-        let det = xx * yy - xy * xy;
-        let sqrt_term = ((trace * trace / 4.0 - det).max(0.0)).sqrt();
-        let lambda1 = trace / 2.0 + sqrt_term;
-        (lambda1 - xx).atan2(xy)
-    } else {
-        0.0
-    };
-
-    let cos_a = angle.cos();
-    let sin_a = angle.sin();
-    let (mut min_proj, mut max_proj) = (f32::MAX, f32::MIN);
-    let (mut min_perp, mut max_perp) = (f32::MAX, f32::MIN);
-    for &(x, y) in region {
-        let dx = x as f32 - cx;
-        let dy = y as f32 - cy;
-        let proj = dx * cos_a + dy * sin_a;
-        let perp = -dx * sin_a + dy * cos_a;
-        min_proj = min_proj.min(proj);
-        max_proj = max_proj.max(proj);
-        min_perp = min_perp.min(perp);
-        max_perp = max_perp.max(perp);
-    }
-
-    (cx, cy, max_proj - min_proj, max_perp - min_perp, angle)
 }
 
 fn angle_dist(a: f32, b: f32) -> f32 {

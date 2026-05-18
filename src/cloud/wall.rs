@@ -1,5 +1,6 @@
 pub mod l2_util;
 
+mod common;
 mod bev_hough;
 mod bev_lsd;
 mod bev_edlines;

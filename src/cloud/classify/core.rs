@@ -4,7 +4,7 @@ use crate::{
     cloud::{
         CldBud,
         classify::cluster::Cluster,
-        classify::strategy::{LvdotClusterStrategy, PruneQt, XYGridDBSCAN},
+        classify::strategy::{create_strategy, XYGridDBSCAN},
         ground::{GroundPickStrategy, create_ground_strategy},
         wall::{WallPickStrategy, XYGrid, BevLsd, BevEdLines, BevHough, EdLinesRef},
     },
@@ -127,21 +127,9 @@ impl Classify {
                     .with_pre_extracted_wall();
                 self.cluster.set_strategy(Box::new(pre_extracted));
             }
-            "lvdot_grid" | "lvdot" => {
-                let min_pts = cfg.cluster.min_points_per_cluster.unwrap_or(5) as usize;
-                self.cluster.set_strategy(Box::new(
-                    LvdotClusterStrategy::new()
-                        .with_pre_extracted_wall()
-                        .with_voxel(cfg.cluster.voxel_size, cfg.cluster.min_occ)
-                        .with_dbscan(cfg.cluster.merge_patience, min_pts),
-                ));
+            _ => {
+                self.cluster.set_strategy(create_strategy(true));
             }
-            "prune_qt" | "lvdot_qt" => {
-                self.cluster.set_strategy(Box::new(
-                    PruneQt::new().with_pre_extracted_wall(),
-                ));
-            }
-            _ => {}
         }
         let _ = self.cluster.cluster(&target[remaining_start..]);
 

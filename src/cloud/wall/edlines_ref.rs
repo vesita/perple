@@ -11,23 +11,18 @@
 ///
 /// 算法步骤：BEV → 高斯模糊 → 4扇区梯度+NMS锚点 → 边缘绘制(二进制) →
 ///           曲率分裂 → NFA验证 → PCA拟合 → 墙壁验证
+use super::common::{
+    bev_encode, classify_wall_points, fit_rectangle, gaussian_blur,
+    split_chain_by_curvature, walk_edge_chain,
+    EDGE_HORIZONTAL, EDGE_VERTICAL, LEFT, RIGHT, UP, DOWN,
+};
 use super::WallPickStrategy;
 
 // 梯度方向扇区（atan2 量化到 4 个方向）
-const GRAD_S0: u8 = 0;   // [-22.5°, 22.5°) ∪ [157.5°, 202.5°) — 梯度近水平
-const GRAD_S45: u8 = 1;  // [22.5°, 67.5°) ∪ [202.5°, 247.5°) — 梯度 45°
-const GRAD_S90: u8 = 2;  // [67.5°, 112.5°) ∪ [247.5°, 292.5°) — 梯度近垂直
-const GRAD_S135: u8 = 3; // [112.5°, 157.5°) ∪ [292.5°, 337.5°) — 梯度 135°
-
-// 二进制梯度方向（与 BevEdLines 一致，用于边缘绘制）
-const EDGE_VERTICAL: u8 = 1;   // |gx| >= |gy|
-const EDGE_HORIZONTAL: u8 = 2; // |gy| > |gx|
-
-// 边缘绘制步进方向
-const LEFT: u8 = 3;
-const RIGHT: u8 = 4;
-const UP: u8 = 5;
-const DOWN: u8 = 6;
+const GRAD_S0: u8 = 0;
+const GRAD_S45: u8 = 1;
+const GRAD_S90: u8 = 2;
+const GRAD_S135: u8 = 3;
 
 pub struct EdLinesRef {
     resolution: f32,
@@ -115,31 +110,8 @@ impl WallPickStrategy for EdLinesRef {
 
         let size = (2.0 * self.max_range / self.resolution) as usize;
 
-        // ── 1. BEV 密度编码（同 BevEdLines）──
-        let mut bev = vec![0u32; size * size];
-        for p in cloud.iter() {
-            if p[0].abs() >= self.max_range || p[1].abs() >= self.max_range { continue; }
-            let x = ((p[0] + self.max_range) / self.resolution) as isize;
-            let y = ((p[1] + self.max_range) / self.resolution) as isize;
-            if x >= 0 && (x as usize) < size && y >= 0 && (y as usize) < size {
-                bev[y as usize * size + x as usize] += 1;
-            }
-        }
-
-        let mut img_f32 = vec![0.0f32; size * size];
-        let mut max_val = 0.0f32;
-        for i in 0..bev.len() {
-            let l = (bev[i] as f32 + 1.0).ln();
-            img_f32[i] = l;
-            if l > max_val { max_val = l; }
-        }
-        let mut img = vec![0u8; size * size];
-        if max_val > 1e-6 {
-            let scale = 255.0 / max_val;
-            for i in 0..img_f32.len() {
-                img[i] = (img_f32[i] * scale) as u8;
-            }
-        }
+        // ── 1. BEV 密度编码 ──
+        let img = bev_encode(cloud, size, self.max_range, self.resolution);
 
         let img = if self.gaussian_sigma > 0.0 {
             gaussian_blur(&img, size, size, self.gaussian_sigma)
@@ -252,70 +224,20 @@ impl WallPickStrategy for EdLinesRef {
         log::debug!("edlines_ref: size={} anchors={} chains={} segments={}",
             size, anchor_list.len(), chains.len(), line_segments.len());
 
-        // ── 6. 墙壁点分类（同 BevEdLines）──
+        // ── 6. 墙体点分类 ──
         let mut total_wall = 0usize;
         let mut planes = Vec::new();
-        let wall_end = n;
 
         for &(cxp, cyp, length, _width, angle, _) in line_segments.iter().take(self.max_walls * 2) {
-            if total_wall >= wall_end { break; }
-
-            let half = length / 2.0;
-            let cos_a = angle.cos();
-            let sin_a = angle.sin();
-            let px1 = cxp - half * cos_a;
-            let py1 = cyp - half * sin_a;
-            let px2 = cxp + half * cos_a;
-            let py2 = cyp + half * sin_a;
-
-            let x1 = px1 * self.resolution - self.max_range;
-            let y1 = py1 * self.resolution - self.max_range;
-            let x2 = px2 * self.resolution - self.max_range;
-            let y2 = py2 * self.resolution - self.max_range;
-
-            let dx = x2 - x1;
-            let dy = y2 - y1;
-            let len_m = (dx * dx + dy * dy).sqrt();
-            if len_m < 1e-6 { continue; }
-
-            let rnx = -dy / len_m;
-            let rny = dx / len_m;
-            let rd = -(rnx * x1 + rny * y1);
-
-            let remaining = &cloud[total_wall..wall_end];
-            let mut inlier_rel = Vec::new();
-            let mut z_min = f32::MAX;
-            let mut z_max = f32::MIN;
-
-            for (i, p) in remaining.iter().enumerate() {
-                let dist = (rnx * p[0] + rny * p[1] + rd).abs();
-                if dist < self.distance {
-                    inlier_rel.push(i);
-                    if p[2] < z_min { z_min = p[2]; }
-                    if p[2] > z_max { z_max = p[2]; }
-                }
+            if let Some(plane) = classify_wall_points(
+                cloud, &mut total_wall,
+                cxp, cyp, length, angle,
+                self.resolution, self.max_range,
+                self.distance, self.min_wall_pts,
+                self.min_z_span, self.min_extent,
+            ) {
+                planes.push(plane);
             }
-
-            if inlier_rel.len() < self.min_wall_pts { continue; }
-            if z_max - z_min < self.min_z_span { continue; }
-
-            let line_dir_x = -rny;
-            let line_dir_y = rnx;
-            let (mut t_min, mut t_max) = (f32::MAX, f32::MIN);
-            for &rel_idx in &inlier_rel {
-                let t = remaining[rel_idx][0] * line_dir_x + remaining[rel_idx][1] * line_dir_y;
-                if t < t_min { t_min = t; }
-                if t > t_max { t_max = t; }
-            }
-            if t_max - t_min < self.min_extent { continue; }
-
-            let mut write = total_wall;
-            for &rel_idx in &inlier_rel {
-                cloud.swap(total_wall + rel_idx, write);
-                write += 1;
-            }
-            total_wall = write;
-            planes.push([rnx, rny, 0.0, rd]);
         }
 
         (total_wall, planes)
@@ -477,186 +399,3 @@ fn log_gamma(x: f64) -> f64 {
     }
 }
 
-// ─── 边缘绘制（同 BevEdLines） ──────────────────────────
-
-fn walk_edge_chain(
-    grad_mag: &[f32],
-    grad_bin: &[u8],
-    w: usize,
-    h: usize,
-    mag_threshold: f32,
-    sx: usize,
-    sy: usize,
-    dir: u8,
-    edges: &mut [f32],
-    chain: &mut Vec<(usize, usize)>,
-) {
-    if chain.is_empty() {
-        chain.push((sx, sy));
-        edges[sy * w + sx] = -1.0;
-    }
-
-    let (mut x, mut y) = (sx as i32, sy as i32);
-    let (step_x, step_y) = match dir {
-        LEFT => (-1, 0),
-        RIGHT => (1, 0),
-        UP => (0, -1),
-        DOWN => (0, 1),
-        _ => return,
-    };
-
-    loop {
-        let mut best_i = None;
-        let mut best_mag = mag_threshold;
-
-        let cands = [
-            (x + step_x, y + step_y),
-            (x + step_x + step_y, y + step_y - step_x),
-            (x + step_x - step_y, y + step_y + step_x),
-        ];
-        for &(cx, cy) in &cands {
-            if cx >= 1 && cx < w as i32 - 1 && cy >= 1 && cy < h as i32 - 1 {
-                let ci = cy as usize * w + cx as usize;
-                if !edges[ci].is_finite() {
-                    let mag = grad_mag[ci];
-                    if mag > best_mag { best_mag = mag; best_i = Some((cx, cy)); }
-                }
-            }
-        }
-
-        match best_i {
-            Some((nx, ny)) => {
-                let ni = ny as usize * w + nx as usize;
-                // 二进制方向一致性检查（同 BevEdLines）
-                match dir {
-                    LEFT | RIGHT => if grad_bin[ni] != EDGE_HORIZONTAL { break; },
-                    UP | DOWN => if grad_bin[ni] != EDGE_VERTICAL { break; },
-                    _ => {}
-                }
-                chain.push((nx as usize, ny as usize));
-                edges[ni] = -1.0;
-                x = nx;
-                y = ny;
-            }
-            None => break,
-        }
-    }
-}
-
-// ─── 曲率分裂（同 BevEdLines） ──────────────────────────
-
-fn split_chain_by_curvature(chain: &[(usize, usize)], max_error: f32) -> Vec<Vec<(usize, usize)>> {
-    if chain.len() < 4 { return vec![chain.to_vec()]; }
-    let mut segments = Vec::new();
-    split_recursive(chain, 0, chain.len() - 1, max_error, &mut segments);
-    segments
-}
-
-fn split_recursive(
-    chain: &[(usize, usize)], start: usize, end: usize,
-    max_error: f32, segments: &mut Vec<Vec<(usize, usize)>>,
-) {
-    if end - start < 3 {
-        segments.push(chain[start..=end].to_vec());
-        return;
-    }
-
-    let (x1, y1) = (chain[start].0 as f32, chain[start].1 as f32);
-    let (x2, y2) = (chain[end].0 as f32, chain[end].1 as f32);
-    let dx = x2 - x1;
-    let dy = y2 - y1;
-    let len2 = dx * dx + dy * dy;
-    if len2 < 1e-6 {
-        segments.push(chain[start..=end].to_vec());
-        return;
-    }
-
-    let (mut max_dist, mut split_idx) = (0.0f32, start);
-    for i in (start + 1)..end {
-        let (px, py) = (chain[i].0 as f32, chain[i].1 as f32);
-        let dist = ((py - y1) * dx - (px - x1) * dy).abs() / len2.sqrt();
-        if dist > max_dist { max_dist = dist; split_idx = i; }
-    }
-
-    if max_dist > max_error && split_idx > start && split_idx < end {
-        split_recursive(chain, start, split_idx, max_error, segments);
-        split_recursive(chain, split_idx, end, max_error, segments);
-    } else {
-        segments.push(chain[start..=end].to_vec());
-    }
-}
-
-// ─── 辅助 ────────────────────────────────────────────────
-
-fn gaussian_blur(src: &[u8], w: usize, h: usize, sigma: f32) -> Vec<u8> {
-    let radius = (sigma * 2.5).ceil() as i32;
-    let size = (2 * radius + 1) as usize;
-    let mut kernel = vec![0.0f32; size];
-    let mut sum = 0.0f32;
-    for i in 0..size {
-        let x = (i as i32 - radius) as f32;
-        let g = (-0.5 * x * x / (sigma * sigma)).exp();
-        kernel[i] = g;
-        sum += g;
-    }
-    for k in &mut kernel { *k /= sum; }
-
-    let mut tmp = vec![0.0f32; w * h];
-    for y in 0..h {
-        for x in 0..w {
-            let mut val = 0.0f32;
-            for ki in 0..size {
-                let sx = (x as i32 + ki as i32 - radius).clamp(0, w as i32 - 1) as usize;
-                val += src[y * w + sx] as f32 * kernel[ki];
-            }
-            tmp[y * w + x] = val;
-        }
-    }
-
-    let mut out = vec![0u8; w * h];
-    for y in 0..h {
-        for x in 0..w {
-            let mut val = 0.0f32;
-            for ki in 0..size {
-                let sy = (y as i32 + ki as i32 - radius).clamp(0, h as i32 - 1) as usize;
-                val += tmp[sy * w + x] * kernel[ki];
-            }
-            out[y * w + x] = val.round().clamp(0.0, 255.0) as u8;
-        }
-    }
-    out
-}
-
-fn fit_rectangle(region: &[(usize, usize)]) -> (f32, f32, f32, f32, f32) {
-    let n = region.len() as f32;
-    let (mut cx, mut cy) = (0.0, 0.0);
-    for &(x, y) in region { cx += x as f32; cy += y as f32; }
-    cx /= n; cy /= n;
-
-    let (mut xx, mut xy, mut yy) = (0.0, 0.0, 0.0);
-    for &(x, y) in region {
-        let dx = x as f32 - cx;
-        let dy = y as f32 - cy;
-        xx += dx * dx; xy += dx * dy; yy += dy * dy;
-    }
-
-    let angle = if xy.abs() > 1e-6 {
-        let trace = xx + yy;
-        let det = xx * yy - xy * xy;
-        let sqrt_term = ((trace * trace / 4.0 - det).max(0.0)).sqrt();
-        (trace / 2.0 + sqrt_term - xx).atan2(xy)
-    } else { 0.0 };
-
-    let (cos_a, sin_a) = (angle.cos(), angle.sin());
-    let (mut min_p, mut max_p, mut min_q, mut max_q) = (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
-    for &(x, y) in region {
-        let dx = x as f32 - cx;
-        let dy = y as f32 - cy;
-        let p = dx * cos_a + dy * sin_a;
-        let q = -dx * sin_a + dy * cos_a;
-        min_p = min_p.min(p); max_p = max_p.max(p);
-        min_q = min_q.min(q); max_q = max_q.max(q);
-    }
-
-    (cx, cy, max_p - min_p, max_q - min_q, angle)
-}

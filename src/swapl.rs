@@ -54,6 +54,19 @@ pub struct Swapl {
 }
 
 impl Swapl {
+    /// 执行检测阶段→后融合阶段的 DualBuf 交换
+    ///
+    /// 在 tokio::join 之后、后融合之前调用，确保后融合读到最新的检测结果。
+    pub fn swap_pipeline(&self) {
+        self.cld_buds_raw.swap();
+        self.clr_objs.swap();
+        self.clouds_filtered.swap();
+        self.ground_buds.swap();
+        self.wall_buds.swap();
+    }
+}
+
+impl Swapl {
     /// 创建一个新的数据交换中枢
     pub fn new() -> Self {
         Swapl {

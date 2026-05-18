@@ -112,11 +112,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // ── 阶段 2: Swap 后处理 ────────────────────────────────────
             let t1 = Instant::now();
             let swapl = global_swapl();
-            swapl.cld_buds_raw.swap();
-            swapl.clr_objs.swap();
-            swapl.clouds_filtered.swap();
-            swapl.ground_buds.swap();
-            swapl.wall_buds.swap();
+            swapl.swap_pipeline();
             let swap_us = t1.elapsed().as_secs_f64() * 1000.0;
 
             // ── 阶段 3: 融合 ───────────────────────────────────────────
@@ -163,11 +159,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // ── 阶段 2: Swap 后处理 ────────────────────────────────────
             let t1 = Instant::now();
             let swapl = global_swapl();
-            swapl.cld_buds_raw.swap();
-            swapl.clr_objs.swap();
-            swapl.clouds_filtered.swap();
-            swapl.ground_buds.swap();
-            swapl.wall_buds.swap();
+            swapl.swap_pipeline();
 
             if i + 1 < n_total {
                 l_handle = Some(tokio::spawn(async move { let _ = lidar.act().await; lidar }));

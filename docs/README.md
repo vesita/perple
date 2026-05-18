@@ -17,6 +17,7 @@
 | [baseline_accuracy.md](baseline_accuracy.md) | 基线精度评估（408 帧，3 轮平均 F1=0.745） |
 | [evaluation_workflow.md](evaluation_workflow.md) | 验证流程文档（管线运行→精度评估→可视化） |
 | [pipeline_evolution.md](pipeline_evolution.md) | 点云处理管线演化记录（从 DBSCAN 到三级级联） |
+| [run_commands.md](run_commands.md) | 常用运行命令速查（构建/管线/eval/bench/Python） |
 
 ## 流程图
 

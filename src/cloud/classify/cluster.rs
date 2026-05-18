@@ -18,7 +18,7 @@ impl Cluster {
         Cluster {
             objects: Vec::new(),
             all_points: Vec::new(),
-            strategy: create_strategy(),
+            strategy: create_strategy(false),
         }
     }
 
