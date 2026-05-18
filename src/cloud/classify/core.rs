@@ -4,7 +4,7 @@ use crate::{
     cloud::{
         CldBud,
         classify::cluster::Cluster,
-        classify::strategy::{create_strategy, XYGridDBSCAN},
+        classify::strategy::create_strategy,
         ground::{GroundPickStrategy, create_ground_strategy},
         wall::{WallPickStrategy, XYGrid, BevLsd, BevEdLines, BevHough, EdLinesRef},
     },
@@ -78,7 +78,7 @@ impl Classify {
         }
     }
 
-    /// 替换墙体提取策略（测试用）
+    /// 替换墙体检测策略（测试用）
     pub fn with_wall_strategy(mut self, strategy: Box<dyn WallPickStrategy>) -> Self {
         self.wall_strategy = strategy;
         self
@@ -93,13 +93,13 @@ impl Classify {
             }
         };
 
-        // ─── 1. 地面提取 ──────────────────────────────────────────────────
+        // ─── 1. 地面检测 ──────────────────────────────────────────────────
         let (slice_index, grounds, _ground_plane) = self.ground_strategy.pick(&mut target);
-        println!("完成地面提取，已过滤 {} 个点", slice_index);
+        println!("完成地面检测，已过滤 {} 个点", slice_index);
 
-        // ─── 2. 墙体提取 ──────────────────────────────────────────────────
+        // ─── 2. 墙体检测 ──────────────────────────────────────────────────
         let (n_wall, _walls) = self.wall_strategy.pick(&mut target[slice_index..]);
-        println!("完成墙壁提取，已过滤 {} 个点", n_wall);
+        println!("完成墙体检测，已过滤 {} 个点", n_wall);
 
         let remaining_start = slice_index + n_wall;
 
@@ -115,22 +115,8 @@ impl Classify {
             t4.elapsed().as_secs_f64() * 1000.0);
         *self.clouds_filtered.producer().lock().unwrap() = filtered_pts;
 
-        // ─── 3b. 后聚类（从配置读取参数） ──────────────────────────────────
-        let cfg = crate::config::fixif();
-        match cfg.cluster.strategy.as_str() {
-            "xy_grid_dbscan" => {
-                let cell = cfg.cluster.voxel_size.max(0.05);
-                let eps = cfg.cluster.merge_patience;
-                let min_pts = cfg.cluster.min_points_per_cluster.unwrap_or(3) as usize;
-                let dummy_wall = Box::new(BevLsd::with_params(cfg.wall_distance, 20));
-                let pre_extracted = XYGridDBSCAN::with_params(dummy_wall, cell, min_pts, cfg.max_range, eps, min_pts)
-                    .with_pre_extracted_wall();
-                self.cluster.set_strategy(Box::new(pre_extracted));
-            }
-            _ => {
-                self.cluster.set_strategy(create_strategy(true));
-            }
-        }
+        // ─── 3b. 后聚类 ──────────────────────────────────────────────────────
+        self.cluster.set_strategy(create_strategy(true));
         let _ = self.cluster.cluster(&target[remaining_start..]);
 
         // ─── 4. YOLO 辅助簇分裂 ────────────────────────────────────────────

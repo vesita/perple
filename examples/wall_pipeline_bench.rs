@@ -1,11 +1,11 @@
 //! 墙体管线对比测试
 //!
-//! 比较不同墙体提取策略对聚类结果的影响。
+//! 比较不同墙体检测策略对聚类结果的影响。
 //!
-//! 管线：地面 → 墙体提取 → 后聚类
+//! 管线：地面 → 墙体检测 → 后聚类
 //!
 //! 固定参数：
-//! - 地面提取: PeakScan（默认）
+//! - 地面检测: PeakScan（默认）
 //! - 后聚类: XYGridDBSCAN eps=0.15, min_pts=3, cell=0.30 (with_pre_extracted_wall)
 //!
 //! 墙体策略从 config/bench/wall/*.toml 读取。
@@ -280,7 +280,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!("{:-<105}", "");
     let active_count = strategies.iter().filter(|s| !s.skipped).count();
-    println!("  地面提取: PeakScan (默认, 共享)");
+    println!("  地面检测: PeakScan (默认, 共享)");
     println!("  后聚类: XYGridDBSCAN cell=0.30 eps=0.15 min_pts=3 max_range=12.0");
     println!("  活跃策略: {}/{} (第一帧 >{}ms 的被跳过)", active_count, strategies.len(), WARN_THRESHOLD_MS);
 

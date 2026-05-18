@@ -1,3 +1,4 @@
+pub mod error;
 pub mod core;
 pub mod trick;
 pub mod output;

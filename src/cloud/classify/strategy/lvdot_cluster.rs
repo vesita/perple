@@ -1,10 +1,10 @@
 use super::ClusteringStrategy;
 use crate::cloud::wall::{WallPickStrategy, BevLsd, XYGrid, cluster_obstacles_with_indices, xy_dbscan};
 
-/// LV-DOT 风格聚类策略（lvdot_grid）：墙体提取 → 体素占用下采样 → DBSCAN。
+/// LV-DOT 风格聚类策略（lvdot_grid）：墙体检测 → 体素占用下采样 → DBSCAN。
 ///
 /// 对应 LV-DOT 原版的视觉深度管线：
-/// 1. 墙面提取（XYRansacWall）分离墙面/非墙面点
+/// 1. 墙面检测（XYRansacWall）分离墙面/非墙面点
 /// 2. [可选] 网格连通域粗聚类生成 AABB，过滤远距/小 box
 /// 3. LV-DOT 体素占用下采样（≥min_occ 点 → 输出质心，否则丢弃）
 /// 4. XY 平面 DBSCAN 精化聚类
@@ -14,7 +14,7 @@ use crate::cloud::wall::{WallPickStrategy, BevLsd, XYGrid, cluster_obstacles_wit
 /// - LV-DOT 原版的 voxelFilter 即此思路：够密的格子输出一个代表点
 pub struct LvdotClusterStrategy {
     wall: Box<dyn WallPickStrategy>,
-    // 上游已提取墙体时跳过内部墙提
+    // 上游已检测墙体时跳过内部墙提
     skip_wall: bool,
     // LV-DOT voxel filter
     voxel_size: f32,
@@ -45,13 +45,13 @@ impl LvdotClusterStrategy {
         }
     }
 
-    /// 上游已提取墙体，跳过内部墙提直接做体素过滤+DBSCAN。
+    /// 上游已检测墙体，跳过内部墙提直接做体素过滤+DBSCAN。
     pub fn with_pre_extracted_wall(mut self) -> Self {
         self.skip_wall = true;
         self
     }
 
-    /// LV-DOT 直连模式：墙体提取 → 体素下采样 → DBSCAN（无 box 预聚类）
+    /// LV-DOT 直连模式：墙体检测 → 体素下采样 → DBSCAN（无 box 预聚类）
     pub fn direct(voxel_size: f32, min_occ: usize, dbscan_eps: f32, dbscan_min_pts: usize) -> Self {
         Self {
             voxel_size,
@@ -63,7 +63,7 @@ impl LvdotClusterStrategy {
         }
     }
 
-    /// LV-DOT box 模式：墙体提取 → box 预聚类过滤 → 体素下采样 → DBSCAN
+    /// LV-DOT box 模式：墙体检测 → box 预聚类过滤 → 体素下采样 → DBSCAN
     pub fn with_box_filter(
         mut self,
         box_cell_size: f32,
@@ -95,7 +95,7 @@ impl ClusteringStrategy for LvdotClusterStrategy {
         let n = points.len();
         if n == 0 { return (Vec::new(), Vec::new()); }
 
-        // 1. 墙面提取（上游已提取时可跳过）
+        // 1. 墙面检测（上游已提取时可跳过）
         let non_wall: Vec<[f32; 3]> = if self.skip_wall {
             points.to_vec()
         } else {

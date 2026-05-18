@@ -1,4 +1,4 @@
-/// BEV 鸟瞰图 + Hough 直线检测墙体提取（bev_hough）。
+/// BEV 鸟瞰图 + Hough 直线检测墙体检测（bev_hough）。
 ///
 /// # 设计思路
 ///

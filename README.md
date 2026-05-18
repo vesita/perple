@@ -15,12 +15,12 @@
 
 ### 致谢
 
-墙体提取模块的 EDLines 算法参考了 [opencv_idz](https://github.com/DemonFromRussia/opencv_idz) 项目中的 C++ 参考实现（Akinlar & Topal, 2011），在此表示感谢。
+墙体检测模块的 EDLines 算法参考了 [opencv_idz](https://github.com/DemonFromRussia/opencv_idz) 项目中的 C++ 参考实现（Akinlar & Topal, 2011），在此表示感谢。
 
 ### 关键特性
 
-- **三级点云处理**: 地面提取（PeakScan）→ 墙体提取（BevEdLines）→ 聚类（PruneQt）
-- **墙体提取**: EDLines 锚点检测 + 链式追踪，二进制方向（无三角函数），~14ms/帧
+- **三级点云处理**: 地面检测（PeakScan）→ 墙体检测（BevEdLines）→ 聚类（PruneQt）
+- **墙体检测**: EDLines 锚点检测 + 链式追踪，二进制方向（无三角函数），~14ms/帧
 - **跟踪**: 匈牙利关联 + 9D CA 卡尔曼 + 点云投票 + 航迹评分 + 几何 fallback
 - **融合**: 2D YOLO 检测通过标定矩阵映射到 3D 点云，YOLO 帧间标签平滑
 
@@ -40,8 +40,8 @@
 │   │   │   ├── cluster.rs          #     聚类器 + YOLO 辅助分裂
 │   │   │   ├── core.rs             #     三级管线（地面→墙体→聚类）
 │   │   │   └── strategy/           #     9 种聚类策略
-│   │   ├── ground/                 #   5 种地面提取策略
-│   │   ├── wall/                   #   3 种墙体提取策略
+│   │   ├── ground/                 #   5 种地面检测策略
+│   │   ├── wall/                   #   3 种墙体检测策略
 │   │   ├── core.rs                 #   LiDAR 主处理
 │   │   ├── output.rs               #   CldBud 输出类型
 │   │   └── ego_motion.rs           #   自车速度估计
@@ -52,8 +52,18 @@
 │   │   └── look.rs                 #   2D→3D 视线投影
 │   ├── tracker/                    # 多目标跟踪
 │   │   ├── core.rs                 #   匈牙利关联 + 航迹管理
-│   │   ├── kalman.rs               #   9D CA 卡尔曼
-│   │   └── output.rs               #   Target 输出
+│   │   ├── kalman.rs               #   模块根（9D CA + 6D CV 卡尔曼）
+│   │   ├── kalman/                 #   子模块
+│   │   │   ├── ca.rs               #     9D 恒加速度模型（主推）
+│   │   │   └── cv.rs               #     6D 常速度模型（备选）
+│   │   ├── association.rs          #   数据关联
+│   │   ├── object.rs               #   跟踪目标（状态机）
+│   │   ├── lifecycle.rs            #   航迹分级管理
+│   │   ├── trick.rs                #   几何 fallback
+│   │   ├── output.rs               #   Target 输出
+│   │   ├── features.rs             #   特征提取
+│   │   ├── hungarian.rs            #   匈牙利算法
+│   │   └── analysis.rs             #   跟踪分析
 │   ├── fuse.rs                     # 2D-3D 融合
 │   ├── config.rs                   # TOML 配置加载
 │   ├── swapl.rs                    # 全局数据总线
@@ -98,8 +108,8 @@ LiDAR 点云处理模块，核心为三级管线（地面 → 墙体 → 聚类�
 - **classify/core.rs**: 管线编排 — `GroundPickStrategy::pick()` → `WallPickStrategy::pick()` → `ClusteringStrategy::run()` + YOLO refine
 - **classify/cluster.rs**: 聚类器 `Cluster`，策略 trait + 工厂模式，支持 `prune_qt` / `dbscan_qt` / `cc` / `lvdot` / `ransac` / `seq` / `xy_dbscan` 等 9 种策略
 - **classify/strategy/**: 各聚类策略实现（`prune_qt.rs`, `dbscan.rs`, `cc_cluster.rs`, `lvdot_cluster.rs`, `range_image.rs`, `ransac_cluster.rs`, `seq_cluster.rs`, `xy_grid_dbscan.rs`）
-- **ground/**: 地面提取策略族 — `PeakScan`（默认）、`HistogramExpand`、`RansacGround`、`HistoseedPlane`、`GpfGround`
-- **wall/**: 墙体提取策略族 — `BevEdLines`（默认，~14ms）、`BevLsd`（~17ms）、`BevHough`（备选）
+- **ground/**: 地面检测策略族 — `PeakScan`（默认）、`HistogramExpand`、`RansacGround`、`HistoseedPlane`、`GpfGround`
+- **wall/**: 墙体检测策略族 — `BevEdLines`（默认，~14ms）、`BevLsd`（~17ms）、`BevHough`（备选）
 - **core.rs**: LiDAR 主处理（读取 Stream 输入，调用 Classify）
 - **output.rs**: `CldBud` 输出类型（3D 边界框 + 质心）
 - **ego_motion.rs**: 基于地面平面方程帧间变化的自车速度估计
@@ -113,7 +123,7 @@ LiDAR 点云处理模块，核心为三级管线（地面 → 墙体 → 聚类�
   - 轨迹管理（创建、更新、删除、航迹评分 N≥3）
   - 点云投票（voxel occupancy → KDE 投票 → 置信度提升/衰减）
   - 几何 fallback：盲区行人补充检测（recall 26.3% → 61.4%）
-- **kalman.rs**: 9D CA 卡尔曼滤波器 + 6D CV 备选
+- **kalman**: 9D CA 卡尔曼 + 6D CV 备选（`kalman.rs` 模块根 + `kalman/` 子模块）
   - 恒加速度模型 `[x,y,z,vx,vy,vz,ax,ay,az,l,w,h]`
   - 距离自适应 / 置信度自适应测量噪声
   - Z 轴独立 EMA 跟踪（不纳入卡尔曼状态）
@@ -124,7 +134,7 @@ LiDAR 点云处理模块，核心为三级管线（地面 → 墙体 → 聚类�
 
 通用工具函数和数据结构：
 
-- **boxes.rs**: `Box2D` / `Box3D` 包围盒定义
+- **boxes**: `Box2D` / `Box3D` 包围盒定义（`boxes.rs` 模块根，子模块 `boxes/`）
   - `bev_iou()` — BEV 2D 多边形交并比（行人检测推荐）
   - `obb_iou()` — 真 3D OBB 交并比（三角形网格裁剪算法）
   - `cloud2box()` — 从点云计算 AABB

@@ -14,7 +14,7 @@ pub use gpf::GpfGround;
 use super::CldBud;
 use crate::config::fixif;
 
-/// 地面提取策略 trait
+/// 地面检测策略 trait
 ///
 /// 所有策略统一接收 `&mut [[f32; 3]]` 点云，返回 `(地面点数, 地面 CldBud, 平面方程)`。
 /// 调用后 `cloud[..n_ground]` 为地面点，`cloud[n_ground..]` 为非地面点。
@@ -23,7 +23,7 @@ pub trait GroundPickStrategy: Send {
     fn strategy_name(&self) -> &'static str { "unknown" }
 }
 
-/// 创建地面提取策略（从配置读取 ground_strategy 分发）
+/// 创建地面检测策略（从配置读取 ground_strategy 分发）
 pub fn create_ground_strategy() -> Box<dyn GroundPickStrategy> {
     let cfg = fixif();
     match cfg.ground_strategy.as_str() {

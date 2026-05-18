@@ -5,7 +5,7 @@ use crate::cloud::wall::XYGrid;
 /// 连通域聚类策略（cc_grid）。
 ///
 /// XY 哈希网格 + BFS 连通域合并，每个连通域为一个簇。
-/// 从墙体提取 `cc_pca_grid` 改编，去掉了墙体专用过滤（Z 跨度、PCA 细长比）。
+/// 从墙体检测 `cc_pca_grid` 改编，去掉了墙体专用过滤（Z 跨度、PCA 细长比）。
 ///
 /// 可选预降噪：若 `denoise_radius > 0`，先执行半径离群点剔除。
 pub struct CcCluster {

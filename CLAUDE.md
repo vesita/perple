@@ -31,8 +31,8 @@ cargo run --example redra_test --package redra_client
 cargo run --example label_test --package redra_client
 
 # Bench examples
-cargo run --example ground_bench -- --mode=quick    # 地面提取快速测试
-cargo run --example wall_bench -- --mode=quick       # 墙体提取快速测试
+cargo run --example ground_bench -- --mode=quick    # 地面检测快速测试
+cargo run --example wall_bench -- --mode=quick       # 墙体检测快速测试
 cargo run --example cluster_bench -- --mode=quick    # 后聚类快速测试
 cargo run --example cluster_bench -- --strategy=prune_qt --denoise-radius=0.20 --denoise-min-pts=3  # 聚类（降噪默认开启）
 cargo run --example denoise_bench -- --mode=quick    # 降噪快速测试
@@ -106,12 +106,12 @@ ui/         — egui UI: VS Code-style sidebar, playback controls, file manager,
 
 ### Three-Stage Processing Pipeline (Ground → Wall → Cluster)
 
-The point cloud processing pipeline: ground extraction → wall extraction → clustering (with internal denoise).
+The point cloud processing pipeline: ground detection → wall detection → clustering (with internal denoise).
 
 ```
 Raw Cloud (~20k pts)
-  → Ground Extraction (GroundPickStrategy: peak_scan/histogram/ransac)
-    → Wall Extraction (WallPickStrategy: bev_lsd / bev_edlines, image-based edge detection)
+  → Ground Detection (GroundPickStrategy: peak_scan/histogram/ransac)
+    → Wall Detection (WallPickStrategy: bev_lsd / bev_edlines, image-based edge detection)
       → Post-Clustering (ClusteringStrategy: prune_qt/dbscan_qt/lvdot/xy_dbscan/cc/ransac/seq, denoise internalized)
         → YOLO fusion + Tracking → Detection Results
 ```

@@ -15,15 +15,15 @@ default_nms_threshold = 0.7
 model_path = "model/quantized/yolo11n.onnx"
 
 # 地面检测参数（直方图种子 + RANSAC 平面拟合生长）
-ground_strategy = "peak_scan"  # 地面提取策略: "histogram", "histoseed", "ransac", "peak_scan", "gpf"
+ground_strategy = "peak_scan"  # 地面检测策略: "histogram", "histoseed", "ransac", "peak_scan", "gpf"
 ground_expand = 0.10       # 地面种子区域 Z 向扩展量（米），peak_z ± expand 为初始地面区域
 ground_ransac_distance = 0.3   # RANSAC 平面拟合内点距离阈值（米）
 ground_ransac_iterations = 50  # RANSAC 迭代次数
 upside_down = true         # 点云 Z 轴是否上下翻转（LiDAR 安装朝下时为 true）
 has_ceiling = false        # 是否有天花板（配合 [cluster].ceiling_filter 使用）
 
-# 墙体提取策略（用于追踪管线，bench 使用 config/bench/wall/*.toml）
-wall_strategy = "edlines_ref"   # 墙体提取策略: bev_lsd / bev_edlines / bev_hough / ...
+# 墙体检测策略（用于追踪管线，bench 使用 config/bench/wall/*.toml）
+wall_strategy = "edlines_ref"   # 墙体检测策略: bev_lsd / bev_edlines / bev_hough / ...
 wall_distance = 0.08         # RansacL2Grid 距离阈值
 wall_iterations = 50         # RansacL2Grid RANSAC 迭代次数
 wall_max_walls = 30          # 最大墙体平面数（RansacL2Grid 每帧保留的墙面数上限）

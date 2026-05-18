@@ -1,6 +1,6 @@
 //! 墙体策略对比可视化数据生成
 //!
-//! 加载一帧数据，分别用 BevLsd / BevEdLines / BevHough 做墙体提取，
+//! 加载一帧数据，分别用 BevLsd / BevEdLines / BevHough 做墙体检测，
 //! 输出 BEV 密度网格 + 各类墙体策略的分类结果到 JSON，供 Python 绘图。
 //!
 //! 用法：
@@ -73,11 +73,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // ─── 地面提取 ──────────────────────────────────────────────────────
+    // ─── 地面检测 ──────────────────────────────────────────────────────
     let mut buf = cloud.clone();
     let (n_ground, _, _) = PeakScan::new().pick(&mut buf);
     let non_ground = buf[n_ground..].to_vec();
-    eprintln!("地面提取: {} 地面 / {} 非地面", n_ground, non_ground.len());
+    eprintln!("地面检测: {} 地面 / {} 非地面", n_ground, non_ground.len());
 
     // ─── 构建 BEV 密度网格 ──────────────────────────────────────────────
     let max_range = 10.0f32;

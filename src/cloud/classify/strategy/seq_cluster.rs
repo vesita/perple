@@ -5,7 +5,7 @@ use crate::cloud::wall::XYGrid;
 /// 顺序 SVD 平面拟合聚类策略（seq）。
 ///
 /// 每轮 SVD 拟合主平面 → 内点作为一个簇 → 移除 → 重复。
-/// 从墙体提取 `seq_pca_grid` 改编，去掉了墙体专用过滤（竖直性法线阈值）。
+/// 从墙体检测 `seq_pca_grid` 改编，去掉了墙体专用过滤（竖直性法线阈值）。
 ///
 /// 可选预降噪：若 `denoise_radius > 0`，先执行半径离群点剔除。
 pub struct SeqCluster {

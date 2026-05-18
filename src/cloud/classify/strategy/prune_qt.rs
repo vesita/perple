@@ -8,7 +8,7 @@ use crate::cloud::wall::{WallPickStrategy, BevLsd, cluster_obstacles_with_indice
 /// 使用四叉树范围查询替代 XYGrid 网格 DBSCAN。
 ///
 /// 管线：
-/// 1. 墙体提取（可选）
+/// 1. 墙体检测（可选）
 /// 2. 网格连通域预聚类（可选）
 /// 3. 四叉树构建 → 密集叶节点过滤（叶片点数 ≥ min_occ）→ 质心输出
 /// 4. 四叉树加速 DBSCAN 精化聚类
@@ -83,7 +83,7 @@ impl ClusteringStrategy for PruneQt {
         let n = points.len();
         if n == 0 { return (Vec::new(), Vec::new()); }
 
-        // 1. 墙面提取
+        // 1. 墙面检测
         let non_wall: Vec<[f32; 3]> = if self.skip_wall {
             points.to_vec()
         } else {

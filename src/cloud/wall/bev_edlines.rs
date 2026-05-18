@@ -1,4 +1,4 @@
-/// BEV 鸟瞰图 + EDLines 线段检测墙体提取（bev_edlines）。
+/// BEV 鸟瞰图 + EDLines 线段检测墙体检测（bev_edlines）。
 ///
 /// # 设计思路
 ///

@@ -17,11 +17,19 @@ Perple 项目主推基于**恒加速度模型**（Constant Acceleration Model，
 
 ### 核心组件
 
-**源代码位置**: [`src/tracker/kalman.rs`](../src/tracker/kalman.rs)
+**源代码位置**: [`src/tracker/kalman.rs`](../src/tracker/kalman.rs)（模块根 + `kalman/` 子模块）
 
 ```
 tracker::kalman 模块
-├── KalmanFilterCA (主推)         # 9D 恒加速度滤波器
+├── ca.rs
+│   └── KalmanFilterCA (主推)         # 9D 恒加速度滤波器
+│       ├── ConstantAccelerationModel   # 恒加速度运动模型
+│       └── FullStateObservationModel9  # 9D 全状态观测模型
+├── cv.rs
+│   └── KalmanFilterWrapper (备选)     # 6D 常速度滤波器
+│       ├── ConstantVelocityModel       # 常速度运动模型
+│       └── FullStateObservationModel6  # 6D 全状态观测模型
+└── KalmanConfigCA / KalmanConfig  # 配置参数
 │   ├── ConstantAccelerationModel   # 恒加速度运动模型
 │   └── FullStateObservationModel9  # 9D 全状态观测模型
 ├── KalmanFilterWrapper (备选)     # 6D 常速度滤波器
@@ -83,7 +91,7 @@ x_{k|k-1} = F · x_{k-1|k-1},  F 如下：
 [0  0  0  0   0    0  0  0  1]
 ```
 
-对应代码 (kalman.rs:347-363)：
+对应代码 (kalman/ca.rs:35-53)：
 
 ```rust
 f[(0, 2)] = dt;   // x ← vx

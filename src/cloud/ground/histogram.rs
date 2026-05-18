@@ -3,7 +3,7 @@ use crate::utils::boxes::Box3D;
 use super::GroundPickStrategy;
 use super::super::CldBud;
 
-/// Z-直方图 + expand 地面提取
+/// Z-直方图 + expand 地面检测
 ///
 /// 最简单的地面策略：按 Z 坐标建直方图，找峰值，峰值 ± expand 范围内为地面。
 pub struct HistogramExpand {

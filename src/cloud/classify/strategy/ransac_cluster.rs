@@ -4,7 +4,7 @@ use crate::cloud::wall::{XYGrid, best_xy_line};
 /// RANSAC 线检测聚类策略（ransac）。
 ///
 /// 每轮在 XY 平面执行 RANSAC 线检测 → 线内点作为一个簇 → 移除 → 重复。
-/// 从墙体提取 `ransac_l2_grid` 改编，去掉了墙体专用过滤（Z 跨度、min_extent）。
+/// 从墙体检测 `ransac_l2_grid` 改编，去掉了墙体专用过滤（Z 跨度、min_extent）。
 ///
 /// 可选预降噪：若 `denoise_radius > 0`，先执行半径离群点剔除。
 pub struct RansacCluster {

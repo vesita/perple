@@ -48,17 +48,30 @@ impl Cluster {
         self.objects = objects;
     }
 
-    /// 从聚类索引同时计算 Box3D 和质心
+    /// 单遍扫描计算 Box3D AABB 和质心，避免中间 Vec 分配
     fn cluster_box_and_centroid(all_points: &[[f32; 3]], indices: &[usize], alpha: f32) -> (Box3D, [f32; 3]) {
-        let pts: Vec<[f32; 3]> = indices.iter().map(|&idx| all_points[idx]).collect();
-        let box3d = Box3D::from_cloud_aabb(&pts, 0.0);
+        let n = indices.len();
+        if n == 0 {
+            return (Box3D::empty_box(), [0.0; 3]);
+        }
+
+        // 单遍扫描：同时累积 AABB 边界和质心
+        let mut x_min = f32::MAX;
+        let mut x_max = f32::MIN;
+        let mut y_min = f32::MAX;
+        let mut y_max = f32::MIN;
+        let mut z_min = f32::MAX;
+        let mut z_max = f32::MIN;
 
         let centroid = if alpha > 0.0 {
-            // 密度感知加权：LiDAR 近密远疏，用 r^α 补偿质心被拉向传感器的系统偏差
             let eps = 1e-6;
             let mut w_sum = 0.0f32;
             let mut weighted = [0.0f32; 3];
-            for p in &pts {
+            for &idx in indices {
+                let p = &all_points[idx];
+                x_min = x_min.min(p[0]); x_max = x_max.max(p[0]);
+                y_min = y_min.min(p[1]); y_max = y_max.max(p[1]);
+                z_min = z_min.min(p[2]); z_max = z_max.max(p[2]);
                 let r = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt().max(eps);
                 let w = r.powf(alpha);
                 weighted[0] += p[0] * w;
@@ -73,14 +86,28 @@ impl Cluster {
             }
             weighted
         } else {
-            // 原始算术平均
-            [
-                pts.iter().map(|p| p[0]).sum::<f32>() / pts.len() as f32,
-                pts.iter().map(|p| p[1]).sum::<f32>() / pts.len() as f32,
-                pts.iter().map(|p| p[2]).sum::<f32>() / pts.len() as f32,
-            ]
+            let mut sum = [0.0f32; 3];
+            for &idx in indices {
+                let p = &all_points[idx];
+                x_min = x_min.min(p[0]); x_max = x_max.max(p[0]);
+                y_min = y_min.min(p[1]); y_max = y_max.max(p[1]);
+                z_min = z_min.min(p[2]); z_max = z_max.max(p[2]);
+                sum[0] += p[0];
+                sum[1] += p[1];
+                sum[2] += p[2];
+            }
+            [sum[0] / n as f32, sum[1] / n as f32, sum[2] / n as f32]
         };
 
+        let cx = (x_min + x_max) * 0.5;
+        let cy = (y_min + y_max) * 0.5;
+        let cz = (z_min + z_max) * 0.5;
+        let box3d = Box3D {
+            pose: nalgebra::Matrix4::new_translation(&nalgebra::Vector3::new(cx, cy, cz)),
+            length: (x_max - x_min).max(0.0),
+            width:  (y_max - y_min).max(0.0),
+            height: (z_max - z_min).max(0.0),
+        };
         (box3d, centroid)
     }
 
@@ -88,50 +115,7 @@ impl Cluster {
     pub fn to_cldbuds(&self) -> Vec<CldBud> {
         clusters_to_cldbuds(&self.all_points, &self.objects)
     }
-}
 
-/// 将聚类索引结果转为 CldBud 向量（供 bench 等外部复用）。
-///
-/// 过滤逻辑与 `Cluster::to_cldbuds()` 完全一致。
-pub fn clusters_to_cldbuds(all_points: &[[f32; 3]], objects: &[Vec<usize>]) -> Vec<CldBud> {
-    let cfg = crate::config::fixif().cluster.clone();
-    let alpha = cfg.density_weight_alpha;
-    objects
-        .iter()
-        .filter(|c| !c.is_empty())
-        .enumerate()
-        .filter_map(|(idx, cluster)| {
-            let (box3d, centroid) = Cluster::cluster_box_and_centroid(all_points, cluster, alpha);
-            let w = box3d.length.max(box3d.width);
-            let h = box3d.height;
-            // 排除超小噪点 + 扁度/体积过滤
-            if w <= 0.2 || h <= 0.3 { return None; }
-            if h < 0.15 * w { return None; }
-            if box3d.length * box3d.width * h < 0.03 { return None; }
-
-            // box 过大过滤（室内场景物体不应过大）
-            if w > 3.0 { return None; }
-            // 盒子中心过低 → 地面残留噪点（用 AABB 中心 Z，不受密度加权偏移影响）
-            if box3d.center().z < 0.2 { return None; }
-
-            // 边界过滤：盒子超出有效检测范围时丢弃（避免截断/不完整的目标）
-            let max_r = cfg.max_range;
-            let c = box3d.center();
-            let center_dist = (c.x * c.x + c.y * c.y).sqrt();
-            let half_diag = (box3d.length * box3d.length + box3d.width * box3d.width).sqrt() * 0.5;
-            if center_dist + half_diag > max_r { return None; }
-
-            // 点云稀疏度过滤：大体积内点数过少 → 离群噪点
-            let n_pts = cluster.len() as f32;
-            let volume = box3d.length * box3d.width * h;
-            if volume > 0.5 && n_pts / volume < 20.0 { return None; }
-
-            Some(CldBud::with_centroid(box3d, 1, format!("cluster_{}", idx), 1.0, centroid))
-        })
-        .collect()
-}
-
-impl Cluster {
     /// YOLO 辅助簇分裂（Phase 2）
     ///
     /// 对每个簇，将簇内点投影到 2D，按落在哪个 YOLO 框分组。
@@ -222,6 +206,47 @@ impl Cluster {
 
     #[allow(unused)]
     pub fn add_box3d(&mut self, _box3d: Box3D) {}
+}
+
+/// 将聚类索引结果转为 CldBud 向量（供 bench 等外部复用）。
+///
+/// 过滤逻辑与 `Cluster::to_cldbuds()` 完全一致。
+pub fn clusters_to_cldbuds(all_points: &[[f32; 3]], objects: &[Vec<usize>]) -> Vec<CldBud> {
+    let cluster_cfg = &crate::config::fixif().cluster;
+    let alpha = cluster_cfg.density_weight_alpha;
+    let max_r = cluster_cfg.max_range;
+    objects
+        .iter()
+        .filter(|c| !c.is_empty())
+        .enumerate()
+        .filter_map(|(idx, cluster)| {
+            let (box3d, centroid) = Cluster::cluster_box_and_centroid(all_points, cluster, alpha);
+            let w = box3d.length.max(box3d.width);
+            let h = box3d.height;
+            // 排除超小噪点 + 扁度/体积过滤
+            if w <= 0.2 || h <= 0.3 { return None; }
+            if h < 0.15 * w { return None; }
+            if box3d.length * box3d.width * h < 0.03 { return None; }
+
+            // box 过大过滤（室内场景物体不应过大）
+            if w > 3.0 { return None; }
+            // 盒子中心过低 → 地面残留噪点（用 AABB 中心 Z，不受密度加权偏移影响）
+            if box3d.center().z < 0.2 { return None; }
+
+            // 边界过滤：盒子超出有效检测范围时丢弃
+            let c = box3d.center();
+            let center_dist = (c.x * c.x + c.y * c.y).sqrt();
+            let half_diag = (box3d.length * box3d.length + box3d.width * box3d.width).sqrt() * 0.5;
+            if center_dist + half_diag > max_r { return None; }
+
+            // 点云稀疏度过滤：大体积内点数过少 → 离群噪点
+            let n_pts = cluster.len() as f32;
+            let volume = box3d.length * box3d.width * h;
+            if volume > 0.5 && n_pts / volume < 20.0 { return None; }
+
+            Some(CldBud::with_centroid(box3d, 1, format!("cluster_{}", idx), 1.0, centroid))
+        })
+        .collect()
 }
 
 impl Default for Cluster {

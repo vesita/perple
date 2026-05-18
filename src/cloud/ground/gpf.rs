@@ -4,7 +4,7 @@ use crate::utils::boxes::Box3D;
 use super::GroundPickStrategy;
 use super::super::CldBud;
 
-/// GPF (Ground Plane Fitting) 地面提取
+/// GPF (Ground Plane Fitting) 地面检测
 pub struct GpfGround {
     n_lpr: Option<usize>,
     th_seed: Option<f32>,

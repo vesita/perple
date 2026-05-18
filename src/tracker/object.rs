@@ -309,10 +309,6 @@ impl TrackedObject {
         self.centroid_prev_vel_mag = vel_mag;
     }
 
-    pub(crate) fn is_permanently_lost(&self, max_disappeared: u32) -> bool {
-        self.disappeared_count >= max_disappeared
-    }
-
     /// 获取 Kalman 估计速度（自适应 EMA 平滑）
     ///
     /// alpha 按置信度自适应：高置信度快速跟踪，低置信度强平滑。

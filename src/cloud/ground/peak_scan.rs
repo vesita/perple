@@ -3,7 +3,7 @@ use crate::utils::boxes::Box3D;
 use super::GroundPickStrategy;
 use super::super::CldBud;
 
-/// 峰扫描地面提取：从 Z 直方图峰值向下扫描找地面下界，向上扩展找地面上界。
+/// 峰扫描地面检测：从 Z 直方图峰值向下扫描找地面下界，向上扩展找地面上界。
 pub struct PeakScan {
     threshold: Option<f32>,
     expand: Option<f32>,

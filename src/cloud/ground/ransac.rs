@@ -4,7 +4,7 @@ use crate::utils::boxes::Box3D;
 use super::GroundPickStrategy;
 use super::super::CldBud;
 
-/// RANSAC 地面提取
+/// RANSAC 地面检测
 pub struct RansacGround {
     distance: Option<f32>,
     iterations: Option<usize>,

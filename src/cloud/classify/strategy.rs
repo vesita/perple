@@ -19,6 +19,7 @@ pub use lvdot_cluster::LvdotClusterStrategy;
 pub use prune_qt::PruneQt;
 
 use crate::config::fixif;
+use crate::cloud::wall::BevLsd;
 
 /// 聚类策略 trait — 新增策略只需 impl 此 trait + 在工厂注册一行
 pub trait ClusteringStrategy: Send {
@@ -51,7 +52,16 @@ pub fn create_strategy(pre_extracted_wall: bool) -> Box<dyn ClusteringStrategy> 
             log::info!("聚类策略: range_image");
             Box::new(RangeImageStrategy::new())
         }
-        "xy_grid_dbscan" | "xy_grid_dbscan_grid" => {
+        "xy_grid_dbscan" => {
+            let cell = cfg.cluster.voxel_size.max(0.05);
+            let eps = cfg.cluster.merge_patience;
+            let min_pts = cfg.cluster.min_points_per_cluster.unwrap_or(3) as usize;
+            log::info!("聚类策略: xy_grid_dbscan (cell={:.2}, eps={}, min_pts={})", cell, eps, min_pts);
+            let wall = Box::new(BevLsd::with_params(cfg.wall_distance, 20));
+            Box::new(XYGridDBSCAN::with_params(wall, cell, min_pts, cfg.max_range, eps, min_pts)
+                .with_pre_extracted_wall())
+        }
+        "xy_grid_dbscan_grid" => {
             log::info!("聚类策略: xy_grid_dbscan_grid");
             Box::new(XYGridDBSCAN::new())
         }

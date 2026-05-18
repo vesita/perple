@@ -1,6 +1,6 @@
 //! EDLines 对比测试：BevEdLines（当前实现）vs EdLinesRef（原版算法）
 //!
-//! 相同管线（地面提取 → BEV → EDLines → 墙壁验证），只换 EDLines 核心。
+//! 相同管线（地面检测 → BEV → EDLines → 墙壁验证），只换 EDLines 核心。
 //!
 //! 输出:
 //!   - output/edlines_bench/results.json — 每帧详细数据

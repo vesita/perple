@@ -1,6 +1,6 @@
 //! 基于标注数据的 EDLines 对比评估
 //!
-//! 固定管线：地面提取(PeakScan) → 墙体提取(两种策略) → 后聚类(连通域)
+//! 固定管线：地面检测(PeakScan) → 墙体检测(两种策略) → 后聚类(连通域)
 //! 只换墙体策略，对比最终检测精度。
 //!
 //! 匹配方式：中心距离匹配
@@ -261,7 +261,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         if cloud.is_empty() { frame_idx += 1; continue; }
 
-        // 地面提取（共享）
+        // 地面检测（共享）
         let mut ground_buf = cloud;
         let (n_ground, _, _) = ground.pick(&mut ground_buf);
         let non_ground = &ground_buf[n_ground..];

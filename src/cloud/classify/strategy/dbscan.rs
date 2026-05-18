@@ -44,7 +44,7 @@ impl DbscanStrategy {
 
     /// 轻量构造器：跳过内部下采样，直接对输入做 DBSCAN。
     ///
-    /// 适用于上游已做完墙体提取+LV-DOT过滤的管线场景。
+    /// 适用于上游已做完墙体检测+LV-DOT过滤的管线场景。
     pub fn new_light() -> Self {
         Self { voxel_size: 0.0, downsample_method: "none".to_string(), ..Self::new() }
     }

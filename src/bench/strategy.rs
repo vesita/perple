@@ -16,7 +16,7 @@ use crate::cloud::denoise::{DenoiseStrategy, RadiusOutlierRemoval};
 pub enum Preprocessed {
     /// 无预处理，原始点云即输入。
     Passthrough,
-    /// 地面提取完成，非地面点可用。
+    /// 地面检测完成，非地面点可用。
     Ground {
         non_ground: Vec<[f32; 3]>,
     },
@@ -24,12 +24,12 @@ pub enum Preprocessed {
     GroundDenoised {
         non_ground: Vec<[f32; 3]>,
     },
-    /// 地面+墙面提取完成，非地面和非墙面点均可用。
+    /// 地面+墙面检测完成，非地面和非墙面点均可用。
     Wall {
         non_ground: Vec<[f32; 3]>,
         non_wall: Vec<[f32; 3]>,
     },
-    /// 地面+墙面+降噪提取完成，三种数据均可用。
+    /// 地面+墙面+降噪检测完成，三种数据均可用。
     Denoise {
         non_ground: Vec<[f32; 3]>,
         non_wall: Vec<[f32; 3]>,
@@ -55,7 +55,7 @@ impl Preprocessor for PassthroughPreprocessor {
     }
 }
 
-/// 地面提取预处理器，cluster_bench 使用。
+/// 地面检测预处理器，cluster_bench 使用。
 pub struct GroundPreprocessor {
     strategy: Box<dyn GroundPickStrategy>,
 }
@@ -115,7 +115,7 @@ impl Preprocessor for GroundDenoisePreprocessor {
     }
 }
 
-/// 地面+墙面（+预处理降噪）提取预处理器，wall_bench 使用。
+/// 地面+墙面（+预处理降噪）检测预处理器，wall_bench 使用。
 /// 管线：地面 → 降噪（预处理，改善墙体 BFS 连通性）→ 墙体
 pub struct WallPreprocessor {
     ground: Box<dyn GroundPickStrategy>,
@@ -148,7 +148,7 @@ impl Preprocessor for WallPreprocessor {
         let (n_ground, _, _) = self.ground.pick(&mut buf);
         let non_ground = buf[n_ground..].to_vec();
 
-        // 预处理降噪：去除孤立噪点，改善墙体提取的 BFS 连通性
+        // 预处理降噪：去除孤立噪点，改善墙体检测的 BFS 连通性
         let (denoised_ng, _) = self.denoise.denoise(&non_ground);
 
         let mut wall_buf = denoised_ng.clone();
@@ -159,7 +159,7 @@ impl Preprocessor for WallPreprocessor {
     }
 }
 
-/// 地面+墙面提取预处理器（无降噪），cluster_bench 使用。
+/// 地面+墙面检测预处理器（无降噪），cluster_bench 使用。
 /// 管线：地面 → 墙体，降噪移至各聚类策略内部处理。
 pub struct GroundWallPreprocessor {
     ground: Box<dyn GroundPickStrategy>,

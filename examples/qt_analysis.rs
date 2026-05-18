@@ -49,7 +49,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     loader.set_frame_limit(frame_limit);
     loader.load().await?;
 
-    // 预处理只做一次：地面提取
+    // 预处理只做一次：地面检测
     let mut ground_strategy = create_ground_strategy();
     let mut all_results: Vec<RunResult> = Vec::new();
     let mut frame_count = 0usize;
@@ -67,7 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         if cloud.is_empty() { continue; }
 
-        // 地面提取
+        // 地面检测
         let mut buf = cloud.to_vec();
         let (n_ground, _, _) = ground_strategy.pick(&mut buf);
         let non_ground = &buf[n_ground..];

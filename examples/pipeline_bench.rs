@@ -1,6 +1,6 @@
 //! 全流程策略对比 Benchmark
 //!
-//! 测试不同的墙体提取 + 聚类策略组合，输出性能和质量对比。
+//! 测试不同的墙体检测 + 聚类策略组合，输出性能和质量对比。
 //! 排除过往 bench 中确认耗时的策略（voxel=0.05, range_image 0.5° 等）。
 //!
 //! 用法：
@@ -31,7 +31,7 @@ struct FrameStats {
 /// 组合策略测试用例
 struct PipelineBenchCase {
     name: String,
-    wall: Option<usize>,          // 索引到墙体策略工厂，None = 无墙体提取
+    wall: Option<usize>,          // 索引到墙体策略工厂，None = 无墙体检测
     cluster_idx: usize,            // 索引到聚类策略工厂
     voxel_min_occ: usize,
     // 累计统计
@@ -94,7 +94,7 @@ impl BenchStrategy for PipelineBenchCase {
         let start = Instant::now();
         let mut buf = frame.non_ground().to_vec();
 
-        // 1. 墙体提取
+        // 1. 墙体检测
         let n_wall_before = buf.len();
         let n_wall = if let Some(ref mut w) = self.create_wall() {
             let (n, _) = w.pick(&mut buf);
