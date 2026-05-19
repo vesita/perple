@@ -23,8 +23,8 @@ params = [
 ]
 
 [stats]
-fastest_ms = 21.793300000000002
-slowest_ms = 52.746
-avg_ms = 37.03085
-median_ms = 36.79205
-last_run = "1778762079"
+fastest_ms = 3.26
+slowest_ms = 7.5336
+avg_ms = 5.342300000000001
+median_ms = 5.287800000000001
+last_run = "1779170380"

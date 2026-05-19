@@ -140,6 +140,132 @@ def points_to_bev_density(points: np.ndarray,
     return img
 
 
+# ── EDLines 直线检测 ────────────────────────────────
+def detect_lines_edlines(img: np.ndarray,
+                         sigma: float = 1.0,
+                         anchor_threshold: int = 8,
+                         min_line_length: float = 30.0) -> np.ndarray:
+    """EDLines 锚点检测 + 链式追踪直线提取。
+
+    步骤：
+      1. 高斯模糊 + Sobel 梯度
+      2. 梯度方向二值化 (|gx|>=|gy| → VERTICAL, 否则 HORIZONTAL)
+      3. 锚点检测（梯度方向上的局部极大值）
+      4. 从锚点沿边缘方向链式追踪
+      5. 最小二乘直线拟合 + 线段验证
+    """
+    # 1. 高斯模糊 + Sobel 梯度
+    blur = cv2.GaussianBlur(img, (0, 0), sigma)
+    gx = cv2.Sobel(blur, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(blur, cv2.CV_32F, 0, 1, ksize=3)
+
+    h, w = img.shape
+    mag = np.abs(gx) + np.abs(gy)
+    # 方向：True = VERTICAL (梯度主要沿 x → 边缘是垂直的), False = HORIZONTAL
+    direction = np.abs(gx) >= np.abs(gy)
+
+    # 2. 锚点检测：沿梯度方向找局部极大值
+    anchors = []
+    for y in range(1, h - 1):
+        for x in range(1, w - 1):
+            if mag[y, x] < anchor_threshold:
+                continue
+            if direction[y, x]:
+                # VERTICAL 边缘：梯度方向是水平，左右比较
+                if mag[y, x] > mag[y, x - 1] and mag[y, x] >= mag[y, x + 1]:
+                    anchors.append((x, y))
+            else:
+                # HORIZONTAL 边缘：梯度方向是垂直，上下比较
+                if mag[y, x] > mag[y - 1, x] and mag[y, x] >= mag[y + 1, x]:
+                    anchors.append((x, y))
+
+    if len(anchors) < 5:
+        return np.empty((0, 4))
+
+    # 3. 链式追踪
+    visited = np.zeros((h, w), dtype=bool)
+    chains = []
+
+    # 8 邻域偏移
+    edge_dir = [(-1, -1), (0, -1), (1, -1), (-1, 0),
+                (1, 0), (-1, 1), (0, 1), (1, 1)]
+
+    for ax, ay in anchors:
+        if visited[ay, ax]:
+            continue
+
+        # 从锚点向两边追踪
+        chain = [(ax, ay)]
+        visited[ay, ax] = True
+
+        for sign in [-1, 1]:
+            cx, cy = ax, ay
+            while True:
+                best = None
+                best_mag = -1
+                # 沿边缘方向搜索下一点
+                for dx, dy in edge_dir:
+                    nx, ny = cx + dx, cy + dy
+                    if nx < 0 or nx >= w or ny < 0 or ny >= h:
+                        continue
+                    if visited[ny, nx]:
+                        continue
+                    if mag[ny, nx] < anchor_threshold * 0.5:
+                        continue
+                    # 方向一致约束
+                    if direction[ny, nx] != direction[ay, ax]:
+                        continue
+                    if mag[ny, nx] > best_mag:
+                        best_mag = mag[ny, nx]
+                        best = (nx, ny)
+
+                if best is None:
+                    break
+                nx, ny = best
+                visited[ny, nx] = True
+                if sign == 1:
+                    chain.append((nx, ny))
+                else:
+                    chain.insert(0, (nx, ny))
+                cx, cy = nx, ny
+
+        if len(chain) >= int(min_line_length * 0.3):
+            chains.append(chain)
+
+    if not chains:
+        return np.empty((0, 4))
+
+    # 4. 最小二乘直线拟合
+    lines = []
+    for chain in chains:
+        pts = np.array(chain, dtype=np.float32)
+        xs, ys = pts[:, 0], pts[:, 1]
+        n = len(pts)
+        if n < 4:
+            continue
+
+        # 主成分分析方向
+        mean_x, mean_y = xs.mean(), ys.mean()
+        dx = xs - mean_x
+        dy = ys - mean_y
+        cov = np.array([[np.sum(dx * dx), np.sum(dx * dy)],
+                        [np.sum(dx * dy), np.sum(dy * dy)]]) / n
+        eigvals, eigvecs = np.linalg.eigh(cov)
+        main_dir = eigvecs[:, np.argmax(eigvals)]
+
+        # 投影到主方向找到端点
+        proj = xs * main_dir[0] + ys * main_dir[1]
+        i0, i1 = np.argmin(proj), np.argmax(proj)
+        x1, y1 = xs[i0], ys[i0]
+        x2, y2 = xs[i1], ys[i1]
+
+        length = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+        if length >= min_line_length:
+            lines.append([x1, y1, x2, y2])
+
+    return np.array(lines, dtype=np.float32) if lines else np.empty((0, 4))
+
+
 # ── 直线检测 ──────────────────────────────────────────
 def filter_wall_angles_adaptive(lines: np.ndarray,
                                 angle_tol: float = 15.0) -> np.ndarray:
@@ -354,6 +480,9 @@ def main():
         lines_lsd = merge_collinear(lines_lsd)
     print(f"  LSD: {len(lines_lsd)} 条线段")
 
+    lines_edlines = detect_lines_edlines(bev_fused)
+    print(f"  EDLines: {len(lines_edlines)} 条线段")
+
     # 5. 保存结果
     out_dir = Path("output/bev_test")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -368,16 +497,22 @@ def main():
     vis_lsd = draw_lines(bev_fused, lines_lsd, (0, 255, 255))
     cv2.imwrite(str(out_dir / "bev_lsd.png"), vis_lsd)
 
+    # EDLines
+    vis_edlines = draw_lines(bev_fused, lines_edlines, (255, 0, 255))
+    cv2.imwrite(str(out_dir / "bev_edlines.png"), vis_edlines)
+
     # 并排对比
     h, w = bev_fused.shape
-    gap = 10
+    gap = 8
     vis_w = w
-    canvas = np.zeros((h, 4 * vis_w + 3 * gap, 3), dtype=np.uint8)
+    n_panels = 5
+    canvas = np.zeros((h, n_panels * vis_w + (n_panels - 1) * gap, 3), dtype=np.uint8)
     panels = [
         (bev_zspan, "Z 跨度编码"),
         (bev_density, "密度编码"),
         (vis_hough, "HoughLinesP"),
         (vis_lsd, "LSD"),
+        (vis_edlines, "EDLines"),
     ]
     for i, (panel, label) in enumerate(panels):
         x = i * (vis_w + gap)
@@ -393,7 +528,8 @@ def main():
 
     print(f"\n结果保存至: {out_dir}/")
     for f in ["bev_zspan.png", "bev_density.png", "bev_fused.png",
-              "bev_hough.png", "bev_lsd.png", "bev_v2_comparison.png"]:
+              "bev_hough.png", "bev_lsd.png", "bev_edlines.png",
+              "bev_v2_comparison.png"]:
         print(f"  {f}")
 
 

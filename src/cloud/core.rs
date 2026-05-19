@@ -114,9 +114,14 @@ impl Lidar {
         };
 
         // 距离硬过滤：在地面检测之前剔除超出有效范围的点
-        let max_range = crate::config::fixif().max_range;
+        let cfg = crate::config::fixif();
+        let max_range = cfg.max_range;
+        let min_range = cfg.min_range;
         let data: Vec<[f32; 3]> = data.into_iter()
-            .filter(|p| (p[0] * p[0] + p[1] * p[1]).sqrt() <= max_range)
+            .filter(|p| {
+                let d2 = p[0] * p[0] + p[1] * p[1];
+                d2 <= max_range * max_range && d2 >= min_range * min_range
+            })
             .collect();
 
         {

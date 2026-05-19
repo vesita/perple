@@ -29,13 +29,14 @@ struct ClusterBenchCase {
     input_source: InputSource,
     total_ms: f64, frame_count: usize,
     total_clusters: usize, total_noise: usize,
-    total_input_n: usize, total_cluster_pts: usize,
+    total_input_n: usize, total_sampled_n: usize, total_cluster_pts: usize,
     frame_times: Vec<f64>,
     // 分布统计（每帧 min/max + 平方和→std）
     min_clusters_per_frame: usize, max_clusters_per_frame: usize,
     min_noise_per_frame: usize, max_noise_per_frame: usize,
     sq_clusters: u64, sq_noise: u64,
     last_clusters: Vec<Vec<[f32; 3]>>, last_noise: usize, last_input_n: usize,
+    last_sampled_n: usize,
     last_sampled: Vec<[f32; 3]>,
     /// 每个点的聚类分配（Some(ci) = 簇索引，None = 噪点）
     last_assignment: Vec<Option<usize>>,
@@ -47,12 +48,13 @@ impl ClusterBenchCase {
             name: name.to_string(), strategy, input_source,
             total_ms: 0.0, frame_count: 0,
             total_clusters: 0, total_noise: 0,
-            total_input_n: 0, total_cluster_pts: 0,
+            total_input_n: 0, total_sampled_n: 0, total_cluster_pts: 0,
             frame_times: Vec::new(),
             min_clusters_per_frame: usize::MAX, max_clusters_per_frame: 0,
             min_noise_per_frame: usize::MAX, max_noise_per_frame: 0,
             sq_clusters: 0, sq_noise: 0,
             last_clusters: Vec::new(), last_noise: 0, last_input_n: 0,
+            last_sampled_n: 0,
             last_sampled: Vec::new(),
             last_assignment: Vec::new(),
         }
@@ -72,6 +74,7 @@ impl BenchStrategy for ClusterBenchCase {
         let (sampled, objects) = self.strategy.run(&input);
         let elapsed = start.elapsed();
         self.last_input_n = input.len();
+        let sampled_n = sampled.len();
         let (clusters, noise) = to_cluster_result(&sampled, &objects);
         let n_clusters = clusters.len();
         // 簇大小统计
@@ -81,6 +84,8 @@ impl BenchStrategy for ClusterBenchCase {
         self.total_clusters += n_clusters; self.total_noise += noise;
         self.total_input_n += self.last_input_n;
         self.total_cluster_pts += cluster_total_pts;
+        self.total_sampled_n += sampled_n;
+        self.last_sampled_n = sampled_n;
         // 每帧分布
         self.min_clusters_per_frame = self.min_clusters_per_frame.min(n_clusters);
         self.max_clusters_per_frame = self.max_clusters_per_frame.max(n_clusters);
@@ -132,8 +137,8 @@ impl BenchStrategy for ClusterBenchCase {
         }
         recorder.end_frame();
         let n = self.frame_count.max(1) as f64;
-        println!("[{}] 入{} 簇{} 噪{} | {:.0}ms", self.name, self.last_input_n,
-            self.last_clusters.len(), self.last_noise, self.total_ms / n);
+        println!("[{}] 入{} 质心{} 簇{} 噪{} | {:.0}ms", self.name, self.last_input_n,
+            self.last_sampled_n, self.last_clusters.len(), self.last_noise, self.total_ms / n);
     }
     fn summarize(&self) {
         let n = self.frame_count.max(1) as f64;
@@ -143,8 +148,8 @@ impl BenchStrategy for ClusterBenchCase {
         } else {
             format!("{}", self.total_clusters as f64 / n)
         };
-        println!("  {:<40} | 入{:>5.0} | 簇{:>5} | {:>6.1}ms | {}{}",
-            self.name, self.total_input_n as f64 / n, cls_range,
+        println!("  {:<40} | 入{:>5.0} | 质心{:>4.0} | 簇{:>5} | {:>6.1}ms | {}{}",
+            self.name, self.total_input_n as f64 / n, self.total_sampled_n as f64 / n, cls_range,
             avg, n as usize,
             if avg > 100.0 { " [OVER]" } else { "" });
     }
@@ -317,7 +322,7 @@ fn output_json_or_table(strategies: &[Box<dyn BenchStrategy>], json: bool) {
     } else {
         println!("\n=== 按速度升序 ===");
         println!("{:-<90}", "");
-        println!("| {:<44} | {:>5} | {:>4} | {:>7} | {:>4} |", "策略", "输入", "簇", "ms/帧", "帧");
+        println!("| {:<44} | {:>5} | {:>4} | {:>4} | {:>7} | {:>4} |", "策略", "输入", "质心", "簇", "ms/帧", "帧");
         println!("{:-<90}", "");
         println!("{:-<90}", "");
     }

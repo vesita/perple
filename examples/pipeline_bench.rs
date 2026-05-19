@@ -182,16 +182,18 @@ impl BenchStrategy for PipelineBenchCase {
         // 每帧进度显示
         if self.frame_count % 20 == 0 {
             let avg_ms = self.total_ms / self.frame_count as f64;
-            println!("  [{}] 帧 {} | 墙={} 剩余={} 簇={} | {:.0}ms/帧",
+            println!("  [{}] 帧 {} | 墙={} 体素后={} 距离后={} 簇={} | {:.0}ms/帧",
                 self.name, self.frame_count, self.last.n_wall,
-                self.last.n_after_range, self.last.n_clusters, avg_ms);
+                self.last.n_after_voxel, self.last.n_after_range,
+                self.last.n_clusters, avg_ms);
         }
     }
 
     fn summarize(&self) {
         let n = self.frame_count.max(1) as f64;
         let avg_ms = self.total_ms / n;
-        let avg_remain = self.acc_after_range as f64 / n;
+        let avg_voxel = self.acc_after_voxel as f64 / n;
+        let avg_range = self.acc_after_range as f64 / n;
         let avg_clusters = self.acc_clusters as f64 / n;
         let total_in = self.acc_total_input as f64;
         let wall_pct = if total_in > 0.0 {
@@ -200,8 +202,8 @@ impl BenchStrategy for PipelineBenchCase {
             0.0
         };
         let status = if avg_ms > 100.0 { " [OVER]" } else { "" };
-        println!("  {:<36} | {:>5.0}% | {:>6.0} | {:>4.1} | {:>6.1}ms | {}{}",
-            self.name, wall_pct, avg_remain, avg_clusters, avg_ms, n as usize, status);
+        println!("  {:<36} | {:>5.0}% | {:>5.0}→{:>5.0} | {:>4.1} | {:>6.1}ms | {}{}",
+            self.name, wall_pct, avg_voxel, avg_range, avg_clusters, avg_ms, n as usize, status);
     }
 
     fn stats(&self) -> BenchStats {
@@ -299,8 +301,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n═══ 按速度升序 ═══");
     println!("{:-<80}", "");
-    println!("  {:<36} | {:>5} | {:>6} | {:>4} | {:>7} | {}",
-        "策略", "墙%", "剩余", "簇", "ms/帧", "帧数");
+    println!("  {:<36} | {:>5} | {:>10} | {:>4} | {:>7} | {}",
+        "策略", "墙%", "体素→距离", "簇", "ms/帧", "帧数");
     println!("{:-<80}", "");
     for s in &strategies {
         s.summarize();

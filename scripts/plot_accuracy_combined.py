@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts.chart_style import savefig
+from scripts.chart_style import C_GREEN, C_BLUE, C_RED, C_DARK, savefig, style_ax
 
 sys.stdout.reconfigure(encoding='utf-8')
 
@@ -34,9 +34,9 @@ gs = fig.add_gridspec(2, 1, height_ratios=[3, 1], hspace=0.15)
 ax = fig.add_subplot(gs[0])
 
 series = [
-    ('精确率', precisions, '#2ca02c', 'o'),
-    ('召回率', recalls,    '#1f77b4', 's'),
-    ('F1', f1_scores, '#d62728', '^'),
+    ('精确率', precisions, C_GREEN, 'o'),
+    ('召回率', recalls,    C_BLUE,  's'),
+    ('F1', f1_scores, C_RED,  '^'),
 ]
 
 for name, vals, color, marker in series:
@@ -54,6 +54,7 @@ ax.set_xlim(0.5, max(runs) + 0.5)
 ax.set_ylim(55, 95)
 ax.grid(True, alpha=0.25)
 ax.legend(fontsize=12, loc='lower left')
+style_ax(ax)
 
 ax_table = fig.add_subplot(gs[1])
 ax_table.axis('off')
@@ -79,7 +80,7 @@ table.set_fontsize(13)
 table.scale(1, 2.2)
 for (row, col), cell in table.get_celld().items():
     if row == 0:
-        cell.set_facecolor('#40466e')
+        cell.set_facecolor(C_DARK)
         cell.set_text_props(color='white', fontweight='bold')
     elif row % 2 == 0:
         cell.set_facecolor('#f5f5f5')

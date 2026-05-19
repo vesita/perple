@@ -132,6 +132,15 @@ impl FrameWriter {
         self.sql_writer.set_material(id, material);
     }
 
+    /// 从另一个 FrameWriter 克隆当前帧的所有实体到本写入器。
+    ///
+    /// 避免重复写入相同数据（如点云）到多个文件。
+    /// 仅复制内存状态，不涉及 SQLite I/O。
+    /// 不会覆盖本写入器中已存在的 ID。
+    pub fn absorb(&mut self, other: &FrameWriter) {
+        self.sql_writer.absorb(&other.sql_writer);
+    }
+
     /// 结束当前帧，将所有实体写入 SQLite。
     pub fn end_frame(&mut self) {
         if let Err(e) = self.sql_writer.end_frame() {
@@ -152,6 +161,13 @@ impl FrameWriter {
         fs::copy(&self.db_path, dest.as_ref())
             .map_err(|e| format!("复制数据库失败: {}", e))?;
         Ok(())
+    }
+
+    /// 将 source_path 数据库中的所有实体合并到 target_path 数据库。
+    ///
+    /// 使用 SQL ATTACH + INSERT-SELECT，避免 Rust 序列化开销。
+    pub fn merge_from_db(target_path: impl AsRef<Path>, source_path: impl AsRef<Path>) -> Result<(), String> {
+        SqlWriter::merge_db(target_path.as_ref(), source_path.as_ref())
     }
 
     /// 清空所有帧数据。

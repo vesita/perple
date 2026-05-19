@@ -140,7 +140,6 @@ fn make_jsonl_line(
     t_io: f64,
     t_tracker: f64,
     n_ground: usize,
-    n_wall: usize,
     n_cloud_filtered: usize,
     n_clusters: usize,
     targets: &[Target],
@@ -198,7 +197,6 @@ fn make_jsonl_line(
         },
         "stats": {
             "n_ground": n_ground,
-            "n_wall": n_wall,
             "n_cloud_filtered": n_cloud_filtered,
             "n_clusters": n_clusters,
             "n_targets": n_targets,
@@ -325,10 +323,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(&out_dir)?;
 
     // .rdra 文件（供 Bevy/egui 可视化回放）
-    let mut writer_ground = FrameWriter::new(out_dir.join("ground.db"))?;
-    let mut writer_wall   = FrameWriter::new(out_dir.join("wall.db"))?;
-    let mut writer_cluster = FrameWriter::new(out_dir.join("cluster.db"))?;
-    let mut writer_tracker = FrameWriter::new(out_dir.join("tracker.db"))?;
+    // cloud.db 写入完整点云，其他文件只写语义，循环后通过 fs::copy + SQL 合并点云
+    let mut writer_cloud  = FrameWriter::new(out_dir.join("cloud.db"))?;
+    let mut writer_ground = FrameWriter::new(out_dir.join("_sem_ground.db"))?;
+    let mut writer_cluster = FrameWriter::new(out_dir.join("_sem_cluster.db"))?;
+    let mut writer_tracker = FrameWriter::new(out_dir.join("_sem_tracker.db"))?;
 
     // JSONL 文件（供 Python 分析）
     let jsonl_path = out_dir.join("pipeline.jsonl");
@@ -394,20 +393,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // ── 读取各语义流 ─────────────────────────────────────────────────
         let ground_buds: Vec<CldBud> = swapl.ground_buds.consumer().lock().unwrap().clone();
-        let wall_buds:   Vec<CldBud> = swapl.wall_buds.consumer().lock().unwrap().clone();
         let cluster_buds: Vec<CldBud> = swapl.cld_buds_raw.consumer().lock().unwrap().clone();
+        // 完整点云
+        let cloud_pts = {
+            let stream = swapl.clouds_out.lock().unwrap();
+            stream.peek_latest().unwrap_or_default()
+        };
 
         // ── 写入 .rdra ───────────────────────────────────────────────────
+        // 1. 仅 cloud.db 写入完整点云
+        writer_cloud.begin_frame(i);
+        writer_cloud.write_cloud(&cloud_pts, "cloud", 50000);
+        writer_cloud.end_frame();
+
+        // 2. 语义文件只写各自的 box，不写点云（循环后复制 cloud.db 合并）
         writer_ground.begin_frame(i);
         write_rdra_buds(&mut writer_ground, &ground_buds, MAT_GROUND);
         writer_ground.end_frame();
 
-        writer_wall.begin_frame(i);
-        write_rdra_buds(&mut writer_wall, &wall_buds, MAT_WALL);
-        writer_wall.end_frame();
-
         writer_cluster.begin_frame(i);
-        write_rdra_buds(&mut writer_cluster, &cluster_buds, MAT_PERSON); // 用 person mat 显示聚类
+        write_rdra_buds(&mut writer_cluster, &cluster_buds, MAT_PERSON);
         writer_cluster.end_frame();
 
         // ── 异步加载下一帧 ───────────────────────────────────────────────
@@ -443,23 +448,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let json_line = make_jsonl_line(
             i, n_frames, t_total,
             t_join, t_fuse, t_io, t_tracker,
-            ground_buds.len(), wall_buds.len(),
+            ground_buds.len(),
             n_filtered_pts, n_clusters,
             &targets,
         );
         writeln!(jsonl_file, "{}", json_line)?;
 
-        // ── 写入 .rdra 跟踪结果 ──────────────────────────────────────────
+        // ── 写入 .rdra 跟踪结果（只写 target box，不写点云） ──────────
         writer_tracker.begin_frame(i);
         write_rdra_targets(&mut writer_tracker, &targets);
         writer_tracker.end_frame();
     }
 
-    // ─── 清理与总结 ──────────────────────────────────────────────────────
-    writer_ground.save()?;
-    writer_wall.save()?;
-    writer_cluster.save()?;
-    writer_tracker.save()?;
+    // ─── 合并点云到语义文件 ──────────────────────────────────────────────
+    // cloud.db 已含所有帧的完整点云，通过 ATTACH + INSERT-SELECT 批量合并
+    writer_cloud.save()?;
+    drop(writer_cloud);
+
+    let cloud_path = out_dir.join("cloud.db");
+    let final_names = ["ground.db", "cluster.db", "tracker.db"];
+    let sem_paths = [
+        out_dir.join("_sem_ground.db"),
+        out_dir.join("_sem_cluster.db"),
+        out_dir.join("_sem_tracker.db"),
+    ];
+
+    for (name, sem_path) in final_names.iter().zip(sem_paths.iter()) {
+        let target = out_dir.join(name);
+        std::fs::copy(&cloud_path, &target)
+            .map_err(|e| format!("复制 {} 失败: {}", name, e))?;
+        FrameWriter::merge_from_db(&target, sem_path)?;
+        // VACUUM 压缩（打开再关闭）
+        let w = FrameWriter::new(&target)?;
+        w.save()?;
+        // 清理临时语义文件
+        let _ = std::fs::remove_file(sem_path);
+    }
 
     let total_elapsed = total_start.elapsed().as_secs_f64();
     let avg_ms_per_frame = total_elapsed * 1000.0 / n_frames as f64;

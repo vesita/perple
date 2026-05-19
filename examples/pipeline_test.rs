@@ -166,9 +166,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
         PathBuf::from(format!("output/pipeline_test_{}", secs))
     };
-    let mut writer_ground = FrameWriter::new(out_dir.join("ground_result.db"))?;
-    let mut writer_cluster = FrameWriter::new(out_dir.join("cluster_result.db"))?;
-    let mut writer_tracker = FrameWriter::new(out_dir.join("tracker_result.db"))?;
+    let mut writer_cloud   = FrameWriter::new(out_dir.join("cloud_result.db"))?;
+    let mut writer_ground  = FrameWriter::new(out_dir.join("_sem_ground.db"))?;
+    let mut writer_cluster = FrameWriter::new(out_dir.join("_sem_cluster.db"))?;
+    let mut writer_tracker = FrameWriter::new(out_dir.join("_sem_tracker.db"))?;
 
     // ─── 两级流水 ────────────────────────────────────────────────────────
     let total_start = Instant::now();
@@ -243,14 +244,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             stream.peek_latest().unwrap_or_default()
         };
 
-        // ─── 写入 .rdra（地面 + 聚类带点云）─────────────────────────────
+        // ─── 写入 .rdra ─────────────────────────────────────────────────
+        // cloud.db 写完整点云，其他只写语义，循环后复制+合并
+        writer_cloud.begin_frame(i);
+        writer_cloud.write_cloud(&cloud_pts, "cloud", 50000);
+        writer_cloud.end_frame();
+
         writer_ground.begin_frame(i);
-        writer_ground.write_cloud(&cloud_pts, "cloud", 50000);
         write_semantic_buds(&mut writer_ground, &ground_buds, MAT_GROUND);
         writer_ground.end_frame();
 
         writer_cluster.begin_frame(i);
-        writer_cluster.write_cloud(&cloud_pts, "cloud", 50000);
         write_targets(&mut writer_cluster, &cluster_buds);
         writer_cluster.end_frame();
 
@@ -273,9 +277,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         let t_end = iter_start.elapsed().as_secs_f64() * 1000.0;
 
-        // ─── 跟踪文件单独写（需要 targets 就绪） ──────────────────────────
+        // ─── 跟踪结果（只写 target box，不写点云） ──────────────────────
         writer_tracker.begin_frame(i);
-        writer_tracker.write_cloud(&cloud_pts, "cloud", 50000);
         write_tracker_targets(&mut writer_tracker, &targets);
         writer_tracker.end_frame();
 
@@ -295,10 +298,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         n_frames, total_elapsed, total_elapsed * 1000.0 / n_frames as f64);
     println!("══════════════════════════════════════════");
 
-    // ─── VACUUM 压缩 ─────────────────────────────────────────────────────
-    writer_ground.save()?;
-    writer_cluster.save()?;
-    writer_tracker.save()?;
+    // ─── 合并点云到语义文件 ──────────────────────────────────────────────
+    writer_cloud.save()?;
+    drop(writer_cloud);
+
+    let cloud_path = out_dir.join("cloud_result.db");
+    for (out_name, sem_name) in [
+        ("ground_result.db", "_sem_ground.db"),
+        ("cluster_result.db", "_sem_cluster.db"),
+        ("tracker_result.db", "_sem_tracker.db"),
+    ] {
+        let target = out_dir.join(out_name);
+        std::fs::copy(&cloud_path, &target)
+            .map_err(|e| format!("复制 {} 失败: {}", out_name, e))?;
+        FrameWriter::merge_from_db(&target, out_dir.join(sem_name))?;
+        let w = FrameWriter::new(&target)?;
+        w.save()?;
+        let _ = std::fs::remove_file(out_dir.join(sem_name));
+    }
+
     println!("输出保存至 {}/ 目录", out_dir.display());
 
     Ok(())

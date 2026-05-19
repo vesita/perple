@@ -14,6 +14,12 @@ from pathlib import Path
 # Python 自身 stdout 输出 UTF-8（解决管道捕获时中文乱码）
 sys.stdout.reconfigure(encoding='utf-8')
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from scripts.chart_style import (
+    C_BLUE, C_RED, C_GREEN, C_YELLOW, C_ORANGE, C_GRAY, C_DARK, C_CYAN,
+    COLORS_10, savefig, style_ax,
+)
+
 OUTPUT_DIR = Path("output/batch_40")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -163,14 +169,6 @@ def smart_fmt(v):
     return f"{v:.4f}"
 
 
-def _setup_chinese_font():
-    import matplotlib.pyplot as plt
-    # 论文格式：SimHei（黑体）用于中文，Times New Roman 用于英文/数字
-    plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'DejaVu Sans']
-    plt.rcParams['font.family'] = 'sans-serif'
-    plt.rcParams['axes.unicode_minus'] = False
-
-
 def plot_single_metric(results, runs, values, ylabel, title, filename,
                        color='C0', ylim=None, unit=''):
     """Plot a single metric with mean line, std band, and annotations."""
@@ -178,8 +176,6 @@ def plot_single_metric(results, runs, values, ylabel, title, filename,
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     import numpy as np
-
-    _setup_chinese_font()
 
     fig, ax = plt.subplots(figsize=(10, 5))
     mean_val = np.mean(values)
@@ -190,7 +186,6 @@ def plot_single_metric(results, runs, values, ylabel, title, filename,
     ax.fill_between(runs, mean_val - std_val, mean_val + std_val,
                     color=color, alpha=0.12, label=f'±1σ ({smart_fmt(std_val)}{unit})')
 
-    # Annotation box
     text = f'均值: {smart_fmt(mean_val)}{unit}\n标准差: {smart_fmt(std_val)}{unit}'
     ax.text(0.97, 0.95, text, transform=ax.transAxes, fontsize=12,
             verticalalignment='top', horizontalalignment='right',
@@ -204,12 +199,10 @@ def plot_single_metric(results, runs, values, ylabel, title, filename,
         ax.set_ylim(*ylim)
     ax.grid(True, alpha=0.25)
     ax.legend(fontsize=11, loc='lower right')
+    style_ax(ax)
 
-    plt.tight_layout()
-    filepath = OUTPUT_DIR / filename
-    plt.savefig(filepath, dpi=300, bbox_inches='tight')
-    plt.close(fig)
-    print(f"  √ {filepath.name}")
+    savefig(fig, OUTPUT_DIR / filename)
+    print(f"  √ {filename}")
 
 
 def plot_results(results: list[dict]):
@@ -221,42 +214,42 @@ def plot_results(results: list[dict]):
     plot_single_metric(
         results, runs, [r.get('person_f1', 0) * 100 for r in results],
         'F1 (%)', '行人检测 F1 分数 (Person F1)',
-        'fig_person_f1.png', color='#d62728', ylim=(50, 100), unit='%')
+        'fig_person_f1.png', color=C_RED, ylim=(50, 100), unit='%')
 
     # ── Person Precision ──
     plot_single_metric(
         results, runs, [r.get('person_precision', 0) for r in results],
         '精确率 (%)', '行人检测精确率 (Person Precision)',
-        'fig_person_precision.png', color='#2ca02c', ylim=(50, 100), unit='%')
+        'fig_person_precision.png', color=C_GREEN, ylim=(50, 100), unit='%')
 
     # ── Person Recall ──
     plot_single_metric(
         results, runs, [r.get('person_recall', 0) for r in results],
         '召回率 (%)', '行人检测召回率 (Person Recall)',
-        'fig_person_recall.png', color='#1f77b4', ylim=(0, 100), unit='%')
+        'fig_person_recall.png', color=C_BLUE, ylim=(0, 100), unit='%')
 
     # ── Spatial F1（转百分比）──
     plot_single_metric(
         results, runs, [r.get('spatial_f1', 0) * 100 for r in results],
         'F1 (%)', '空间匹配 F1 分数 (Spatial F1)',
-        'fig_spatial_f1.png', color='#9467bd', ylim=(50, 100), unit='%')
+        'fig_spatial_f1.png', color=C_ORANGE, ylim=(50, 100), unit='%')
 
     # ── TP / FP / FN (combined on one axis, separate lines) ──
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
-    _setup_chinese_font()
+    import numpy as np
 
     fig, ax = plt.subplots(figsize=(10, 5))
     tps = [r.get('person_tp', 0) for r in results]
     fps = [r.get('person_fp', 0) for r in results]
     fns = [r.get('person_fn', 0) for r in results]
 
-    ax.plot(runs, tps, 'o-', color='#2ca02c', markersize=5, linewidth=1.2, label='TP (正确检测)')
-    ax.plot(runs, fps, 's-', color='#d62728', markersize=5, linewidth=1.2, label='FP (误检)')
-    ax.plot(runs, fns, '^-', color='#7f7f7f', markersize=5, linewidth=1.2, label='FN (漏检)')
+    ax.plot(runs, tps, 'o-', color=C_GREEN, markersize=5, linewidth=1.2, label='TP (正确检测)')
+    ax.plot(runs, fps, 's-', color=C_RED, markersize=5, linewidth=1.2, label='FP (误检)')
+    ax.plot(runs, fns, '^-', color=C_GRAY, markersize=5, linewidth=1.2, label='FN (漏检)')
 
-    for vals, color, label in [(tps, '#2ca02c', 'TP'), (fps, '#d62728', 'FP'), (fns, '#7f7f7f', 'FN')]:
+    for vals, color, label in [(tps, C_GREEN, 'TP'), (fps, C_RED, 'FP'), (fns, C_GRAY, 'FN')]:
         m, s = np.mean(vals), np.std(vals)
         ax.axhline(m, color=color, linestyle='--', linewidth=0.8, alpha=0.5)
         ax.text(0.97, m, f'{label} μ={smart_fmt(m)} σ={smart_fmt(s)}',
@@ -269,40 +262,39 @@ def plot_results(results: list[dict]):
     ax.set_xlim(0.5, N_RUNS + 0.5)
     ax.grid(True, alpha=0.25)
     ax.legend(fontsize=12)
+    style_ax(ax)
 
-    plt.tight_layout()
-    plt.savefig(OUTPUT_DIR / 'fig_tp_fp_fn.png', dpi=300, bbox_inches='tight')
-    plt.close(fig)
+    savefig(fig, OUTPUT_DIR / 'fig_tp_fp_fn.png')
     print(f"  √ fig_tp_fp_fn.png")
 
     # ── Runtime ──
     plot_single_metric(
         results, runs, [r.get('elapsed_s', 0) for r in results],
         '耗时 (s)', '单次评估处理耗时 (408 帧)',
-        'fig_runtime.png', color='#1f77b4', unit='s')
+        'fig_runtime.png', color=C_BLUE, unit='s')
 
     # ── Detections count ──
     plot_single_metric(
         results, runs, [r.get('person_detections', 0) for r in results],
         '检测数', 'YOLO 行人检测数量',
-        'fig_detections.png', color='#ff7f0e')
+        'fig_detections.png', color=C_YELLOW)
 
     # ── Precision / Recall / F1 三者合图 ──
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
-    _setup_chinese_font()
+    import numpy as np
 
     fig, ax = plt.subplots(figsize=(10, 5))
     prec = [r.get('person_precision', 0) for r in results]
     rec  = [r.get('person_recall', 0) for r in results]
     f1   = [r.get('person_f1', 0) * 100 for r in results]
 
-    ax.plot(runs, prec, 'o-', color='#2ca02c', markersize=4, linewidth=1.0,
+    ax.plot(runs, prec, 'o-', color=C_GREEN, markersize=4, linewidth=1.0,
             label=f'精确率 μ={smart_fmt(np.mean(prec))}% σ={smart_fmt(np.std(prec))}%')
-    ax.plot(runs, rec,  's-', color='#1f77b4', markersize=4, linewidth=1.0,
+    ax.plot(runs, rec,  's-', color=C_BLUE, markersize=4, linewidth=1.0,
             label=f'召回率 μ={smart_fmt(np.mean(rec))}% σ={smart_fmt(np.std(rec))}%')
-    ax.plot(runs, f1,   '^-', color='#d62728', markersize=4, linewidth=1.0,
+    ax.plot(runs, f1,   '^-', color=C_RED, markersize=4, linewidth=1.0,
             label=f'F1 μ={smart_fmt(np.mean(f1))}% σ={smart_fmt(np.std(f1))}%')
 
     ax.set_xlabel('运行次数', fontsize=14)
@@ -312,10 +304,9 @@ def plot_results(results: list[dict]):
     ax.set_ylim(50, 100)
     ax.grid(True, alpha=0.25)
     ax.legend(fontsize=11, loc='lower right')
+    style_ax(ax)
 
-    plt.tight_layout()
-    plt.savefig(OUTPUT_DIR / 'fig_prf_combined.png', dpi=300, bbox_inches='tight')
-    plt.close(fig)
+    savefig(fig, OUTPUT_DIR / 'fig_prf_combined.png')
     print(f"  √ fig_prf_combined.png")
 
 

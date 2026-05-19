@@ -24,8 +24,8 @@ params = [
   { min_occ = 5, eps = 0.40, min_pts = 5 },
 ]
 [stats]
-fastest_ms = 16.5025
-slowest_ms = 17.318299999999997
-avg_ms = 16.840975
-median_ms = 16.771549999999998
-last_run = "1778762079"
+fastest_ms = 4.1746
+slowest_ms = 4.5249
+avg_ms = 4.356225
+median_ms = 4.3627
+last_run = "1779170380"
