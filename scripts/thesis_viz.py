@@ -112,7 +112,7 @@ def plot_main_metrics(results):
 
 def plot_strategy_comparison():
     strategies = [
-        ("prune_qt",   79.3, 58.6, 0.674),
+        ("剪叶聚类",   79.3, 58.6, 0.674),
         ("xy_grid_dbscan", 60.1, 59.6, 0.598),
         ("dbscan_qt",  61.4, 56.7, 0.589),
         ("lvdot",      74.9, 47.3, 0.580),
