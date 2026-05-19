@@ -1,5 +1,8 @@
+use std::sync::Arc;
+
 use super::ClusteringStrategy;
 use crate::cloud::classify::quadtree::QuadTreeNode;
+use crate::cloud::classify::split_policy::{AdaptiveDepthPolicy, FixedDepthPolicy, SplitPolicy};
 use crate::cloud::wall::{WallPickStrategy, BevLsd, cluster_obstacles_with_indices};
 
 /// 剪叶四叉树聚类策略（prune_qt）。
@@ -24,8 +27,8 @@ pub struct PruneQt {
     min_occ: usize,
     /// 四叉树叶节点容量（越小叶片越精细）
     max_pts_per_node: usize,
-    /// 四叉树最大深度
-    max_depth: usize,
+    /// 分裂策略（固定深度 / 自适应分辨率）
+    split_policy: Arc<dyn SplitPolicy>,
     /// DBSCAN 半径
     eps: f32,
     /// DBSCAN 核心点阈值
@@ -45,7 +48,7 @@ impl PruneQt {
             box_max_range: 12.0,
             min_occ: 4,
             max_pts_per_node: 20,
-            max_depth: 10,
+            split_policy: Arc::new(FixedDepthPolicy::new(10)),
             eps: 0.20,
             min_pts: 5,
             use_border_points: false,
@@ -74,6 +77,12 @@ impl PruneQt {
         self.min_occ = min_occ;
         self.eps = eps;
         self.min_pts = min_pts;
+        self
+    }
+
+    /// 使用自适应分辨率策略（距离越远叶子越粗）
+    pub fn with_adaptive_depth(mut self, res0: f32, r0: f32, beta: f32, global_max_depth: usize) -> Self {
+        self.split_policy = Arc::new(AdaptiveDepthPolicy { global_max_depth, res0, r0, beta });
         self
     }
 }
@@ -114,7 +123,7 @@ impl ClusteringStrategy for PruneQt {
         let (x_min, x_max, y_min, y_max) = compute_bounds_xy(&cluster_input);
         let mut qt = QuadTreeNode::new(x_min, x_max, y_min, y_max)
             .with_max_pts_per_node(self.max_pts_per_node)
-            .with_max_depth(self.max_depth);
+            .with_policy(Arc::clone(&self.split_policy));
         for i in 0..cluster_input.len() {
             qt.insert_point(i, &cluster_input);
         }
@@ -151,7 +160,7 @@ impl ClusteringStrategy for PruneQt {
             let (x_min, x_max, y_min, y_max) = compute_bounds_xy(&sampled);
             let mut db_qt = QuadTreeNode::new(x_min, x_max, y_min, y_max)
                 .with_max_pts_per_node(self.max_pts_per_node)
-                .with_max_depth(self.max_depth);
+                .with_policy(Arc::clone(&self.split_policy));
             for i in 0..sampled.len() {
                 db_qt.insert_point(i, &sampled);
             }

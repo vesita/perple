@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use crate::config::fixif;
+use crate::cloud::classify::split_policy::FixedDepthPolicy;
 use super::ClusteringStrategy;
 
 use super::super::quadtree::QuadTreeNode;
@@ -191,7 +193,7 @@ impl DbscanStrategy {
     fn build_quad_tree(&mut self, points: &Vec<[f32; 3]>) {
         let mut root = QuadTreeNode::new(self.x_min, self.x_max, self.y_min, self.y_max)
             .with_max_pts_per_node(self.max_points_per_node)
-            .with_max_depth(self.max_tree_depth);
+            .with_policy(Arc::new(FixedDepthPolicy::new(self.max_tree_depth)));
         for i in 0..points.len() {
             root.insert_point(i, points);
         }

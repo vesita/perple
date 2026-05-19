@@ -1,4 +1,7 @@
+use std::sync::Arc;
 use std::vec::Vec;
+
+use super::split_policy::{FixedDepthPolicy, SplitPolicy};
 
 /// 四叉树叶节点信息（collect_leaves 产出）
 pub struct QuadLeaf {
@@ -20,12 +23,12 @@ pub struct QuadTreeNode {
     is_leaf: bool,
     /// 每个节点最大点数（超过则细分）
     max_pts_per_node: usize,
-    /// 最大深度
-    max_depth: usize,
+    /// 分裂策略（控制最大深度 / 自适应分辨率）
+    policy: Arc<dyn SplitPolicy>,
 }
 
 impl QuadTreeNode {
-    /// 创建根节点，使用默认参数（max_pts_per_node=50, max_depth=10）。
+    /// 创建根节点，使用默认参数（max_pts_per_node=50, FixedDepthPolicy=10）。
     pub fn new(x_min: f32, x_max: f32, y_min: f32, y_max: f32) -> Self {
         Self {
             x_min,
@@ -36,7 +39,7 @@ impl QuadTreeNode {
             children: None,
             is_leaf: true,
             max_pts_per_node: 50,
-            max_depth: 10,
+            policy: Arc::new(FixedDepthPolicy::default()),
         }
     }
 
@@ -45,8 +48,8 @@ impl QuadTreeNode {
         self
     }
 
-    pub fn with_max_depth(mut self, d: usize) -> Self {
-        self.max_depth = d;
+    pub fn with_policy(mut self, policy: Arc<dyn SplitPolicy>) -> Self {
+        self.policy = policy;
         self
     }
 
@@ -57,16 +60,16 @@ impl QuadTreeNode {
         let ch = [
             Box::new(Self::new(self.x_min, x_mid, self.y_min, y_mid)
                 .with_max_pts_per_node(self.max_pts_per_node)
-                .with_max_depth(self.max_depth)),
+                .with_policy(Arc::clone(&self.policy))),
             Box::new(Self::new(x_mid, self.x_max, self.y_min, y_mid)
                 .with_max_pts_per_node(self.max_pts_per_node)
-                .with_max_depth(self.max_depth)),
+                .with_policy(Arc::clone(&self.policy))),
             Box::new(Self::new(self.x_min, x_mid, y_mid, self.y_max)
                 .with_max_pts_per_node(self.max_pts_per_node)
-                .with_max_depth(self.max_depth)),
+                .with_policy(Arc::clone(&self.policy))),
             Box::new(Self::new(x_mid, self.x_max, y_mid, self.y_max)
                 .with_max_pts_per_node(self.max_pts_per_node)
-                .with_max_depth(self.max_depth)),
+                .with_policy(Arc::clone(&self.policy))),
         ];
         self.children = Some(ch);
         self.is_leaf = false;
@@ -88,7 +91,10 @@ impl QuadTreeNode {
 
     fn insert_point_rec(&mut self, point_idx: usize, points: &[[f32; 3]], depth: usize) {
         if self.is_leaf {
-            if self.points.len() < self.max_pts_per_node || depth >= self.max_depth {
+            let cx = (self.x_min + self.x_max) / 2.0;
+            let cy = (self.y_min + self.y_max) / 2.0;
+            let should_split = self.policy.should_split(depth, cx, cy, self.diagonal());
+            if self.points.len() < self.max_pts_per_node || !should_split {
                 self.points.push(point_idx);
                 return;
             }
@@ -152,7 +158,7 @@ impl QuadTreeNode {
     /// 子节点继承父节点 1/4 的 max_pts_per_node。
     /// 只对叶节点有效；已分裂节点或无点节点无操作。
     pub fn force_split(&mut self, points: &[[f32; 3]], depth: usize) {
-        if !self.is_leaf || depth >= self.max_depth || self.points.is_empty() {
+        if !self.is_leaf || depth >= self.policy.global_max_depth() || self.points.is_empty() {
             return;
         }
         self.subdivide();
@@ -172,7 +178,7 @@ impl QuadTreeNode {
     /// 直至所有叶节点满足条件或达到 max_depth。
     pub fn split_large_leaves(&mut self, max_diag: f32, points: &[[f32; 3]], depth: usize) {
         if self.is_leaf {
-            if self.diagonal() > max_diag && depth < self.max_depth && !self.points.is_empty() {
+            if self.diagonal() > max_diag && depth < self.policy.global_max_depth() && !self.points.is_empty() {
                 self.force_split(points, depth);
                 for child in self.children.as_mut().unwrap().iter_mut() {
                     child.split_large_leaves(max_diag, points, depth + 1);
