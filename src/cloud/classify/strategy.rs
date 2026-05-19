@@ -76,10 +76,16 @@ pub fn create_strategy(pre_extracted_wall: bool) -> Box<dyn ClusteringStrategy> 
         }
         "prune_qt" | "lvdot_qt" => {
             let min_pts = cfg.cluster.min_points_per_cluster.unwrap_or(5) as usize;
-            log::info!("聚类策略: prune_qt (min_occ={}, eps={}, min_pts={})",
-                cfg.cluster.min_occ, cfg.cluster.merge_patience, min_pts);
-            let s = PruneQt::new()
+            let mut s = PruneQt::new()
                 .with_params(cfg.cluster.min_occ, cfg.cluster.merge_patience, min_pts);
+            if cfg.cluster.adaptive_depth {
+                let c = &cfg.cluster;
+                log::info!("  adaptive_depth: res0={}, r0={}, beta={}, max_depth={}",
+                    c.adaptive_res0, c.adaptive_r0, c.adaptive_beta, c.adaptive_global_max_depth);
+                s = s.with_adaptive_depth(
+                    c.adaptive_res0, c.adaptive_r0,
+                    c.adaptive_beta, c.adaptive_global_max_depth);
+            }
             Box::new(if pre_extracted_wall { s.with_pre_extracted_wall() } else { s })
         }
         "dbscan_light" => {

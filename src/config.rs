@@ -87,6 +87,12 @@ pub struct ClusterConfig {
     pub denoise_min_pts: usize,
     // 剪叶聚类 (prune_qt) 参数
     pub min_occ: usize,
+    // 自适应深度分裂（根据距离动态调整四叉树分辨率）
+    pub adaptive_depth: bool,
+    pub adaptive_res0: f32,
+    pub adaptive_r0: f32,
+    pub adaptive_beta: f32,
+    pub adaptive_global_max_depth: usize,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -258,6 +264,11 @@ impl Config {
         update_cluster_field!(denoise_radius);
         update_cluster_field!(denoise_min_pts);
         update_cluster_field!(min_occ);
+        update_cluster_field!(adaptive_depth);
+        update_cluster_field!(adaptive_res0);
+        update_cluster_field!(adaptive_r0);
+        update_cluster_field!(adaptive_beta);
+        update_cluster_field!(adaptive_global_max_depth);
         // Option-typed fields — macro destructures to inner type, re-wrap
         if let Some(ref cluster) = partial_config.cluster {
             if let Some(value) = cluster.min_points_per_cluster {

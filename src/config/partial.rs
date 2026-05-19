@@ -114,4 +114,9 @@ pub(crate) struct PartialClusterConfig {
     pub denoise_radius: Option<f32>,
     pub denoise_min_pts: Option<usize>,
     pub min_occ: Option<usize>,
+    pub adaptive_depth: Option<bool>,
+    pub adaptive_res0: Option<f32>,
+    pub adaptive_r0: Option<f32>,
+    pub adaptive_beta: Option<f32>,
+    pub adaptive_global_max_depth: Option<usize>,
 }
