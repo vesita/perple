@@ -39,14 +39,15 @@ impl SplitPolicy for FixedDepthPolicy {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AdaptiveDepthPolicy — 距离自适应分辨率
+// AdaptiveDepthPolicy — 距离自适应分辨率（对数衰减）
 //
-// 核心公式（log₂ + 抑制系数）：
-//   target_res(r) = res₀ * (1 + β * log₂(max(r, r₀) / r₀))
+// 核心公式：
+//   target_res(r) = res₀ * (1 + β * log₂(1 + r / r₀))
 //
 // 其中 r = √(cx² + cy²) 是节点中心到传感器的距离。
-// 近处（r ≤ r₀）保持 res₀ 的精细分辨率，远处分辨率按 log₂ 缓慢增大。
-// β 控制增长速率：β=0 → 恒定分辨率；β=1 → 每次距离翻倍，分辨率粗化一倍。
+// β 控制分辨率随对数距离的增长速率。
+// 相比于 log₂(r/r₀) 形式，log₂(1+r/r₀) 在 r=0 处自然为 0（log₂1=0），
+// 无需条件分支，且 β 物理含义更直观：β = (res(r₀) / res₀) - 1。
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -57,20 +58,21 @@ pub struct AdaptiveDepthPolicy {
     pub res0: f32,
     /// 基准距离（米），r ≤ r₀ 时不衰减
     pub r0: f32,
-    /// 抑制系数，β ∈ [0, 2]
+    /// 增长系数 β ∈ [0, 2]。β=0 恒定；β=1 时距离翻倍则粗化一倍。
     pub beta: f32,
 }
 
 impl AdaptiveDepthPolicy {
     /// 在 (cx, cy) 处的目标叶子对角线长度
+    ///
+    /// 公式：res(r) = res₀ * (1 + β * log₂(1 + r / r₀))
+    ///
+    /// 相比 log₂(r/r₀) 的优势：在 r=0 处连续（log₂1=0），没有条件分支，
+    /// 且 β 直接表示"在 r₀ 处分辨率的相对增量"。
     pub fn target_resolution(&self, cx: f32, cy: f32) -> f32 {
-        let r_sq = cx * cx + cy * cy;
-        let r0_sq = self.r0 * self.r0;
-        if r_sq <= r0_sq {
-            return self.res0;
-        }
-        let log2_ratio = 0.5 * (r_sq / r0_sq).log2();
-        self.res0 * (1.0 + self.beta * log2_ratio)
+        let r = (cx * cx + cy * cy).sqrt();
+        let log2_arg = 1.0 + r / self.r0;
+        self.res0 * (1.0 + self.beta * log2_arg.log2())
     }
 }
 
