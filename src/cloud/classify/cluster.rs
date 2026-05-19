@@ -214,7 +214,6 @@ impl Cluster {
 pub fn clusters_to_cldbuds(all_points: &[[f32; 3]], objects: &[Vec<usize>]) -> Vec<CldBud> {
     let cluster_cfg = &crate::config::fixif().cluster;
     let alpha = cluster_cfg.density_weight_alpha;
-    let max_r = cluster_cfg.max_range;
     objects
         .iter()
         .filter(|c| !c.is_empty())
@@ -233,11 +232,11 @@ pub fn clusters_to_cldbuds(all_points: &[[f32; 3]], objects: &[Vec<usize>]) -> V
             // 盒子中心过低 → 地面残留噪点（用 AABB 中心 Z，不受密度加权偏移影响）
             if box3d.center().z < 0.2 { return None; }
 
-            // 边界过滤：盒子超出有效检测范围时丢弃
-            let c = box3d.center();
-            let center_dist = (c.x * c.x + c.y * c.y).sqrt();
-            let half_diag = (box3d.length * box3d.length + box3d.width * box3d.width).sqrt() * 0.5;
-            if center_dist + half_diag > max_r { return None; }
+            // 边界过滤：盒子超出有效检测范围时丢弃（已禁用，用于对比实验）
+            // let c = box3d.center();
+            // let center_dist = (c.x * c.x + c.y * c.y).sqrt();
+            // let half_diag = (box3d.length * box3d.length + box3d.width * box3d.width).sqrt() * 0.5;
+            // if center_dist + half_diag > max_r { return None; }
 
             // 点云稀疏度过滤：大体积内点数过少 → 离群噪点
             let n_pts = cluster.len() as f32;

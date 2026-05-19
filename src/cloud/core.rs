@@ -113,6 +113,12 @@ impl Lidar {
             }
         };
 
+        // 距离硬过滤：在地面检测之前剔除超出有效范围的点
+        let max_range = crate::config::fixif().max_range;
+        let data: Vec<[f32; 3]> = data.into_iter()
+            .filter(|p| (p[0] * p[0] + p[1] * p[1]).sqrt() <= max_range)
+            .collect();
+
         {
             let mut stream = self.cream.out_stream.lock().unwrap();
             stream.write(data)?;

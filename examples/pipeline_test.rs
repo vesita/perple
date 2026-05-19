@@ -161,13 +161,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut fuse = Fuse::new();
     let mut tracker = Tracker::new();
 
-    // 四个独立输出流（每次运行独立子目录）
+    // 三个独立输出流（每次运行独立子目录）
     let out_dir = {
         let secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
         PathBuf::from(format!("output/pipeline_test_{}", secs))
     };
     let mut writer_ground = FrameWriter::new(out_dir.join("ground_result.db"))?;
-    let mut writer_wall = FrameWriter::new(out_dir.join("wall_result.db"))?;
     let mut writer_cluster = FrameWriter::new(out_dir.join("cluster_result.db"))?;
     let mut writer_tracker = FrameWriter::new(out_dir.join("tracker_result.db"))?;
 
@@ -236,21 +235,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let ground_buds: Vec<CldBud> = {
             swapl.ground_buds.consumer().lock().unwrap().clone()
         };
-        let wall_buds: Vec<CldBud> = {
-            swapl.wall_buds.consumer().lock().unwrap().clone()
-        };
         let cluster_buds: Vec<CldBud> = swapl.cld_buds_raw.consumer().lock().unwrap().clone();
 
-        // ─── 写入 .rdra ──────────────────────────────────────────────────
+        // 完整点云（地面去除前）
+        let cloud_pts = {
+            let stream = swapl.clouds_out.lock().unwrap();
+            stream.peek_latest().unwrap_or_default()
+        };
+
+        // ─── 写入 .rdra（地面 + 聚类带点云）─────────────────────────────
         writer_ground.begin_frame(i);
+        writer_ground.write_cloud(&cloud_pts, "cloud", 50000);
         write_semantic_buds(&mut writer_ground, &ground_buds, MAT_GROUND);
         writer_ground.end_frame();
 
-        writer_wall.begin_frame(i);
-        write_semantic_buds(&mut writer_wall, &wall_buds, MAT_WALL);
-        writer_wall.end_frame();
-
         writer_cluster.begin_frame(i);
+        writer_cluster.write_cloud(&cloud_pts, "cloud", 50000);
         write_targets(&mut writer_cluster, &cluster_buds);
         writer_cluster.end_frame();
 
@@ -273,6 +273,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         let t_end = iter_start.elapsed().as_secs_f64() * 1000.0;
 
+        // ─── 跟踪文件单独写（需要 targets 就绪） ──────────────────────────
+        writer_tracker.begin_frame(i);
+        writer_tracker.write_cloud(&cloud_pts, "cloud", 50000);
+        write_tracker_targets(&mut writer_tracker, &targets);
+        writer_tracker.end_frame();
+
         if i % 50 == 0 || i == n_frames - 1 || i < 5 {
             println!("  join={:.0}  spawn={:.0}  fuse={:.0}  io={:.0}  tracker={:.0}  read={:.0}  iter={:.0}ms",
                 t_join, t_swaps - t_join, t_fuse - t_swaps, t_io - t_fuse, t_tracker - t_io, t_end - t_tracker, t_end);
@@ -280,10 +286,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         print_stats(i, n_frames, t_end, n_filtered_pts, cluster_buds.len(),
                     targets.len(), &targets);
-
-        writer_tracker.begin_frame(i);
-        write_tracker_targets(&mut writer_tracker, &targets);
-        writer_tracker.end_frame();
     }
 
     let total_elapsed = total_start.elapsed().as_secs_f64();
@@ -295,7 +297,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ─── VACUUM 压缩 ─────────────────────────────────────────────────────
     writer_ground.save()?;
-    writer_wall.save()?;
     writer_cluster.save()?;
     writer_tracker.save()?;
     println!("输出保存至 {}/ 目录", out_dir.display());

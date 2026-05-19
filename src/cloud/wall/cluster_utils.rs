@@ -5,8 +5,8 @@ use super::xy_grid::{CellKey, XYGrid};
 /// 对非墙面点做网格连通域聚类，返回每个簇的 AABB。
 ///
 /// 纯 XY 连通，Z 仅用于最终包围盒高度。
-pub fn cluster_obstacles(points: &[[f32; 3]], cell_size: f32, min_pts: usize, min_edge: f32, max_range: f32) -> Vec<Box3D> {
-    let (boxes, _) = cluster_obstacles_with_indices(points, cell_size, min_pts, min_edge, max_range);
+pub fn cluster_obstacles(points: &[[f32; 3]], cell_size: f32, min_pts: usize, min_edge: f32, _max_range: f32) -> Vec<Box3D> {
+    let (boxes, _) = cluster_obstacles_with_indices(points, cell_size, min_pts, min_edge, _max_range);
     boxes
 }
 
@@ -14,6 +14,7 @@ pub fn cluster_obstacles(points: &[[f32; 3]], cell_size: f32, min_pts: usize, mi
 ///
 /// 与 `cluster_obstacles` 相同算法，额外返回每个 box 对应的点索引，
 /// 供下游 DBSCAN 精化使用。
+#[allow(unused_variables)]
 pub fn cluster_obstacles_with_indices(
     points: &[[f32; 3]], cell_size: f32, min_pts: usize, min_edge: f32, max_range: f32,
 ) -> (Vec<Box3D>, Vec<Vec<usize>>) {
@@ -63,9 +64,10 @@ pub fn cluster_obstacles_with_indices(
             &indices.iter().map(|&i| points[i]).collect::<Vec<_>>(),
             min_edge,
         );
-        if max_range > 0.0 && !box3d.is_in_xy_range([0.0; 3], max_range) {
-            continue;
-        }
+        // 距离硬过滤（已禁用，用于对比实验）
+        // if max_range > 0.0 && !box3d.is_in_xy_range([0.0; 3], max_range) {
+        //     continue;
+        // }
         boxes.push(box3d);
         all_indices.push(indices);
     }
