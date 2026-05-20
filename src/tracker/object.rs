@@ -168,15 +168,16 @@ impl TrackedObject {
     pub(crate) fn predict(&mut self, dt: f64) -> Result<(), adskalman::Error> {
         self.kalman_filter.predict(dt)?;
 
-        // 从 KF 状态构建 predicted_box（位置 + 尺寸来自滤波）
-        if self.last_box.is_some() {
+        // 从 KF 状态构建 predicted_box（尺寸来自滤波，位置覆盖为 last_box）
+        if let Some(ref last) = self.last_box {
             let pos = self.kalman_filter.get_position();
             let size = self.kalman_filter.get_size();
-            let pb = Box3D::from_position_and_angles(
+            let mut pb = Box3D::from_position_and_angles(
                 pos.x as f32, pos.y as f32, self.z_ema as f32,
                 0.0, 0.0, 0.0,
                 size.x as f32, size.y as f32, size.z as f32,
             );
+            pb.pose = last.pose;
             self.predicted_box = Some(pb);
         }
         Ok(())

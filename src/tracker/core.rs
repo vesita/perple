@@ -429,11 +429,12 @@ impl Tracker {
                 } else {
                     obj.last_box.as_ref().cloned().unwrap_or_else(Box3D::empty_box)
                 };
-                let predicted_box = Box3D::from_position_and_angles(
+                let mut predicted_box = Box3D::from_position_and_angles(
                     pos.x as f32, pos.y as f32, z_out,
                     0.0, 0.0, 0.0,
                     ref_box.length, ref_box.width, ref_box.height,
                 );
+                predicted_box.pose = ref_box.pose;
 
                 let class_str = match obj.classification {
                     TargetClass::Static => "static",
