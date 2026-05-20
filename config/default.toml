@@ -127,7 +127,7 @@ vel_smoothing_alpha = 0.25
 class_cooldown_frames = 15
 
 # Kalman 滤波器 9D CA 模型参数（可通过 eval_ablation --tracker-toml 覆盖）
-kf_process_noise_pos = 0.1        # 位置过程噪声：预测位置不确定性
+kf_process_noise_pos = 0.25       # 位置过程噪声：预测位置不确定性（0.25 在 4D CV 下平衡 FP/TP）
 kf_process_noise_vel = 0.05       # 速度过程噪声：允许速度变化（0.02→0.05 更灵活）
 kf_process_noise_acc = 1.0        # 加速度过程噪声（0.5→1.0 允许更大加速度变化）
 kf_process_noise_size = 0.01      # 尺寸过程噪声：尺寸变化慢
@@ -139,7 +139,7 @@ kf_initial_covariance_scale = 1.0  # 初始协方差缩放（0.5→1.0 加快收
 kf_gate_threshold = 3.5           # 新息门控：马氏距离超过此值用位置-only修正
 geo_pass_threshold = 6            # 几何后端连续通过帧数阈值
 geo_fail_threshold = 5            # 几何后端连续失败回退阈值
-geo_speed_threshold = 0.6         # 速度激活阈值(m/s)，超过此值直接标为 person（与几何 OR）
+geo_speed_threshold = 0.8         # 速度激活阈值(m/s)，超过此值直接标为 person（0.8 降低误激活）
 use_trick = true                  # 几何形状行人判断开关（false 则完全跳过，纯靠 YOLO/Fuse 标签）
 
 # 航迹分级管理
