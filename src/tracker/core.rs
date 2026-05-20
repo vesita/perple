@@ -92,12 +92,8 @@ impl Tracker {
             dt: 0.04,
             process_noise_pos: cfg.kf_process_noise_pos,
             process_noise_vel: cfg.kf_process_noise_vel,
-            process_noise_acc: cfg.kf_process_noise_acc,
-            process_noise_size: cfg.kf_process_noise_size,
             measurement_noise_pos: cfg.kf_measurement_noise_pos,
             measurement_noise_vel: cfg.kf_measurement_noise_vel,
-            measurement_noise_acc: cfg.kf_measurement_noise_acc,
-            measurement_noise_size: cfg.kf_measurement_noise_size,
             initial_covariance_scale: cfg.kf_initial_covariance_scale,
         };
         Self {

@@ -69,7 +69,7 @@ pub(crate) struct TrackedObject {
     pub(crate) smoothed_box: Option<Box3D>,
     /// 速度 EMA 系数（0=自适应置信度）
     pub(crate) vel_smoothing_alpha: f32,
-    /// Z 独立 EMA（KF 状态不含 z，用 EMA 平滑跟踪）
+    /// Z 独立 EMA（KF 4D 不含 z，用 EMA 跟踪）
     pub(crate) z_ema: f64,
     /// 最后一次更新的点云质心（用于特征级关联的质心偏移一致性）
     pub(crate) last_centroid: [f32; 3],
@@ -115,15 +115,11 @@ impl TrackedObject {
         // 几何→obstacle 过渡器冷却（geo_fail_threshold）
         geo_demote_cooldown: u32,
     ) -> Result<Self, adskalman::Error> {
-        // 9D CA 模型：状态 [x, y, vx, vy, ax, ay, l, w, h]
+        // 4D CV 模型：状态 [x, y, vx, vy]
         let mut kalman_filter = KalmanFilterCA::new(kalman_config)?;
-        let init_state = SVector::<f64, 9>::from_column_slice(&[
-            centroid[0] as f64, centroid[1] as f64, // x, y
-            0.0, 0.0,        // vx, vy
-            0.0, 0.0,        // ax, ay
-            initial_box.length as f64,
-            initial_box.width as f64,
-            initial_box.height as f64,
+        let init_state = SVector::<f64, 4>::from_column_slice(&[
+            centroid[0] as f64, centroid[1] as f64,
+            0.0, 0.0,
         ]);
         kalman_filter.init_with_state(init_state);
         Ok(Self {
@@ -168,14 +164,13 @@ impl TrackedObject {
     pub(crate) fn predict(&mut self, dt: f64) -> Result<(), adskalman::Error> {
         self.kalman_filter.predict(dt)?;
 
-        // 从 KF 状态构建 predicted_box（尺寸来自滤波，位置覆盖为 last_box）
+        // KF 提供 xy，z 用 EMA
         if let Some(ref last) = self.last_box {
             let pos = self.kalman_filter.get_position();
-            let size = self.kalman_filter.get_size();
             let mut pb = Box3D::from_position_and_angles(
                 pos.x as f32, pos.y as f32, self.z_ema as f32,
                 0.0, 0.0, 0.0,
-                size.x as f32, size.y as f32, size.z as f32,
+                last.length, last.width, last.height,
             );
             pb.pose = last.pose;
             self.predicted_box = Some(pb);
@@ -183,12 +178,10 @@ impl TrackedObject {
         Ok(())
     }
 
-    /// 修正（LV-DOT 风格）：用 [x,y,z,vx,vy,vz,ax,ay,az] 校正
+    /// 修正（LV-DOT 风格）：用 [x,y,vx,vy] 校正
     ///
     /// - 位置 (x,y) 来自当前帧点云质心 centroid
     /// - 速度 (vx,vy) 通过 k 帧位置差计算
-    /// - 加速度 (ax,ay) 通过速度历史差计算
-    /// - 尺寸 (l,w,h) 直接观测
     /// - z 用独立 EMA 跟踪（不在 KF 状态中）
     pub(crate) fn correct(
         &mut self,
@@ -205,7 +198,7 @@ impl TrackedObject {
         const Z_ALPHA: f64 = 0.3;
         self.z_ema = Z_ALPHA * centroid[2] as f64 + (1.0 - Z_ALPHA) * self.z_ema;
 
-        // 记录位置历史（保持 3D 用于 z_ema）
+        // 记录位置历史（用于 k 帧速度观测）
         self.position_history.push_back([
             centroid[0] as f64,
             centroid[1] as f64,
@@ -215,10 +208,10 @@ impl TrackedObject {
             self.position_history.pop_front();
         }
 
-        // v = (pos_t - pos_{t-k}) / (k * dt) — 仅 2D
+        // v = (pos_t - pos_{t-k}) / (k * dt)
         let hist_len = self.position_history.len();
         let k = self.kf_avg_frames.min(hist_len.saturating_sub(1));
-        const MIN_K_FOR_VELOCITY: usize = 2; // was 3: 更快获得速度观测
+        const MIN_K_FOR_VELOCITY: usize = 2;
         if k >= MIN_K_FOR_VELOCITY {
             let old = self.position_history[hist_len - 1 - k];
             let curr = *self.position_history.back().unwrap();
@@ -226,39 +219,21 @@ impl TrackedObject {
             let meas_vx = (curr[0] - old[0]) / dt_k;
             let meas_vy = (curr[1] - old[1]) / dt_k;
 
-            // 加速度：a = (v_t - v_{t-k}) / (k*dt) — 仅 2D
-            let vel_hist_len = self.kf_vel_history.len();
-            let k_acc = self.kf_avg_frames.min(vel_hist_len);
-            const MIN_K_FOR_ACC: usize = 3;
-            let (meas_ax, meas_ay) = if k_acc >= MIN_K_FOR_ACC {
-                let old_v = self.kf_vel_history[vel_hist_len - k_acc];
-                let dt_k_acc = (k_acc as f64 * dt_since_last).max(0.001);
-                ((meas_vx - old_v[0]) / dt_k_acc,
-                 (meas_vy - old_v[1]) / dt_k_acc)
-            } else {
-                (0.0, 0.0)
-            };
-
-            // 9D 观测：[x, y, vx, vy, ax, ay, l, w, h]
-            let measurement = SVector::<f64, 9>::from_column_slice(&[
+            // 4D 观测：[x, y, vx, vy]
+            let measurement = SVector::<f64, 4>::from_column_slice(&[
                 centroid[0] as f64, centroid[1] as f64,
                 meas_vx, meas_vy,
-                meas_ax, meas_ay,
-                new_box.length as f64,
-                new_box.width as f64,
-                new_box.height as f64,
             ]);
-            // 使用带新息门控的修正（异常测量时降级到位置only）
             self.kalman_filter.correct_with_gating(measurement, self.kf_gate_threshold)?;
         } else {
-            // 历史不足，仅 (x,y) 位置修正
+            // 历史不足，仅位置修正
             self.kalman_filter.correct_position(Vector2::new(
                 centroid[0] as f64,
                 centroid[1] as f64,
             ))?;
         }
 
-        // 限幅：速度 3.0 m/s，加速度 10.0 m/s²，尺寸 [0.05, 20.0]m
+        // 限幅：速度 3.0 m/s
         self.kalman_filter.clamp_state(3.0, 10.0, 0.05, 20.0);
 
         // 记录 KF 原始速度（用于加速度观测）
