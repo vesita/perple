@@ -41,7 +41,7 @@ pub(crate) fn apply_state_machine(
             if obj.floating_settler.feed(&in_static_cluster) {
                 obj.classification = TargetClass::Static;
             }
-            if obj.voting_promoter.feed(&(voting_active && speed >= 0.2)) {
+            if obj.voting_promoter.feed(&(voting_active && speed >= moving_speed_threshold)) {
                 obj.classification = TargetClass::Moving;
                 obj.confirmed_moving = true;
             }

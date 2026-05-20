@@ -234,7 +234,8 @@ impl Tracker {
         for (obj_id, det_idx) in &matches {
             let detection = &current_detections[*det_idx];
             if let Some(obj) = self.tracked_objects.get_mut(obj_id) {
-                let mut centroid = detection.centroid;
+                // 用 AABB 中心而非点云质心修正 KF，使输出位置与 GT/评估约定一致
+                let mut centroid = detection.the_box.center_single();
                 if self.use_centroid_smoothing {
                     obj.apply_centroid_lpf(&mut centroid, self.centroid_fc_min, self.centroid_beta);
                 }
@@ -266,7 +267,7 @@ impl Tracker {
                 &detection.the_box,
                 detection.class_name.clone(),
                 detection.confidence,
-                detection.centroid,
+                detection.the_box.center_single(),
                 self.kf_avg_frames,
                 self.vel_smoothing_alpha,
                 self.kalman_config.clone(),
@@ -428,12 +429,11 @@ impl Tracker {
                 } else {
                     obj.last_box.as_ref().cloned().unwrap_or_else(Box3D::empty_box)
                 };
-                let mut predicted_box = Box3D::from_position_and_angles(
+                let predicted_box = Box3D::from_position_and_angles(
                     pos.x as f32, pos.y as f32, z_out,
                     0.0, 0.0, 0.0,
                     ref_box.length, ref_box.width, ref_box.height,
                 );
-                predicted_box.pose = ref_box.pose;
 
                 let class_str = match obj.classification {
                     TargetClass::Static => "static",
