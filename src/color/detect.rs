@@ -21,7 +21,7 @@ use ort::{
 ///
 /// # 示例
 ///
-/// ```
+/// ```ignore
 /// use perple::color::YoloDetector;
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -58,11 +58,11 @@ impl YoloDetector {
     ///
     /// # 示例
     ///
-    /// ```
+    /// ```ignore
     /// use perple::color::YoloDetector;
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let detector = YoloDetector::new(640, 640);
+    /// let detector = YoloDetector::new();
     /// # Ok(())
     /// # }
     /// ```

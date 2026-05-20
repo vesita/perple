@@ -91,6 +91,7 @@ pub(crate) struct PartialTrackerConfig {
     pub geo_pass_threshold: Option<u32>,
     pub geo_fail_threshold: Option<u32>,
     pub geo_speed_threshold: Option<f32>,
+    pub use_trick: Option<bool>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]

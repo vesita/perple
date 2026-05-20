@@ -3,6 +3,8 @@ use std::time::SystemTime;
 
 use nalgebra::{SVector, Vector2};
 
+use transitioner::Transitioner;
+
 use crate::{
     tracker::kalman::{KalmanConfigCA, KalmanFilterCA},
     utils::boxes::Box3D,
@@ -41,10 +43,14 @@ pub(crate) struct TrackedObject {
     pub(crate) classification: TargetClass,
     /// 一旦为 true，永不回到 Static/Floating
     pub(crate) confirmed_moving: bool,
-    /// 连续点云投票通过帧数（Floating→Moving 用）
-    pub(crate) voting_streak: u32,
-    /// 连续处于静态簇帧数（Floating→Static 用）
-    pub(crate) floating_static_count: u32,
+    /// Static→Floating 过渡器（!in_static_cluster 持续 10 帧触发）
+    pub(crate) static_leaver: Transitioner<bool>,
+    /// Floating→Static 过渡器（in_static_cluster 持续 N 帧触发）
+    pub(crate) floating_settler: Transitioner<bool>,
+    /// Floating→Moving 过渡器（点云投票 + 速度持续 N 帧触发）
+    pub(crate) voting_promoter: Transitioner<bool>,
+    /// Moving↔Movable 过渡器（速度方向持续 N 帧触发）
+    pub(crate) class_transitioner: Transitioner<bool>,
     /// 关联时缓存最近的检测框，避免输出阶段二次搜索
     pub(crate) last_box: Option<Box3D>,
     /// 冻结的箱体尺寸（fix_size 稳定用）
@@ -61,12 +67,8 @@ pub(crate) struct TrackedObject {
     pub(crate) centroid_prev_vel_mag: f64,
     /// EMA 平滑后的箱体（替代 fix_size 硬锁定）
     pub(crate) smoothed_box: Option<Box3D>,
-    /// 分类转换冷却计数器（Moving↔Movable 迟滞）
-    pub(crate) class_cooldown: u32,
     /// 速度 EMA 系数（0=自适应置信度）
     pub(crate) vel_smoothing_alpha: f32,
-    /// 静态簇缺失连续计数（Static→Floating 迟滞用）
-    pub(crate) static_miss_count: u32,
     /// Z 独立 EMA（KF 状态不含 z，用 EMA 平滑跟踪）
     pub(crate) z_ema: f64,
     /// 最后一次更新的点云质心（用于特征级关联的质心偏移一致性）
@@ -83,10 +85,10 @@ pub(crate) struct TrackedObject {
     /// 若为 true，correct() 中允许被后续帧的非 person 标签覆盖，
     /// 避免几何启发式误报被状态锁永久保留。
     pub(crate) geo_labeled: bool,
-    /// 几何通过累计计数（连续几何验证通过帧数，用于累计判定）
-    pub(crate) geo_pass_streak: u32,
-    /// 几何失败累计计数（连续几何验证失败帧数，用于累计回退）
-    pub(crate) geo_fail_streak: u32,
+    /// 几何→person 过渡器（check_person_geom 持续通过 → person）
+    pub(crate) geo_promoter: Transitioner<bool>,
+    /// 几何→obstacle 过渡器（check_person_geom 持续失败 → obstacle）
+    pub(crate) geo_demoter: Transitioner<bool>,
 }
 
 impl TrackedObject {
@@ -100,6 +102,18 @@ impl TrackedObject {
         vel_smoothing_alpha: f32,
         kalman_config: KalmanConfigCA,
         kf_gate_threshold: f64,
+        // Static→Floating 过渡器冷却（通常 10）
+        static_leave_cooldown: u32,
+        // Floating→Static 过渡器冷却（floating_to_static_frames）
+        floating_settle_cooldown: u32,
+        // Floating→Moving 过渡器冷却（voting_consistency_frames）
+        voting_promote_cooldown: u32,
+        // Moving↔Movable 过渡器冷却（class_cooldown_frames）
+        class_change_cooldown: u32,
+        // 几何→person 过渡器冷却（geo_pass_threshold）
+        geo_promote_cooldown: u32,
+        // 几何→obstacle 过渡器冷却（geo_fail_threshold）
+        geo_demote_cooldown: u32,
     ) -> Result<Self, adskalman::Error> {
         // 9D CA 模型：状态 [x, y, vx, vy, ax, ay, l, w, h]
         let mut kalman_filter = KalmanFilterCA::new(kalman_config)?;
@@ -124,8 +138,10 @@ impl TrackedObject {
             kf_vel_history: VecDeque::with_capacity(16),
             classification: TargetClass::Floating,
             confirmed_moving: false,
-            voting_streak: 0,
-            floating_static_count: 0,
+            static_leaver: Transitioner::new_bool(static_leave_cooldown).with_retain(false),
+            floating_settler: Transitioner::new_bool(floating_settle_cooldown).with_retain(false),
+            voting_promoter: Transitioner::new_bool(voting_promote_cooldown).with_retain(false),
+            class_transitioner: Transitioner::new_bool(class_change_cooldown),
             last_box: Some(initial_box.clone()),
             fixed_box: None,
             point_cloud_history: VecDeque::with_capacity(16),
@@ -134,9 +150,7 @@ impl TrackedObject {
             centroid_lpf: None,
             centroid_prev_vel_mag: 0.0,
             smoothed_box: None,
-            class_cooldown: 0,
             vel_smoothing_alpha,
-            static_miss_count: 0,
             z_ema: centroid[2] as f64,
             last_centroid: centroid,
             predicted_box: None,
@@ -144,8 +158,8 @@ impl TrackedObject {
             consecutive_matches: 0,
             score: 0.0,
             geo_labeled: false,
-            geo_pass_streak: 0,
-            geo_fail_streak: 0,
+            geo_promoter: Transitioner::new_bool(geo_promote_cooldown).with_retain(false),
+            geo_demoter: Transitioner::new_bool(geo_demote_cooldown).with_retain(false),
             kf_gate_threshold,
         })
     }
@@ -264,13 +278,21 @@ impl TrackedObject {
         self.consecutive_matches += 1;
 
         self.appearance_count += 1;
-        // 保留 person 标签：避免 YOLO 间歇性漏检导致标签闪烁
-        // 几何 fallback 标签 (geo_labeled) 可被后续观测覆盖，避免误报锁死
-        if self.geo_labeled {
-            self.class_type = new_class_type;
-            self.geo_labeled = false;
-        } else if !(self.class_type == "person" && new_class_type != "person") {
-            self.class_type = new_class_type;
+        // 标签更新规则（用 match 显式枚举三种状态）：
+        //   1. geo_labeled → trick 软标签，始终可被覆盖，避免误报锁死
+        //   2. YOLO person + 非 person 检测 → 保留，防 YOLO 间歇性漏检导致闪烁
+        //   3. 其他情况 → 接受新标签
+        match (self.geo_labeled, self.class_type.as_str(), new_class_type.as_str()) {
+            (true, _, _) => {
+                self.class_type = new_class_type;
+                self.geo_labeled = false;
+            }
+            (false, "person", other) if other != "person" => {
+                // 保留 YOLO person 标签，跳过
+            }
+            (false, _, _) => {
+                self.class_type = new_class_type;
+            }
         }
         self.confidence = new_confidence;
         self.last_seen = SystemTime::now();

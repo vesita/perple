@@ -156,6 +156,8 @@ pub struct TrackerConfig {
     pub geo_fail_threshold: u32,
     /// 几何后端速度激活阈值（m/s），速度超过此值直接标记为 person，与几何判断 OR
     pub geo_speed_threshold: f32,
+    /// 几何形状行人判断（trick）开关
+    pub use_trick: bool,
 }
 
 
@@ -342,6 +344,7 @@ impl Config {
             update_tracker!(geo_pass_threshold);
             update_tracker!(geo_fail_threshold);
             update_tracker!(geo_speed_threshold);
+            update_tracker!(use_trick);
         }
 
         Ok(())

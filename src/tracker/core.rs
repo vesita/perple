@@ -80,6 +80,8 @@ pub struct Tracker {
     geo_pass_threshold: u32,
     geo_fail_threshold: u32,
     geo_speed_threshold: f32,
+    /// 几何形状行人判断开关
+    use_trick: bool,
 }
 
 impl Tracker {
@@ -143,6 +145,7 @@ impl Tracker {
             geo_pass_threshold: cfg.geo_pass_threshold,
             geo_fail_threshold: cfg.geo_fail_threshold,
             geo_speed_threshold: cfg.geo_speed_threshold,
+            use_trick: cfg.use_trick,
         }
     }
 
@@ -268,6 +271,12 @@ impl Tracker {
                 self.vel_smoothing_alpha,
                 self.kalman_config.clone(),
                 self.kf_gate_threshold,
+                10,                                      // static_leave_cooldown
+                self.floating_to_static_frames as u32,    // floating_settle_cooldown
+                self.voting_consistency_frames as u32,    // voting_promote_cooldown
+                self.class_cooldown_frames,               // class_change_cooldown
+                self.geo_pass_threshold,                  // geo_promote_cooldown
+                self.geo_fail_threshold,                  // geo_demote_cooldown
             ) {
                 Ok(obj) => {
                     self.tracked_objects.insert(new_id, obj);
@@ -367,28 +376,24 @@ impl Tracker {
             apply_state_machine(
                 obj, in_static, voting_on, spd,
                 self.moving_speed_threshold,
-                self.floating_to_static_frames,
-                self.voting_consistency_frames,
-                self.class_cooldown_frames,
             );
         }
 
-        // ── 步骤 9b: 人物强制 moving ──
+        // ── 步骤 9b: trick（几何形状行人判断） ──
+        if self.use_trick {
+            trick::apply(
+                &mut self.tracked_objects,
+                self.geo_speed_threshold,
+            );
+        }
+
+        // ── 步骤 9c: 人物强制 moving（放在 trick 之后，确保 trick 标记的 person 也能被覆盖） ──
         for (_, obj) in &mut self.tracked_objects {
             if obj.class_type == "person" && obj.classification != TargetClass::Moving {
                 obj.classification = TargetClass::Moving;
                 obj.confirmed_moving = true;
-                obj.voting_streak = 0;
             }
         }
-
-        // ── 步骤 9c: trick ──
-        trick::apply(
-            &mut self.tracked_objects,
-            self.geo_pass_threshold,
-            self.geo_fail_threshold,
-            self.geo_speed_threshold,
-        );
 
         // ── 步骤 10: 箱体尺寸平滑 ──
         if self.use_box_smoothing {

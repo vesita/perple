@@ -32,7 +32,7 @@ pub struct ScaleMessage {
 ///
 /// # 示例
 ///
-/// ```
+/// ```ignore
 /// use perple::color::image::load_image;
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {

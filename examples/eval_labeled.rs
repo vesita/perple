@@ -17,6 +17,7 @@ use std::time::Instant;
 
 use perple::cloud::core::Lidar;
 use perple::color::core::Camera;
+use perple::config::{fixif, init_config, Config};
 use perple::fuse::Fuse;
 use perple::optional::data_loader::DataLoader;
 use perple::swapl::global_swapl;
@@ -252,6 +253,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .cloned()
         .unwrap_or_default();
     let disable_yolo_smooth: bool = args.iter().any(|a| a == "--disable-yolo-smooth");
+    let tracker_toml: Option<String> = args.iter()
+        .position(|a| a == "--tracker-toml")
+        .and_then(|i| args.get(i + 1))
+        .cloned();
+
+    // ─── 配置初始化（支持 tracker-toml 覆盖）────────────────────────────────
+    if let Some(ref toml_str) = tracker_toml {
+        let mut config = Config::from_file("config/default.toml");
+        let override_toml = format!("\n[tracker]\n{}", toml_str.replace(',', "\n"));
+        if let Err(e) = config.update_from_toml(&override_toml) {
+            eprintln!("tracker-toml 解析失败: {}", e);
+            std::process::exit(1);
+        }
+        init_config(config);
+    } else {
+        init_config(Config::new());
+    }
 
     // ─── 加载标注 ─────────────────────────────────────────────────────────
     let label_dir = "data/labeled/label";
@@ -270,7 +288,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("共 {} 个 GT 目标", total_gt);
 
     // ─── 检查 YOLO 模型 ──────────────────────────────────────────────────
-    let config = perple::config::fixif();
+    let config = fixif();
     if !std::path::Path::new(&config.model_path).exists() {
         eprintln!("YOLO 模型不存在（{}）", config.model_path);
         std::process::exit(1);

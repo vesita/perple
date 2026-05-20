@@ -133,6 +133,7 @@ kf_gate_threshold = 3.5           # 新息门控：马氏距离超过此值用�
 geo_pass_threshold = 6            # 几何后端连续通过帧数阈值
 geo_fail_threshold = 5            # 几何后端连续失败回退阈值
 geo_speed_threshold = 0.6         # 速度激活阈值(m/s)，超过此值直接标为 person（与几何 OR）
+use_trick = true                  # 几何形状行人判断开关（false 则完全跳过）
 
 # 航迹分级管理
 confirmation_frames = 5        # Tentative→Confirmed 所需连续匹配帧数
