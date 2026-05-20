@@ -56,9 +56,9 @@ pub fn decode_yolo_person(
     let mut candidates: Vec<Candidate> = Vec::with_capacity(num_detections);
 
     if num_channels == 5 {
-        // 单类: 通道 4 是 person logit 置信度
+        // 单类: 通道 4 是 person 置信度（YOLO11 ONNX 导出已内置 sigmoid，直接读取）
         for i in 0..num_detections {
-            let conf = 1.0 / (1.0 + (-data[4 * stride + i]).exp());
+            let conf = data[4 * stride + i];
             if conf < confidence_threshold {
                 continue;
             }
@@ -76,10 +76,9 @@ pub fn decode_yolo_person(
             candidates.push(Candidate { confidence: conf, x1, y1, x2, y2 });
         }
     } else {
-        // 多类: 通道 4 是 class 0 (person) 的 logit
+        // 多类: 通道 4 是 class 0 (person) 置信度（YOLO11 ONNX 导出已内置 sigmoid，直接读取）
         for i in 0..num_detections {
-            let logit = data[4 * stride + i];
-            let conf = 1.0 / (1.0 + (-logit).exp());
+            let conf = data[4 * stride + i];
             if conf < confidence_threshold {
                 continue;
             }
@@ -149,11 +148,6 @@ pub fn decode_yolo_person(
         }
     }
 
-    // 密集框过滤：NMS 后框数超过 8 说明大概率是空图误检，全部丢弃
-    const MAX_BOXES: usize = 8;
-    if results.len() > MAX_BOXES {
-        return Vec::new();
-    }
 
     results
 }

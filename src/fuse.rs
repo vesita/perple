@@ -69,6 +69,15 @@ impl Fuse {
         let mut proj: Vec<Option<ProjMatch>> = Vec::with_capacity(cld_buds.len());
 
         for (ci_3d, cld) in cld_buds.iter().enumerate() {
+            // 跳过相机平面后方 (Z_cam < 1) 的簇
+            let cam_centroid = self.cam_from_lidar * Vector4::new(
+                cld.centroid[0], cld.centroid[1], cld.centroid[2], 1.0,
+            );
+            if cam_centroid.z < 1.0 {
+                proj.push(None);
+                continue;
+            }
+
             let verts = cld.the_box.vertices();
 
             let (mut l, mut t, mut r, mut b) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
@@ -95,7 +104,7 @@ impl Fuse {
                 continue;
             }
 
-            let mut best_iou = 0.05;
+            let mut best_iou = 0.08;
             let mut best_idx = usize::MAX;
             for (ci, clr) in clr_buds.iter().enumerate() {
                 let iou = proj_box.iou(&clr.the_box);

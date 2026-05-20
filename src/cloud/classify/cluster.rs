@@ -139,6 +139,18 @@ impl Cluster {
                 continue;
             }
 
+            // 跳过相机平面后方 (Z_cam < 1) 的簇
+            let centroid = Cluster::cluster_box_and_centroid(
+                &self.all_points, cluster_indices, 0.0,
+            ).1;
+            let cam_c = cam_from_lidar * Vector4::new(
+                centroid[0], centroid[1], centroid[2], 1.0,
+            );
+            if cam_c.z < 1.0 {
+                new_objects.push(cluster_indices.clone());
+                continue;
+            }
+
             // 将每个点投影到 2D，找到命中的 YOLO 框
             let mut point_box_assignment: Vec<Option<usize>> = Vec::with_capacity(cluster_indices.len());
             let mut box_point_counts: HashMap<usize, usize> = HashMap::new();
