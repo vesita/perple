@@ -118,6 +118,6 @@ pub(crate) struct PartialClusterConfig {
     pub adaptive_depth: Option<bool>,
     pub adaptive_res0: Option<f32>,
     pub adaptive_r0: Option<f32>,
-    pub adaptive_beta: Option<f32>,
+    pub adaptive_k: Option<f32>,
     pub adaptive_global_max_depth: Option<usize>,
 }

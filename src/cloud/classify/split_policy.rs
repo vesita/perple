@@ -58,21 +58,22 @@ pub struct AdaptiveDepthPolicy {
     pub res0: f32,
     /// 基准距离（米），r ≤ r₀ 时不衰减
     pub r0: f32,
-    /// 增长系数 β ∈ [0, 2]。β=0 恒定；β=1 时距离翻倍则粗化一倍。
-    pub beta: f32,
+    /// 增长系数 k（米），控制分辨率随对数距离的增长率
+    pub k: f32,
 }
 
 impl AdaptiveDepthPolicy {
     /// 在 (cx, cy) 处的目标叶子对角线长度
     ///
-    /// 公式：res(r) = res₀ * (1 + β * log₂(1 + r / r₀))
+    /// 公式：res(r) = res₀ + k * log₂(1 + r / r₀)
     ///
-    /// 相比 log₂(r/r₀) 的优势：在 r=0 处连续（log₂1=0），没有条件分支，
-    /// 且 β 直接表示"在 r₀ 处分辨率的相对增量"。
+    /// 加法形式：res₀ 独立控制近端分辨率，k 独立控制远端粗化速率，
+    /// 两个参数解耦，物理含义更清晰。相比乘法形式 res₀*(1+β*log₂)，
+    /// 近端 log₂→0 时不会将深度约束退化到几乎为零。
     pub fn target_resolution(&self, cx: f32, cy: f32) -> f32 {
-        let r = (cx * cx + cy * cy).sqrt();
+        let r = (cx * cx + cy * cy).sqrt(); // 欧氏距离
         let log2_arg = 1.0 + r / self.r0;
-        self.res0 * (1.0 + self.beta * log2_arg.log2())
+        self.res0 + self.k * log2_arg.log2()
     }
 }
 

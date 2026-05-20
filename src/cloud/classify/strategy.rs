@@ -80,11 +80,11 @@ pub fn create_strategy(pre_extracted_wall: bool) -> Box<dyn ClusteringStrategy> 
                 .with_params(cfg.cluster.min_occ, cfg.cluster.merge_patience, min_pts);
             if cfg.cluster.adaptive_depth {
                 let c = &cfg.cluster;
-                log::info!("  adaptive_depth: res0={}, r0={}, beta={}, max_depth={}",
-                    c.adaptive_res0, c.adaptive_r0, c.adaptive_beta, c.adaptive_global_max_depth);
+                log::info!("  adaptive_depth: res0={}, r0={}, k={}, max_depth={}",
+                    c.adaptive_res0, c.adaptive_r0, c.adaptive_k, c.adaptive_global_max_depth);
                 s = s.with_adaptive_depth(
                     c.adaptive_res0, c.adaptive_r0,
-                    c.adaptive_beta, c.adaptive_global_max_depth);
+                    c.adaptive_k, c.adaptive_global_max_depth);
             }
             Box::new(if pre_extracted_wall { s.with_pre_extracted_wall() } else { s })
         }

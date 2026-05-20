@@ -65,9 +65,9 @@ denoise_min_pts = 3
 min_occ = 4
 # 自适应深度分裂（根据距离动态调整四叉树分辨率，prune_qt 策略专用）
 adaptive_depth = true
-adaptive_res0 = 0.04         # 基准分辨率（米），近处叶子对角线目标
+adaptive_res0 = 0.02         # 基准分辨率（米），近处叶子对角线目标
 adaptive_r0 = 2.0            # 基准距离（米），r ≤ r₀ 时保持 res0
-adaptive_beta = 0.2          # 增长系数：β=0 恒定，β=0.2 时 2m 处分辨率约 4.8cm
+adaptive_k = 0.02           # 增长系数（米），k=0.02 时每增 10m 分辨率约粗化 0.07m
 adaptive_global_max_depth = 12  # 最大深度硬上限
 
 # 密度感知质心加权：用 1/r^α 补偿 LiDAR 近密远疏导致的质心偏向传感器偏差

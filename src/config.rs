@@ -91,7 +91,7 @@ pub struct ClusterConfig {
     pub adaptive_depth: bool,
     pub adaptive_res0: f32,
     pub adaptive_r0: f32,
-    pub adaptive_beta: f32,
+    pub adaptive_k: f32,
     pub adaptive_global_max_depth: usize,
 }
 
@@ -269,7 +269,7 @@ impl Config {
         update_cluster_field!(adaptive_depth);
         update_cluster_field!(adaptive_res0);
         update_cluster_field!(adaptive_r0);
-        update_cluster_field!(adaptive_beta);
+        update_cluster_field!(adaptive_k);
         update_cluster_field!(adaptive_global_max_depth);
         // Option-typed fields — macro destructures to inner type, re-wrap
         if let Some(ref cluster) = partial_config.cluster {

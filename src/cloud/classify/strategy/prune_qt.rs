@@ -81,8 +81,8 @@ impl PruneQt {
     }
 
     /// 使用自适应分辨率策略（距离越远叶子越粗）
-    pub fn with_adaptive_depth(mut self, res0: f32, r0: f32, beta: f32, global_max_depth: usize) -> Self {
-        self.split_policy = Arc::new(AdaptiveDepthPolicy { global_max_depth, res0, r0, beta });
+    pub fn with_adaptive_depth(mut self, res0: f32, r0: f32, k: f32, global_max_depth: usize) -> Self {
+        self.split_policy = Arc::new(AdaptiveDepthPolicy { global_max_depth, res0, r0, k });
         self
     }
 }

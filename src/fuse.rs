@@ -104,7 +104,10 @@ impl Fuse {
                 continue;
             }
 
-            let mut best_iou = 0.08;
+            let mut best_iou = std::env::var("FUSE_IOU")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0.2);
             let mut best_idx = usize::MAX;
             for (ci, clr) in clr_buds.iter().enumerate() {
                 let iou = proj_box.iou(&clr.the_box);
