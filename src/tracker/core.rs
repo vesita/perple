@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::time::{Instant, SystemTime};
 
 use crate::{
@@ -80,6 +80,8 @@ pub struct Tracker {
     geo_pass_threshold: u32,
     geo_fail_threshold: u32,
     geo_speed_threshold: f32,
+    /// 几何形状行人判断开关
+    use_trick: bool,
 }
 
 impl Tracker {
@@ -90,12 +92,8 @@ impl Tracker {
             dt: 0.04,
             process_noise_pos: cfg.kf_process_noise_pos,
             process_noise_vel: cfg.kf_process_noise_vel,
-            process_noise_acc: cfg.kf_process_noise_acc,
-            process_noise_size: cfg.kf_process_noise_size,
             measurement_noise_pos: cfg.kf_measurement_noise_pos,
             measurement_noise_vel: cfg.kf_measurement_noise_vel,
-            measurement_noise_acc: cfg.kf_measurement_noise_acc,
-            measurement_noise_size: cfg.kf_measurement_noise_size,
             initial_covariance_scale: cfg.kf_initial_covariance_scale,
         };
         Self {
@@ -143,6 +141,7 @@ impl Tracker {
             geo_pass_threshold: cfg.geo_pass_threshold,
             geo_fail_threshold: cfg.geo_fail_threshold,
             geo_speed_threshold: cfg.geo_speed_threshold,
+            use_trick: cfg.use_trick,
         }
     }
 
@@ -159,7 +158,7 @@ impl Tracker {
     }
 
     pub async fn run(&mut self) -> Result<(), TrackerError> {
-        let _t0 = Instant::now();
+        let t0 = Instant::now();
         let current_detections = {
             let mut tar3d_guard = self.tar3d.lock().unwrap();
             match tar3d_guard.read() {
@@ -187,7 +186,7 @@ impl Tracker {
         }
 
         let n_obj = self.tracked_objects.len();
-        let t_total = _t0.elapsed();
+        let t_total = t0.elapsed();
         if n_obj > 0 || t_total.as_millis() > 5 {
             log::debug!("[perf] {}obj total={:.1}ms", n_obj, t_total.as_secs_f64() * 1000.0);
         }
@@ -231,7 +230,8 @@ impl Tracker {
         for (obj_id, det_idx) in &matches {
             let detection = &current_detections[*det_idx];
             if let Some(obj) = self.tracked_objects.get_mut(obj_id) {
-                let mut centroid = detection.centroid;
+                // 用 AABB 中心而非点云质心修正 KF，使输出位置与 GT/评估约定一致
+                let mut centroid = detection.the_box.center_single();
                 if self.use_centroid_smoothing {
                     obj.apply_centroid_lpf(&mut centroid, self.centroid_fc_min, self.centroid_beta);
                 }
@@ -263,11 +263,17 @@ impl Tracker {
                 &detection.the_box,
                 detection.class_name.clone(),
                 detection.confidence,
-                detection.centroid,
+                detection.the_box.center_single(),
                 self.kf_avg_frames,
                 self.vel_smoothing_alpha,
                 self.kalman_config.clone(),
                 self.kf_gate_threshold,
+                10,                                      // static_leave_cooldown
+                self.floating_to_static_frames as u32,    // floating_settle_cooldown
+                self.voting_consistency_frames as u32,    // voting_promote_cooldown
+                self.class_cooldown_frames,               // class_change_cooldown
+                self.geo_pass_threshold,                  // geo_promote_cooldown
+                self.geo_fail_threshold,                  // geo_demote_cooldown
             ) {
                 Ok(obj) => {
                     self.tracked_objects.insert(new_id, obj);
@@ -280,7 +286,7 @@ impl Tracker {
         }
 
         // ── 步骤 5: 未匹配轨迹标记丢失 ──
-        let matched_ids: std::collections::HashSet<usize> =
+        let matched_ids: HashSet<usize> =
             matches.iter().map(|(id, _)| *id).collect();
         for (id, obj) in &mut self.tracked_objects {
             if !matched_ids.contains(id) {
@@ -367,28 +373,24 @@ impl Tracker {
             apply_state_machine(
                 obj, in_static, voting_on, spd,
                 self.moving_speed_threshold,
-                self.floating_to_static_frames,
-                self.voting_consistency_frames,
-                self.class_cooldown_frames,
             );
         }
 
-        // ── 步骤 9b: 人物强制 moving ──
+        // ── 步骤 9b: trick（几何形状行人判断） ──
+        if self.use_trick {
+            trick::apply(
+                &mut self.tracked_objects,
+                self.geo_speed_threshold,
+            );
+        }
+
+        // ── 步骤 9c: 人物强制 moving（放在 trick 之后，确保 trick 标记的 person 也能被覆盖） ──
         for (_, obj) in &mut self.tracked_objects {
             if obj.class_type == "person" && obj.classification != TargetClass::Moving {
                 obj.classification = TargetClass::Moving;
                 obj.confirmed_moving = true;
-                obj.voting_streak = 0;
             }
         }
-
-        // ── 步骤 9c: trick ──
-        trick::apply(
-            &mut self.tracked_objects,
-            self.geo_pass_threshold,
-            self.geo_fail_threshold,
-            self.geo_speed_threshold,
-        );
 
         // ── 步骤 10: 箱体尺寸平滑 ──
         if self.use_box_smoothing {
@@ -410,10 +412,8 @@ impl Tracker {
                 if obj.score < self.track_score_output_threshold {
                     continue;
                 }
-                let pos = obj.kalman_filter.get_position();
                 let vel = obj.smoothed_velocity();
                 let spd = obj.speed();
-                let z_out = obj.z_ema as f32;
 
                 let ref_box = if obj.disappeared_count > 0 {
                     obj.smoothed_box.as_ref()
@@ -423,12 +423,7 @@ impl Tracker {
                 } else {
                     obj.last_box.as_ref().cloned().unwrap_or_else(Box3D::empty_box)
                 };
-                let mut predicted_box = Box3D::from_position_and_angles(
-                    pos.x as f32, pos.y as f32, z_out,
-                    0.0, 0.0, 0.0,
-                    ref_box.length, ref_box.width, ref_box.height,
-                );
-                predicted_box.pose = ref_box.pose;
+                let predicted_box = ref_box.clone();
 
                 let class_str = match obj.classification {
                     TargetClass::Static => "static",

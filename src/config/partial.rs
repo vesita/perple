@@ -5,7 +5,6 @@ pub(crate) struct PartialConfig {
     pub stream_capacity: Option<usize>,
     pub detections_capacity: Option<usize>,
     pub person_class_label: Option<String>,
-    pub points_capacity: Option<usize>,
     pub max_range: Option<f32>,
     pub min_range: Option<f32>,
 
@@ -18,11 +17,6 @@ pub(crate) struct PartialConfig {
 
     pub wall_strategy: Option<String>,
     pub wall_distance: Option<f32>,
-    pub wall_iterations: Option<usize>,
-    pub wall_max_walls: Option<usize>,
-    pub wall_eps: Option<f32>,
-    pub wall_min_pts: Option<usize>,
-    pub wall_min_z_span: Option<f32>,
     pub wall_angle_tolerance: Option<f32>,
 
     pub ground_strategy: Option<String>,
@@ -30,7 +24,6 @@ pub(crate) struct PartialConfig {
     pub ground_ransac_distance: Option<f32>,
     pub ground_ransac_iterations: Option<usize>,
     pub upside_down: Option<bool>,
-    pub has_ceiling: Option<bool>,
 
     pub model_path: Option<String>,
 
@@ -80,17 +73,14 @@ pub(crate) struct PartialTrackerConfig {
     pub track_score_max: Option<f64>,
     pub kf_process_noise_pos: Option<f64>,
     pub kf_process_noise_vel: Option<f64>,
-    pub kf_process_noise_acc: Option<f64>,
-    pub kf_process_noise_size: Option<f64>,
     pub kf_measurement_noise_pos: Option<f64>,
     pub kf_measurement_noise_vel: Option<f64>,
-    pub kf_measurement_noise_acc: Option<f64>,
-    pub kf_measurement_noise_size: Option<f64>,
     pub kf_initial_covariance_scale: Option<f64>,
     pub kf_gate_threshold: Option<f64>,
     pub geo_pass_threshold: Option<u32>,
     pub geo_fail_threshold: Option<u32>,
     pub geo_speed_threshold: Option<f32>,
+    pub use_trick: Option<bool>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
@@ -114,4 +104,9 @@ pub(crate) struct PartialClusterConfig {
     pub denoise_radius: Option<f32>,
     pub denoise_min_pts: Option<usize>,
     pub min_occ: Option<usize>,
+    pub adaptive_depth: Option<bool>,
+    pub adaptive_res0: Option<f32>,
+    pub adaptive_r0: Option<f32>,
+    pub adaptive_k: Option<f32>,
+    pub adaptive_global_max_depth: Option<usize>,
 }

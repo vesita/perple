@@ -47,7 +47,6 @@ pub struct Classify {
     cluster: Cluster,
     ground_strategy: Box<dyn GroundPickStrategy>,
     wall_strategy: Box<dyn WallPickStrategy>,
-    ground_plane_out: Eap<Stream<[f32; 4]>>,
     /// 双缓冲：检测阶段写 producer（本模块），后融合阶段读 consumer（Tracker）
     clouds_filtered: DualBuf<Vec<[f32; 3]>>,
     /// 专用共享状态：Camera 写入最新 YOLO 结果，本模块读取用于簇分裂
@@ -69,7 +68,6 @@ impl Classify {
             cluster: Cluster::new(),
             ground_strategy: create_ground_strategy(),
             wall_strategy: create_wall_strategy_from_config(),
-            ground_plane_out: swapl.ground_plane.clone(),
             clouds_filtered: swapl.clouds_filtered.clone(),
             last_yolo: swapl.last_yolo.clone(),
             cld_buds_raw: swapl.cld_buds_raw.clone(),

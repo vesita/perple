@@ -100,8 +100,6 @@ use log::info;
 #[cfg(not(feature = "ros1"))]
 const MAT_GROUND: &str = "ground";
 #[cfg(not(feature = "ros1"))]
-const MAT_WALL: &str = "wall";
-#[cfg(not(feature = "ros1"))]
 const MAT_PERSON: &str = "person";
 #[cfg(not(feature = "ros1"))]
 const MAT_OBSTACLE: &str = "disabled";

@@ -27,7 +27,8 @@ PCD_PATH = Path("data/cloud/lidar/000101.pcd")
 GROUND_EXPAND = 0.10        # 地面 Z 扩展量（米），匹配 Rust ground_expand
 GROUND_THRESHOLD = 0.15     # 直方图峰值比例阈值，匹配 Rust PeakScan threshold
 BEV_RESOLUTION = 0.02       # 栅格分辨率（米/像素）
-BEV_MAX_RANGE = 10.0        # 最大显示范围（米）
+BEV_MARGIN = 1.0            # 边界外扩边距（米）
+BEV_MAX_RANGE = 10.0        # 最大显示范围（米），与边界+边距取小
 MIN_LINE_LENGTH = 30        # 最短线段（像素）
 MIN_LINE_GAP = 10           # 线段间隙容差（像素）
 HOUGH_THRESHOLD = 30        # Hough 投票阈值
@@ -134,31 +135,42 @@ def extract_ground(points: np.ndarray, expand: float = 0.10,
 
 # ── BEV 投影 ──────────────────────────────────────────
 def points_to_bev(points: np.ndarray, resolution: float = 0.02,
-                  max_range: float = 10.0) -> tuple:
+                  margin: float = 1.0, max_range: float = 10.0) -> tuple:
     """点云 XY 投影到 BEV 图像，返回 (img, offset_x, offset_y)。
 
+    图幅根据(点云边界+边距)与 max_range 取小动态确定。
+    offset_x, offset_y：像素→世界偏移量 world_x = px * resolution + offset_x。
     每个栅格统计点密度，密度归一化到 [0,255]。
     """
     xy = points[:, :2]
-    # 范围裁剪
-    mask = (np.abs(xy[:, 0]) < max_range) & (np.abs(xy[:, 1]) < max_range)
-    xy = xy[mask]
-    print(f"  BEV 范围内: {len(xy)} / {len(points)} 点")
+    # 点云边界 + 边距，再与 max_range 取交
+    x_lo = max(xy[:, 0].min() - margin, -max_range)
+    x_hi = min(xy[:, 0].max() + margin,  max_range)
+    y_lo = max(xy[:, 1].min() - margin, -max_range)
+    y_hi = min(xy[:, 1].max() + margin,  max_range)
 
-    offset = max_range
-    size = int(2 * max_range / resolution)
-    img = np.zeros((size, size), dtype=np.float32)
+    offset_x = x_lo
+    offset_y = y_lo
 
-    xs = ((xy[:, 0] + offset) / resolution).astype(np.int32)
-    ys = ((xy[:, 1] + offset) / resolution).astype(np.int32)
-    xs = np.clip(xs, 0, size - 1)
-    ys = np.clip(ys, 0, size - 1)
+    size_w = max(1, int(np.ceil((x_hi - x_lo) / resolution)))
+    size_h = max(1, int(np.ceil((y_hi - y_lo) / resolution)))
+
+    img = np.zeros((size_h, size_w), dtype=np.float32)
+
+    xs = ((xy[:, 0] - offset_x) / resolution).astype(np.int32)
+    ys = ((xy[:, 1] - offset_y) / resolution).astype(np.int32)
+    xs = np.clip(xs, 0, size_w - 1)
+    ys = np.clip(ys, 0, size_h - 1)
     np.add.at(img, (ys, xs), 1)
 
     # 对数归一化增强弱响应
     img = np.log1p(img)
-    img = (img / img.max() * 255).astype(np.uint8) if img.max() > 0 else img
-    return img, -offset, -offset
+    max_val = img.max()
+    if max_val > 0:
+        img = (img / max_val * 255).astype(np.uint8)
+    print(f"  BEV: {len(xy)} 点, 图幅 {size_w}×{size_h}, "
+          f"offset ({offset_x:.3f}, {offset_y:.3f})")
+    return img, offset_x, offset_y
 
 # ── 直线检测 ──────────────────────────────────────────
 def detect_lines(img: np.ndarray) -> list:
@@ -279,19 +291,18 @@ def detect_lines_edlines(img: np.ndarray,
 # BevEDLines 完整实现（移植自 Rust src/cloud/wall/bev_edlines.rs）
 # ════════════════════════════════════════════════════════════
 
-def bev_encode(cloud: np.ndarray, size: int, max_range: float, resolution: float) -> np.ndarray:
+def bev_encode(cloud: np.ndarray, size_w: int, size_h: int,
+               offset_x: float, offset_y: float, resolution: float) -> np.ndarray:
     """点云 XY 投影到 BEV 栅格，log1p 归一化到 [0,255] 一维数组。
 
     匹配 Rust common.rs bev_encode()。
     """
-    bev = np.zeros(size * size, dtype=np.uint32)
+    bev = np.zeros(size_w * size_h, dtype=np.uint32)
     for p in cloud:
-        if abs(p[0]) >= max_range or abs(p[1]) >= max_range:
-            continue
-        x = int((p[0] + max_range) / resolution)
-        y = int((p[1] + max_range) / resolution)
-        if 0 <= x < size and 0 <= y < size:
-            bev[y * size + x] += 1
+        x = int((p[0] - offset_x) / resolution)
+        y = int((p[1] - offset_y) / resolution)
+        if 0 <= x < size_w and 0 <= y < size_h:
+            bev[y * size_w + x] += 1
 
     img_f32 = np.log1p(bev.astype(np.float32))
     max_val = img_f32.max()
@@ -510,7 +521,7 @@ def fit_rms_error(region, cx: float, cy: float, angle: float) -> float:
 
 def classify_wall_points(cloud: np.ndarray, total_wall: int,
                          cxp: float, cyp: float, length: float, angle: float,
-                         resolution: float, max_range: float,
+                         resolution: float, offset_x: float, offset_y: float,
                          distance: float, min_wall_pts: int,
                          min_z_span: float, min_extent: float):
     """墙体点分类与几何验证。
@@ -526,10 +537,10 @@ def classify_wall_points(cloud: np.ndarray, total_wall: int,
     px2 = cxp + half * cos_a
     py2 = cyp + half * sin_a
 
-    x1 = px1 * resolution - max_range
-    y1 = py1 * resolution - max_range
-    x2 = px2 * resolution - max_range
-    y2 = py2 * resolution - max_range
+    x1 = px1 * resolution + offset_x
+    y1 = py1 * resolution + offset_y
+    x2 = px2 * resolution + offset_x
+    y2 = py2 * resolution + offset_y
 
     dx = x2 - x1
     dy = y2 - y1
@@ -580,7 +591,8 @@ def detect_lines_edlines_full(
     img: np.ndarray,
     cloud_3d: Optional[np.ndarray] = None,
     resolution: float = 0.05,
-    max_range: float = 10.0,
+    offset_x: float = 0.0,
+    offset_y: float = 0.0,
     distance: float = 0.10,
     min_wall_pts: int = 30,
     max_walls: int = 8,
@@ -601,17 +613,16 @@ def detect_lines_edlines_full(
         wall_info: None 或 (line_segments_3d, wall_indices)，仅当 cloud_3d 提供时
     """
     h, w = img.shape[:2]
-    size = w  # 方形 BEV 图
 
     # ── 准备一维数组 ──
     src = img.flatten()
 
     # ── 可选高斯模糊 ──
     if gaussian_sigma > 0:
-        src = gaussian_blur(src, size, size, gaussian_sigma)
+        src = gaussian_blur(src, w, h, gaussian_sigma)
 
     # ── Sobel 梯度 ──
-    grad_mag, grad_dir = sobel_gradient(src, size, size)
+    grad_mag, grad_dir = sobel_gradient(src, w, h)
 
     max_mag_val = grad_mag.max()
     if max_mag_val < 1e-6:
@@ -621,10 +632,10 @@ def detect_lines_edlines_full(
     anchor_mag_threshold = max_mag_val * anchor_threshold
 
     # ── NMS 锚点检测 ──
-    is_anchor = np.zeros(size * size, dtype=bool)
-    for y in range(2, size - 2):
-        for x in range(2, size - 2):
-            i = y * size + x
+    is_anchor = np.zeros(w * h, dtype=bool)
+    for y in range(2, h - 2):
+        for x in range(2, w - 2):
+            i = y * w + x
             if grad_mag[i] < mag_threshold:
                 continue
             if grad_dir[i] == EDGE_VERTICAL:
@@ -632,26 +643,26 @@ def detect_lines_edlines_full(
                     grad_mag[i] >= grad_mag[i + 1] + anchor_mag_threshold):
                     is_anchor[i] = True
             elif grad_dir[i] == EDGE_HORIZONTAL:
-                if (grad_mag[i] >= grad_mag[i - size] + anchor_mag_threshold and
-                    grad_mag[i] >= grad_mag[i + size] + anchor_mag_threshold):
+                if (grad_mag[i] >= grad_mag[i - w] + anchor_mag_threshold and
+                    grad_mag[i] >= grad_mag[i + w] + anchor_mag_threshold):
                     is_anchor[i] = True
 
     # ── 边缘绘制 ──
-    edges = np.full(size * size, np.nan, dtype=np.float32)
+    edges = np.full(w * h, np.nan, dtype=np.float32)
     chains = []
 
     anchor_list = []
-    for y in range(1, size - 1):
-        for x in range(1, size - 1):
-            if is_anchor[y * size + x]:
-                anchor_list.append((x, y, grad_mag[y * size + x]))
+    for y in range(1, h - 1):
+        for x in range(1, w - 1):
+            if is_anchor[y * w + x]:
+                anchor_list.append((x, y, grad_mag[y * w + x]))
     anchor_list.sort(key=lambda t: -t[2])
 
     for ax, ay, _ in anchor_list:
-        if np.isfinite(edges[ay * size + ax]):
+        if np.isfinite(edges[ay * w + ax]):
             continue
 
-        d = grad_dir[ay * size + ax]
+        d = grad_dir[ay * w + ax]
         if d == EDGE_VERTICAL:
             d1, d2 = UP, DOWN
         elif d == EDGE_HORIZONTAL:
@@ -660,17 +671,17 @@ def detect_lines_edlines_full(
             continue
 
         chain = []
-        walk_edge_chain(grad_mag, grad_dir, size, size, mag_threshold, ax, ay, d1, edges, chain)
-        walk_edge_chain(grad_mag, grad_dir, size, size, mag_threshold, ax, ay, d2, edges, chain)
+        walk_edge_chain(grad_mag, grad_dir, w, h, mag_threshold, ax, ay, d1, edges, chain)
+        walk_edge_chain(grad_mag, grad_dir, w, h, mag_threshold, ax, ay, d2, edges, chain)
 
         if len(chain) < min_chain_len:
             for cx, cy in chain:
-                edges[cy * size + cx] = np.nan
+                edges[cy * w + cx] = np.nan
             continue
 
         chain_id = float(len(chains))
         for cx, cy in chain:
-            edges[cy * size + cx] = chain_id
+            edges[cy * w + cx] = chain_id
         chains.append(chain)
 
     # ── 线段拟合 + 曲率分裂 ──
@@ -705,7 +716,7 @@ def detect_lines_edlines_full(
             result = classify_wall_points(
                 cloud_3d, 0,  # total_wall=0 → 对全量点云检测
                 seg[0], seg[1], seg[2], seg[4],
-                resolution, max_range,
+                resolution, offset_x, offset_y,
                 distance, min_wall_pts,
                 min_z_span, min_extent,
             )
@@ -724,7 +735,8 @@ def detect_lines_edlines_full(
     return line_segments_2d, wall_info
 
 
-def draw_edlines_segments(img: np.ndarray, segments: list) -> np.ndarray:
+def draw_edlines_segments(img: np.ndarray, segments: list, color: tuple = (255, 255, 0),
+                           thickness: int = 2) -> np.ndarray:
     """在图上绘制 BevEDLines 检测到的线段。"""
     vis = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
     for cx, cy, length, width, angle in segments:
@@ -735,7 +747,7 @@ def draw_edlines_segments(img: np.ndarray, segments: list) -> np.ndarray:
         y1 = int(round(cy - half * sin_a))
         x2 = int(round(cx + half * cos_a))
         y2 = int(round(cy + half * sin_a))
-        cv2.line(vis, (x1, y1), (x2, y2), (0, 255, 255), 2)
+        cv2.line(vis, (x1, y1), (x2, y2), color, thickness)
     return vis
 
 
@@ -754,13 +766,31 @@ def detect_lines_lsd(img: np.ndarray) -> list:
     return lines
 
 # ── 可视化 ──────────────────────────────────────────
-def draw_lines(img: np.ndarray, lines: np.ndarray, color: tuple = (0, 255, 0)) -> np.ndarray:
+def bev_to_white_bg(img: np.ndarray) -> np.ndarray:
+    """BEV 密度图反转为白底黑点可视化。"""
+    return 255 - img
+
+
+def bev_enhance_for_display(bev: np.ndarray, dilate_radius: int = 2) -> np.ndarray:
+    """对 BEV 做形态学膨胀使点变粗，保留原始密度值。
+
+    dilate_radius=2 → 5×5 椭圆核，每个点膨胀为 ~10cm 圆斑 (@2cm/px)。
+    """
+    if dilate_radius > 0:
+        k = 2 * dilate_radius + 1
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+        return cv2.dilate(bev, kernel)
+    return bev
+
+
+def draw_lines(img: np.ndarray, lines: np.ndarray, color: tuple = (0, 0, 255),
+               thickness: int = 2) -> np.ndarray:
     """在彩色图上绘制线段。"""
     vis = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
     for line in lines:
         line = line.flatten()
         x1, y1, x2, y2 = map(int, line[:4])
-        cv2.line(vis, (x1, y1), (x2, y2), color, 1)
+        cv2.line(vis, (x1, y1), (x2, y2), color, thickness)
     return vis
 
 # ── 主流程 ──────────────────────────────────────────
@@ -780,8 +810,8 @@ def main():
     print(f"  非地面点: {len(nonground)}")
 
     # 3. BEV 投影
-    print("[3/4] BEV 投影 (分辨率 {} m/px)".format(BEV_RESOLUTION))
-    bev, ox, oy = points_to_bev(nonground, BEV_RESOLUTION, BEV_MAX_RANGE)
+    print("[3/4] BEV 投影 (分辨率 {} m/px, 边距 {} m)".format(BEV_RESOLUTION, BEV_MARGIN))
+    bev, offset_x, offset_y = points_to_bev(nonground, BEV_RESOLUTION, BEV_MARGIN, BEV_MAX_RANGE)
 
     # 4. 直线检测
     print("[4/4] 直线检测")
@@ -800,7 +830,7 @@ def main():
     print("[4b/4] BevEDLines 完整管线")
     segments_full, wall_info = detect_lines_edlines_full(
         bev, cloud_3d=nonground,
-        resolution=BEV_RESOLUTION, max_range=BEV_MAX_RANGE,
+        resolution=BEV_RESOLUTION, offset_x=offset_x, offset_y=offset_y,
         distance=0.10, min_wall_pts=30, min_z_span=1.0, min_extent=0.7,
         grad_threshold=0.05, anchor_threshold=0.0,
         min_chain_len=15, max_curvature_error=2.0,
@@ -810,45 +840,66 @@ def main():
         print(f", {wall_info['total_wall']} 个墙体点", end="")
     print()
 
+    # ── 白底可视化版本（用增强版使稀疏点云连续可见）──
+    bev_enhanced = bev_enhance_for_display(bev)
+    bev_vis = bev_to_white_bg(bev_enhanced)
+
+    # ── 各检测方法使用凸显颜色绘制 ──
+    #   Hough → 红, LSD → 橙, EDLines → 品红, EDLines_full → 青
+    color_hough = (0, 0, 255)         # 红
+    color_lsd = (0, 165, 255)         # 橙
+    color_edlines = (255, 0, 255)     # 品红
+    color_edlines_full = (255, 255, 0)  # 青
+
+    vis_hough = draw_lines(bev_vis, lines_hough, color_hough, thickness=2)
+    vis_lsd = draw_lines(bev_vis, lines_lsd, color_lsd, thickness=2)
+    vis_edlines = draw_lines(bev_vis, lines_edlines, color_edlines, thickness=2)
+    vis_edlines_full = draw_edlines_segments(bev_vis, segments_full, color_edlines_full, thickness=2)
+
     # 保存结果
     out_dir = Path("output/bev_test")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    cv2.imwrite(str(out_dir / "bev_raw.png"), bev)
-
-    vis_hough = draw_lines(bev, lines_hough, (0, 255, 0))
+    cv2.imwrite(str(out_dir / "bev_raw.png"), bev_to_white_bg(bev))
+    cv2.imwrite(str(out_dir / "bev_enhanced.png"), bev_vis)
     cv2.imwrite(str(out_dir / "bev_hough.png"), vis_hough)
-
-    vis_lsd = draw_lines(bev, lines_lsd, (0, 255, 255))
     cv2.imwrite(str(out_dir / "bev_lsd.png"), vis_lsd)
-
-    vis_edlines = draw_lines(bev, lines_edlines, (255, 0, 255))
     cv2.imwrite(str(out_dir / "bev_edlines.png"), vis_edlines)
-
-    vis_edlines_full = draw_edlines_segments(bev, segments_full)
     cv2.imwrite(str(out_dir / "bev_edlines_full.png"), vis_edlines_full)
 
-    # 并排对比
+    # 并排对比（2行网格）
     h, w = bev.shape
     gap = 8
+    label_h = 28
     panels = [
-        (bev, "BEV"),
+        (bev_vis, "BEV"),
         (vis_hough, "Hough"),
         (vis_lsd, "LSD"),
         (vis_edlines, "EDLines"),
         (vis_edlines_full, "EDLines_full"),
     ]
     n = len(panels)
-    canvas = np.zeros((h, n * w + (n - 1) * gap, 3), dtype=np.uint8)
-    for i, (panel, label) in enumerate(panels):
-        x = i * (w + gap)
+    cols = 3
+    rows = (n + cols - 1) // cols
+    cw = cols * w + (cols - 1) * gap
+    rh = rows * (h + label_h) + (rows - 1) * gap
+    canvas = 255 * np.ones((rh, cw, 3), dtype=np.uint8)
+    for idx, (panel, label) in enumerate(panels):
+        row = idx // cols
+        col = idx % cols
+        cx = col * (w + gap)
+        cy = row * (h + label_h + gap)
         if panel.ndim == 2:
             panel_color = cv2.cvtColor(panel, cv2.COLOR_GRAY2BGR)
         else:
             panel_color = panel
-        canvas[:, x:x + w] = panel_color
-        cv2.putText(canvas, label, (x + 10, 20),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        canvas[cy:cy + h, cx:cx + w] = panel_color
+        # 标签居中放在图片下方
+        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
+        lx = cx + (w - tw) // 2
+        ly = cy + h + 20
+        cv2.putText(canvas, label, (lx, ly),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1)
     cv2.imwrite(str(out_dir / "bev_comparison.png"), canvas)
 
     print(f"\n结果保存至: {out_dir}/")

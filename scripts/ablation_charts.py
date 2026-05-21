@@ -17,7 +17,7 @@ from scripts.chart_style import C_BLUE, C_RED
 
 BAR_WIDTH = 0.3
 COLORS = [C_BLUE, C_RED]
-LABELS = ['PruneQt（本文）', 'LV-DOT']
+LABELS = ['剪叶聚类（本文）', 'LV-DOT']
 OUT_DIR = 'output/ablation_5run/charts'
 
 # 数据（5 轮均值）

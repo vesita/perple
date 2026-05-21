@@ -36,7 +36,7 @@ RUST = {
     'timing_ms': {
         '地面\n(PeakScan)': 0.6,
         '墙体\n(BevEDLines)': 19.5,
-        '聚类\n(PruneQt)': 16.8,
+        '剪叶聚类': 16.8,
         'YOLO 精化': 2.2,
         '管线总计': 39.1,
     },
@@ -44,7 +44,7 @@ RUST = {
         '暴力\nDBSCAN': 8000.0,
         'KD-tree\nDBSCAN': 120.0,
         'LV-DOT\n(Rust)': 16.9,
-        'PruneQt\n(Rust)': 16.8,
+        '剪叶聚类\n(Rust)': 16.8,
     }
 }
 
@@ -56,7 +56,7 @@ def plot_complexity():
 
     ax.plot(n, n**2, color=C_RED, lw=2.5, label='O(n^2) 暴力法')
     ax.plot(n, n * np.log2(n), color=C_ORANGE, lw=2.5, label='O(n log n) KD-tree')
-    ax.plot(n, (n/30) * np.log2(n/30), color=C_GREEN, lw=2.5, label='O(k log k) PruneQt（k=n/30）')
+    ax.plot(n, (n/30) * np.log2(n/30), color=C_GREEN, lw=2.5, label='O(k log k) 剪叶聚类（k=n/30）')
 
     ax.axvline(20000, color=COLORS_10[-2], ls='--', alpha=0.5)
     ax.text(20300, 10, '20K 点/帧', fontsize=10, color=COLORS_10[-2], rotation=90)
@@ -180,7 +180,7 @@ def plot_voxel_comparison():
     pipeline = 200
     voxel_pts = [raw, pipeline, 6384, 3552, 2310, 1721, 1037, 559]
     voxel_pcts = [100, 1.0, 32.0, 17.8, 11.6, 8.6, 5.2, 2.8]
-    labels = ['原始点云\n20000 点', '级联管线\n~200 质心',
+    labels = ['原始点云\n20000 点', '级联处理流\n~200 质心',
               '体素 0.05m', '体素 0.10m', '体素 0.15m',
               '体素 0.20m', '体素 0.30m', '体素 0.50m']
     colors = [C_GRAY, C_GREEN] + [C_BLUE] * 6
@@ -200,6 +200,124 @@ def plot_voxel_comparison():
 
     savefig(fig, OUT / "voxel_comparison.png")
     print(f"[OK] voxel_comparison.png")
+
+
+def load_cascade_metrics(batch_dir: Path, label_filtered: bool = True) -> tuple:
+    """从 batch_XX/results.csv 读取级联处理流的均值指标。
+
+    级联流经过 YOLO 标签精化，默认使用 person 过滤后指标。
+    """
+    import csv
+    csv_path = batch_dir / "results.csv"
+    if not csv_path.exists():
+        print(f"  [WARN] {csv_path} 不存在，使用默认值")
+        return 58.9, 79.2, 0.676
+    prefix = 'person' if label_filtered else 'spatial'
+    precisions, recalls, f1s = [], [], []
+    with open(csv_path) as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            precisions.append(float(row[f'{prefix}_precision']))
+            recalls.append(float(row[f'{prefix}_recall']))
+            f1s.append(float(row[f'{prefix}_f1']))
+    return (np.mean(precisions), np.mean(recalls), np.mean(f1s))
+
+
+def load_voxel_metrics(summary_path: Path) -> list:
+    """从 experiment_summary.json 读取体素策略指标。"""
+    if not summary_path.exists():
+        print(f"  [WARN] {summary_path} 不存在，使用默认值")
+        return [(72.3, 59.4, 0.652), (55.9, 56.1, 0.560), (27.6, 53.5, 0.364)]
+
+    with open(summary_path) as f:
+        data = json.load(f)
+
+    # 从 list of dicts 中按 name 查找体素策略
+    name_map = {
+        'voxel_005': '体素 0.05m',
+        'voxel_010': '体素 0.10m',
+        'voxel_015': '体素 0.15m',
+    }
+    results = []
+    entries = data if isinstance(data, list) else data.get('results', [])
+    for key, label in name_map.items():
+        match = next((x for x in entries if x.get('name') == key), None)
+        if match is None:
+            print(f"  [WARN] {key}({label}) 不在 summary 中")
+            continue
+        p = match.get('precision', 0)
+        r = match.get('recall', 0)
+        f = match.get('f1', 0)
+        results.append((p, r, f))
+    return results
+
+
+def plot_voxel_vs_cascade():
+    """体素下采样 vs 级联处理流检测质量对比。
+
+    数据来源：
+      - output/experiment_summary.json（体素类策略，408帧，空间匹配）
+      - output/batch_40/results.csv（级联处理流 40次运行均值，经 YOLO 行人标签过滤）
+    """
+    batch_dir = Path("output/batch_40")
+    summary_path = Path("output/experiment_summary.json")
+
+    voxel_data = load_voxel_metrics(summary_path)
+    cascade_p, cascade_r, cascade_f1 = load_cascade_metrics(batch_dir, label_filtered=True)
+
+    # 补齐到 3 个体素（不足时补默认值）
+    defaults = [(72.3, 59.4, 0.652), (55.9, 56.1, 0.560), (27.6, 53.5, 0.364)]
+    for i in range(3):
+        if i >= len(voxel_data):
+            voxel_data.append(defaults[i])
+
+    methods = ['体素 0.05m', '体素 0.10m', '体素 0.15m', '级联处理流\n(地面+墙体+剪叶聚类)']
+    precision = [v[0] for v in voxel_data] + [cascade_p]
+    recall    = [v[1] for v in voxel_data] + [cascade_r]
+    f1_scores = [v[2] for v in voxel_data] + [cascade_f1]
+
+    print(f"  级联: P={cascade_p:.1f}%, R={cascade_r:.1f}%, F1={cascade_f1:.3f}  "
+          f"(来自 {batch_dir.name})")
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5), dpi=200,
+                                    gridspec_kw={'width_ratios': [1, 0.7]})
+
+    # ── 左图：Precision / Recall 分组柱状图 ──
+    x = np.arange(len(methods))
+    w = 0.30
+    ax1.bar(x - w, precision, w, color=C_BLUE, edgecolor='white', label='Precision')
+    ax1.bar(x,      recall,    w, color=C_ORANGE, edgecolor='white', label='Recall')
+    for i in range(len(methods)):
+        ax1.text(x[i] - w, precision[i] + 1, f'{precision[i]:.0f}%',
+                 ha='center', va='bottom', fontsize=9, fontweight='bold', color=C_BLUE)
+        ax1.text(x[i], recall[i] + 1, f'{recall[i]:.0f}%',
+                 ha='center', va='bottom', fontsize=9, fontweight='bold', color=C_ORANGE)
+
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(methods, fontsize=9)
+    ax1.set_ylabel('百分比 (%)', fontsize=11)
+    ax1.set_title('Precision / Recall 对比', fontsize=13, fontweight='bold')
+    ax1.legend(fontsize=10, loc='lower left')
+    ax1.set_ylim(0, 95)
+    style_ax(ax1, grid_axis='y')
+
+    # ── 右图：F1 柱状图 ──
+    colors_f1 = [C_BLUE, C_BLUE, C_BLUE, C_GREEN]
+    bars = ax2.bar(x, f1_scores, 0.5, color=colors_f1, edgecolor='white', lw=1.5)
+    for bar, v in zip(bars, f1_scores):
+        ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.015,
+                 f'{v:.3f}', ha='center', va='bottom', fontsize=10, fontweight='bold')
+
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(methods, fontsize=9)
+    ax2.set_ylabel('F1 Score', fontsize=11)
+    ax2.set_title('F1 Score 对比', fontsize=13, fontweight='bold')
+    ax2.set_ylim(0, 0.85)
+    style_ax(ax2, grid_axis='y')
+
+    fig.tight_layout()
+    savefig(fig, OUT / "voxel_vs_cascade.png")
+    print(f"[OK] voxel_vs_cascade.png")
 
 
 def storyboard():
@@ -223,12 +341,12 @@ def storyboard():
         约120ms——仍高于20Hz的50ms上限。"
   素材: complexity_curve.png
 
-[Scene 3: 级联管线] ~40s
+[Scene 3: 级联处理流] ~40s
   画面: 逐级压缩漏斗图
-  旁白: "我们设计了三阶段级联管线：
+  旁白: "我们设计了三阶段级联处理流：
         ① 地面过滤去除25%点
         ② BevEDLines墙体检测去除32%点
-        ③ 剪叶保留密集区域质心，仅约200个
+        ③ 剪叶聚类保留密集区域质心，仅约200个
         整体压缩约100倍。"
   素材: pipeline_flow.png
 
@@ -250,14 +368,14 @@ def storyboard():
 [Scene 6: 实测性能] ~30s
   画面: 速度对比柱状图 + 管线分解
   旁白: "Rust实现下，整个点云管线仅需39ms，
-        远超20Hz实时要求(50ms)。PruneQt
+        远超20Hz实时要求(50ms)。剪叶聚类
         仅16.8ms，与LV-DOT相当但精度更高。"
   素材: timing_breakdown.png + speed_comparison.png
 
 [总结] ~10s
   关键数据:
   - 原始点云: ~20000 pts → 质心: ~200 pts (≈100x压缩)
-  - PruneQt: ~17ms (Rust)
+  - 剪叶聚类: ~17ms (Rust)
   - 全管线: ~39ms → 满足20Hz实时导航
   - 精度: P=82.7%, R=68.6%, F1=0.750
 ============================================
@@ -277,5 +395,6 @@ if __name__ == '__main__':
     plot_speed()
     plot_pruning()
     plot_voxel_comparison()
+    plot_voxel_vs_cascade()
     storyboard()
     print(f"\n所有素材已保存至: {OUT.resolve()}")

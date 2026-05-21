@@ -8,7 +8,6 @@ pub enum TrackerError {
     StreamError(StreamError),
     PoisonError(String),
     KalmanError(adskalman::Error),
-    AssociationError(String),
 }
 
 impl From<StreamError> for TrackerError {
@@ -35,7 +34,6 @@ impl std::fmt::Display for TrackerError {
             TrackerError::StreamError(e) => write!(f, "流错误：{}", e),
             TrackerError::PoisonError(e) => write!(f, "线程锁中毒：{}", e),
             TrackerError::KalmanError(e) => write!(f, "卡尔曼滤波错误：{:?}", e),
-            TrackerError::AssociationError(e) => write!(f, "数据关联错误：{}", e),
         }
     }
 }

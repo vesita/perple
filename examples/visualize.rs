@@ -34,21 +34,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // ── LiDAR 处理 ──
         {
             let l = Arc::clone(&lidar);
+            let handle = tokio::runtime::Handle::current();
             tokio::task::spawn_blocking(move || {
-                let _ = l.lock().unwrap().act();
+                let mut lidar = l.lock().unwrap();
+                handle.block_on(lidar.act())
+                    .map_err(|e| format!("Lidar 处理错误: {:?}", e))
             })
             .await
-            .map_err(|e| format!("Lidar 任务失败: {}", e))?;
+            .map_err(|e| format!("Lidar 任务失败: {:?}", e))??;
         }
+
+        // ── 交换 DualBuf ──
+        global_swapl().swap_pipeline();
 
         // ── 跟踪 ──
         {
             let t = Arc::clone(&tracker);
+            let handle = tokio::runtime::Handle::current();
             tokio::task::spawn_blocking(move || {
-                let _ = t.lock().unwrap().run();
+                let mut trk = t.lock().unwrap();
+                handle.block_on(trk.run())
+                    .map_err(|e| format!("Tracker 处理错误: {:?}", e))
             })
             .await
-            .map_err(|e| format!("Tracker 任务失败: {}", e))?;
+            .map_err(|e| format!("Tracker 任务失败: {:?}", e))??;
         }
 
         // ── 写入帧 ──
@@ -78,6 +87,7 @@ async fn write_frame(writer: &mut FrameWriter, frame: usize, total: usize) -> Re
     Ok(())
 }
 
+#[allow(unused)]
 fn write_targets(writer: &mut FrameWriter, targets: &[Target]) {
     for target in targets.iter() {
         let tag = format!("{} | {} | {} | {:.1}m/s",
@@ -86,6 +96,7 @@ fn write_targets(writer: &mut FrameWriter, targets: &[Target]) {
     }
 }
 
+#[allow(unused)]
 fn write_speed_arrows(writer: &mut FrameWriter, targets: &[Target]) {
     for target in targets {
         if target.speed > 0.5 {

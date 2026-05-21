@@ -19,6 +19,7 @@ log = "0.4"
 env_logger = "0.11"
 # 卡尔曼滤波库 (本地路径)
 adskalman = { path = "crates/adskalman-rs" }
+transitioner = { path = "crates/transitioner" }
 approx = "0.5"
 # ROS1 桥接
 rosrust = { version = "0.9", optional = true }

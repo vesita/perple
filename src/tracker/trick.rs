@@ -51,20 +51,19 @@ fn check_person_geom(obj: &TrackedObject) -> bool {
     true
 }
 
-/// 基于累计几何验证 + 速度激活的复合跟踪后端行人标记。
+/// 基于过渡器的复合跟踪后端行人标记。
 ///
-/// 对 YOLO/Fuse 未能标注（cluster_N / 空标签）或已被几何后端标记为 person 的目标，
-/// 使用两条路径 OR 决定标签：
+/// 用两个 `Transitioner<bool>` 替代手动计数器：
+/// - `geo_promoter`：几何持续通过 → person
+/// - `geo_demoter`：几何持续失败 → obstacle
 ///
-/// 1. 几何累计路径：连续几何通过 >= geo_pass_threshold → person
-/// 2. 速度激活路径：平滑速度 > geo_speed_threshold → person（单帧即时激活）
+/// 两条路径 OR 决定标签：
+///   1. promoter 翻转 = 几何累计通过 → person
+///   2. 速度 > geo_speed_threshold → 单帧即时激活 person
 ///
-/// 回退：连续几何失败 >= geo_fail_threshold → obstacle
-/// 运动中清空失败计数，避免运动行人因偶发几何异常被降级。
+/// 运动中复位 demoter，避免运动行人因偶发几何异常被降级。
 pub(crate) fn apply(
     objs: &mut BTreeMap<usize, TrackedObject>,
-    geo_pass_threshold: u32,
-    geo_fail_threshold: u32,
     geo_speed_threshold: f32,
 ) {
     for (_, obj) in objs.iter_mut() {
@@ -79,28 +78,23 @@ pub(crate) fn apply(
         let geom_pass = check_person_geom(obj);
         let speed = obj.speed();
 
-        // 更新累计计数
-        if geom_pass {
-            obj.geo_pass_streak += 1;
-            obj.geo_fail_streak = 0;
-        } else {
-            obj.geo_fail_streak += 1;
-            obj.geo_pass_streak = 0;
-        }
-
-        // 运动中清空失败计数：避免运动行人偶发几何异常被降级
+        // 运动中复位 demoter：避免运动行人偶发几何异常被降级
         if obj.classification == TargetClass::Moving || obj.confirmed_moving {
-            obj.geo_fail_streak = 0;
+            obj.geo_demoter.reset();
         }
 
-        // 决策：几何累计通过 OR 速度激活 → person
-        let is_person = obj.geo_pass_streak >= geo_pass_threshold || speed > geo_speed_threshold;
+        // 过渡器判定：promoter 累积几何通过 → person，demoter 累积几何失败 → obstacle
+        obj.geo_promoter.feed(&geom_pass);
+        obj.geo_demoter.feed(&(!geom_pass));
+
+        // 决策：promoter ON OR 速度激活 → person
+        let is_person = obj.geo_promoter.state() || speed > geo_speed_threshold;
 
         if is_person {
             obj.class_type = "person".to_string();
             obj.geo_labeled = true;
-        // 回退：几何累计失败达到阈值 → obstacle
-        } else if obj.geo_fail_streak >= geo_fail_threshold {
+        // demoter ON → obstacle
+        } else if obj.geo_demoter.state() {
             obj.class_type = "obstacle".to_string();
             obj.geo_labeled = false;
         } else if is_unlabeled {

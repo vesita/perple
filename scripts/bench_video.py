@@ -479,10 +479,10 @@ def run_benchmark():
     print("\n" + "=" * 60)
     print("Rust 实现性能参考 (来自现有 bench)")
     print("=" * 60)
-    print(f"  PruneQt (Rust): median={RUST_REF['prune_qt']['median_ms']}ms")
+    print(f"  剪叶聚类 (Rust): median={RUST_REF['prune_qt']['median_ms']}ms")
     print(f"  LV-DOT (Rust):  median={RUST_REF['lvdot']['median_ms']}ms")
     print(f"  说明: Rust 实现通过编译优化、零成本抽象和无 GC 暂停,")
-    print(f"        PruneQt 可达 ~17ms，满足 20Hz 实时需求 (~50ms/帧)")
+    print(f"        剪叶聚类 可达 ~17ms，满足 20Hz 实时需求 (~50ms/帧)")
 
     print("\nDONE")
 

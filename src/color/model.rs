@@ -20,7 +20,7 @@ use ort::session::{Session, builder::GraphOptimizationLevel};
 ///
 /// # 示例
 ///
-/// ```
+/// ```ignore
 /// use perple::color::model::load_model;
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {

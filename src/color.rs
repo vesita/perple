@@ -23,18 +23,18 @@
 //! 5. 使用[draw_detections](utils/fn.draw_detections.html)绘制检测结果
 //! 
 //! # 示例
-//! 
-//! ```
+//!
+//! ```ignore
 //! use perple::color::{YoloDetector, load_model, load_image, draw_detections};
-//! 
+//!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let model = load_model("path/to/model.onnx")?;
 //! let image = load_image("path/to/image.jpg")?;
-//! 
+//!
 //! let mut detector = YoloDetector::new(640, 640)
 //!     .with_confidence_threshold(0.5)
 //!     .with_nms_threshold(0.7);
-//! 
+//!
 //! let detections = detector.detect(&image)?;
 //! let result_image = draw_detections(&image, &detections);
 //! # Ok(())

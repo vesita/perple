@@ -3,6 +3,8 @@ use std::time::SystemTime;
 
 use nalgebra::{SVector, Vector2};
 
+use transitioner::Transitioner;
+
 use crate::{
     tracker::kalman::{KalmanConfigCA, KalmanFilterCA},
     utils::boxes::Box3D,
@@ -34,17 +36,19 @@ pub(crate) struct TrackedObject {
     pub(crate) confidence: f32,
     pub(crate) kalman_filter: KalmanFilterCA,
     pub(crate) velocity_history: VecDeque<[f32; 3]>,
-    /// KF 原始速度历史（用于加速度观测，LV-DOT 风格）
-    pub(crate) kf_vel_history: VecDeque<[f64; 3]>,
     /// 新息门控阈值（从 config 传入）
     pub(crate) kf_gate_threshold: f64,
     pub(crate) classification: TargetClass,
     /// 一旦为 true，永不回到 Static/Floating
     pub(crate) confirmed_moving: bool,
-    /// 连续点云投票通过帧数（Floating→Moving 用）
-    pub(crate) voting_streak: u32,
-    /// 连续处于静态簇帧数（Floating→Static 用）
-    pub(crate) floating_static_count: u32,
+    /// Static→Floating 过渡器（!in_static_cluster 持续 10 帧触发）
+    pub(crate) static_leaver: Transitioner<bool>,
+    /// Floating→Static 过渡器（in_static_cluster 持续 N 帧触发）
+    pub(crate) floating_settler: Transitioner<bool>,
+    /// Floating→Moving 过渡器（点云投票 + 速度持续 N 帧触发）
+    pub(crate) voting_promoter: Transitioner<bool>,
+    /// Moving↔Movable 过渡器（速度方向持续 N 帧触发）
+    pub(crate) class_transitioner: Transitioner<bool>,
     /// 关联时缓存最近的检测框，避免输出阶段二次搜索
     pub(crate) last_box: Option<Box3D>,
     /// 冻结的箱体尺寸（fix_size 稳定用）
@@ -57,17 +61,11 @@ pub(crate) struct TrackedObject {
     pub(crate) kf_avg_frames: usize,
     /// 1€ Filter 低通滤波质心（Option = 未初始化）
     pub(crate) centroid_lpf: Option<[f64; 3]>,
-    /// 上一帧速度大小（用于自适应截止频率）
-    pub(crate) centroid_prev_vel_mag: f64,
     /// EMA 平滑后的箱体（替代 fix_size 硬锁定）
     pub(crate) smoothed_box: Option<Box3D>,
-    /// 分类转换冷却计数器（Moving↔Movable 迟滞）
-    pub(crate) class_cooldown: u32,
     /// 速度 EMA 系数（0=自适应置信度）
     pub(crate) vel_smoothing_alpha: f32,
-    /// 静态簇缺失连续计数（Static→Floating 迟滞用）
-    pub(crate) static_miss_count: u32,
-    /// Z 独立 EMA（KF 状态不含 z，用 EMA 平滑跟踪）
+    /// Z 独立 EMA（KF 4D 不含 z，用 EMA 跟踪）
     pub(crate) z_ema: f64,
     /// 最后一次更新的点云质心（用于特征级关联的质心偏移一致性）
     pub(crate) last_centroid: [f32; 3],
@@ -75,18 +73,16 @@ pub(crate) struct TrackedObject {
     pub(crate) predicted_box: Option<Box3D>,
     /// 航迹分级状态
     pub(crate) status: TrackStatus,
-    /// 连续匹配帧数（用于 Tentative→Confirmed 晋级）
-    pub(crate) consecutive_matches: u32,
     /// 轨迹评分（match +bonus, miss -penalty, 用于生命周期决策）
     pub(crate) score: f64,
     /// 是否由几何 fallback 标记为 person
     /// 若为 true，correct() 中允许被后续帧的非 person 标签覆盖，
     /// 避免几何启发式误报被状态锁永久保留。
     pub(crate) geo_labeled: bool,
-    /// 几何通过累计计数（连续几何验证通过帧数，用于累计判定）
-    pub(crate) geo_pass_streak: u32,
-    /// 几何失败累计计数（连续几何验证失败帧数，用于累计回退）
-    pub(crate) geo_fail_streak: u32,
+    /// 几何→person 过渡器（check_person_geom 持续通过 → person）
+    pub(crate) geo_promoter: Transitioner<bool>,
+    /// 几何→obstacle 过渡器（check_person_geom 持续失败 → obstacle）
+    pub(crate) geo_demoter: Transitioner<bool>,
 }
 
 impl TrackedObject {
@@ -100,16 +96,24 @@ impl TrackedObject {
         vel_smoothing_alpha: f32,
         kalman_config: KalmanConfigCA,
         kf_gate_threshold: f64,
+        // Static→Floating 过渡器冷却（通常 10）
+        static_leave_cooldown: u32,
+        // Floating→Static 过渡器冷却（floating_to_static_frames）
+        floating_settle_cooldown: u32,
+        // Floating→Moving 过渡器冷却（voting_consistency_frames）
+        voting_promote_cooldown: u32,
+        // Moving↔Movable 过渡器冷却（class_cooldown_frames）
+        class_change_cooldown: u32,
+        // 几何→person 过渡器冷却（geo_pass_threshold）
+        geo_promote_cooldown: u32,
+        // 几何→obstacle 过渡器冷却（geo_fail_threshold）
+        geo_demote_cooldown: u32,
     ) -> Result<Self, adskalman::Error> {
-        // 9D CA 模型：状态 [x, y, vx, vy, ax, ay, l, w, h]
+        // 4D CV 模型：状态 [x, y, vx, vy]
         let mut kalman_filter = KalmanFilterCA::new(kalman_config)?;
-        let init_state = SVector::<f64, 9>::from_column_slice(&[
-            centroid[0] as f64, centroid[1] as f64, // x, y
-            0.0, 0.0,        // vx, vy
-            0.0, 0.0,        // ax, ay
-            initial_box.length as f64,
-            initial_box.width as f64,
-            initial_box.height as f64,
+        let init_state = SVector::<f64, 4>::from_column_slice(&[
+            centroid[0] as f64, centroid[1] as f64,
+            0.0, 0.0,
         ]);
         kalman_filter.init_with_state(init_state);
         Ok(Self {
@@ -121,31 +125,28 @@ impl TrackedObject {
             confidence,
             kalman_filter,
             velocity_history: VecDeque::with_capacity(10),
-            kf_vel_history: VecDeque::with_capacity(16),
             classification: TargetClass::Floating,
             confirmed_moving: false,
-            voting_streak: 0,
-            floating_static_count: 0,
+            static_leaver: Transitioner::new_bool(static_leave_cooldown).with_retain(false),
+            floating_settler: Transitioner::new_bool(floating_settle_cooldown).with_retain(false),
+            voting_promoter: Transitioner::new_bool(voting_promote_cooldown).with_retain(false),
+            class_transitioner: Transitioner::new_bool(class_change_cooldown),
             last_box: Some(initial_box.clone()),
             fixed_box: None,
             point_cloud_history: VecDeque::with_capacity(16),
             position_history: VecDeque::with_capacity(kf_avg_frames + 2),
             kf_avg_frames,
             centroid_lpf: None,
-            centroid_prev_vel_mag: 0.0,
             smoothed_box: None,
-            class_cooldown: 0,
             vel_smoothing_alpha,
-            static_miss_count: 0,
             z_ema: centroid[2] as f64,
             last_centroid: centroid,
             predicted_box: None,
             status: TrackStatus::Tentative,
-            consecutive_matches: 0,
             score: 0.0,
             geo_labeled: false,
-            geo_pass_streak: 0,
-            geo_fail_streak: 0,
+            geo_promoter: Transitioner::new_bool(geo_promote_cooldown).with_retain(false),
+            geo_demoter: Transitioner::new_bool(geo_demote_cooldown).with_retain(false),
             kf_gate_threshold,
         })
     }
@@ -154,14 +155,13 @@ impl TrackedObject {
     pub(crate) fn predict(&mut self, dt: f64) -> Result<(), adskalman::Error> {
         self.kalman_filter.predict(dt)?;
 
-        // 从 KF 状态构建 predicted_box（位置 + 尺寸来自滤波，pose 来自 last_box）
+        // KF 提供 xy，z 用 EMA
         if let Some(ref last) = self.last_box {
             let pos = self.kalman_filter.get_position();
-            let size = self.kalman_filter.get_size();
             let mut pb = Box3D::from_position_and_angles(
                 pos.x as f32, pos.y as f32, self.z_ema as f32,
                 0.0, 0.0, 0.0,
-                size.x as f32, size.y as f32, size.z as f32,
+                last.length, last.width, last.height,
             );
             pb.pose = last.pose;
             self.predicted_box = Some(pb);
@@ -169,12 +169,10 @@ impl TrackedObject {
         Ok(())
     }
 
-    /// 修正（LV-DOT 风格）：用 [x,y,z,vx,vy,vz,ax,ay,az] 校正
+    /// 修正（LV-DOT 风格）：用 [x,y,vx,vy] 校正
     ///
     /// - 位置 (x,y) 来自当前帧点云质心 centroid
     /// - 速度 (vx,vy) 通过 k 帧位置差计算
-    /// - 加速度 (ax,ay) 通过速度历史差计算
-    /// - 尺寸 (l,w,h) 直接观测
     /// - z 用独立 EMA 跟踪（不在 KF 状态中）
     pub(crate) fn correct(
         &mut self,
@@ -191,7 +189,7 @@ impl TrackedObject {
         const Z_ALPHA: f64 = 0.3;
         self.z_ema = Z_ALPHA * centroid[2] as f64 + (1.0 - Z_ALPHA) * self.z_ema;
 
-        // 记录位置历史（保持 3D 用于 z_ema）
+        // 记录位置历史（用于 k 帧速度观测）
         self.position_history.push_back([
             centroid[0] as f64,
             centroid[1] as f64,
@@ -201,10 +199,10 @@ impl TrackedObject {
             self.position_history.pop_front();
         }
 
-        // v = (pos_t - pos_{t-k}) / (k * dt) — 仅 2D
+        // v = (pos_t - pos_{t-k}) / (k * dt)
         let hist_len = self.position_history.len();
         let k = self.kf_avg_frames.min(hist_len.saturating_sub(1));
-        const MIN_K_FOR_VELOCITY: usize = 2; // was 3: 更快获得速度观测
+        const MIN_K_FOR_VELOCITY: usize = 2;
         if k >= MIN_K_FOR_VELOCITY {
             let old = self.position_history[hist_len - 1 - k];
             let curr = *self.position_history.back().unwrap();
@@ -212,65 +210,39 @@ impl TrackedObject {
             let meas_vx = (curr[0] - old[0]) / dt_k;
             let meas_vy = (curr[1] - old[1]) / dt_k;
 
-            // 加速度：a = (v_t - v_{t-k}) / (k*dt) — 仅 2D
-            let vel_hist_len = self.kf_vel_history.len();
-            let k_acc = self.kf_avg_frames.min(vel_hist_len);
-            const MIN_K_FOR_ACC: usize = 3;
-            let (meas_ax, meas_ay) = if k_acc >= MIN_K_FOR_ACC {
-                let old_v = self.kf_vel_history[vel_hist_len - k_acc];
-                let dt_k_acc = (k_acc as f64 * dt_since_last).max(0.001);
-                ((meas_vx - old_v[0]) / dt_k_acc,
-                 (meas_vy - old_v[1]) / dt_k_acc)
-            } else {
-                (0.0, 0.0)
-            };
-
-            // 9D 观测：[x, y, vx, vy, ax, ay, l, w, h]
-            let measurement = SVector::<f64, 9>::from_column_slice(&[
+            // 4D 观测：[x, y, vx, vy]
+            let measurement = SVector::<f64, 4>::from_column_slice(&[
                 centroid[0] as f64, centroid[1] as f64,
                 meas_vx, meas_vy,
-                meas_ax, meas_ay,
-                new_box.length as f64,
-                new_box.width as f64,
-                new_box.height as f64,
             ]);
-            // 使用带新息门控的修正（异常测量时降级到位置only）
             self.kalman_filter.correct_with_gating(measurement, self.kf_gate_threshold)?;
         } else {
-            // 历史不足，仅 (x,y) 位置修正
+            // 历史不足，仅位置修正
             self.kalman_filter.correct_position(Vector2::new(
                 centroid[0] as f64,
                 centroid[1] as f64,
             ))?;
         }
 
-        // 限幅：速度 3.0 m/s，加速度 10.0 m/s²，尺寸 [0.05, 20.0]m
-        self.kalman_filter.clamp_state(3.0, 10.0, 0.05, 20.0);
-
-        // 记录 KF 原始速度（用于加速度观测）
-        let v = self.kalman_filter.get_velocity();
-        if self.kf_vel_history.len() >= 16 {
-            self.kf_vel_history.pop_front();
-        }
-        self.kf_vel_history.push_back([v.x, v.y, v.z]);
+        // 限幅：速度 3.0 m/s
+        self.kalman_filter.clamp_state(3.0);
 
         // 记录平滑速度用于聚类
-        if self.velocity_history.len() >= 10 {
-            self.velocity_history.pop_front();
-        }
-        self.velocity_history.push_back([v.x as f32, v.y as f32, v.z as f32]);
-
-        // 连续匹配计数（生命周期晋级用）
-        self.consecutive_matches += 1;
-
-        self.appearance_count += 1;
-        // 保留 person 标签：避免 YOLO 间歇性漏检导致标签闪烁
-        // 几何 fallback 标签 (geo_labeled) 可被后续观测覆盖，避免误报锁死
-        if self.geo_labeled {
-            self.class_type = new_class_type;
-            self.geo_labeled = false;
-        } else if !(self.class_type == "person" && new_class_type != "person") {
-            self.class_type = new_class_type;
+        // 标签更新规则（用 match 显式枚举三种状态）：
+        //   1. geo_labeled → trick 软标签，始终可被覆盖，避免误报锁死
+        //   2. YOLO person + 非 person 检测 → 保留，防 YOLO 间歇性漏检导致闪烁
+        //   3. 其他情况 → 接受新标签
+        match (self.geo_labeled, self.class_type.as_str(), new_class_type.as_str()) {
+            (true, _, _) => {
+                self.class_type = new_class_type;
+                self.geo_labeled = false;
+            }
+            (false, "person", other) if other != "person" => {
+                // 保留 YOLO person 标签，跳过
+            }
+            (false, _, _) => {
+                self.class_type = new_class_type;
+            }
         }
         self.confidence = new_confidence;
         self.last_seen = SystemTime::now();
@@ -283,7 +255,6 @@ impl TrackedObject {
     /// 帧增长（未匹配时调用）
     pub(crate) fn on_missed(&mut self) {
         self.disappeared_count += 1;
-        self.consecutive_matches = 0;
     }
 
     /// 1€ Filter 质心低通滤波
@@ -306,7 +277,6 @@ impl TrackedObject {
             centroid[2] = (alpha * centroid[2] as f64 + (1.0 - alpha) * prev[2]) as f32;
         }
         self.centroid_lpf = Some([centroid[0] as f64, centroid[1] as f64, centroid[2] as f64]);
-        self.centroid_prev_vel_mag = vel_mag;
     }
 
     /// 获取 Kalman 估计速度（自适应 EMA 平滑）

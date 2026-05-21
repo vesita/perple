@@ -6,23 +6,24 @@
 
 ### 当前性能（中心距 0.5m 匹配，408帧）
 
-| 指标 | Person 过滤 | 全部类别 |
+| 指标 | 严格评估 (person-only) | 空间评估 (全部检测) |
 |------|:---:|:---:|
-| Precision | **85.1%** | 58.8% |
-| Recall | **69.0%** | 78.8% |
-| F1 | **0.762** | 0.673 |
-| FP | 148 | 675 |
+| Precision | **82.1%** | 58.2% |
+| Recall | **65.8%** | 73.9% |
+| F1 | **0.731** | 0.651 |
+
+*几何 fallback 贡献 +22pp F1 / +30pp recall*
 
 ### 致谢
 
-墙体检测模块的 EDLines 算法参考了 [opencv_idz](https://github.com/DemonFromRussia/opencv_idz) 项目中的 C++ 参考实现（Akinlar & Topal, 2011），在此表示感谢。
+墙体检测模块的 EDLines 算法参考了 [opencv_idz](https://github.com/DemonFromRussia/opencv_idz) 项目中的 C++ 参考实现（Akinlar & Topal, 2011），在此表示感谢。Transitioner 过渡器灵感来源于经典迟滞比较器（Schmitt trigger）的工程实践。
 
 ### 关键特性
 
-- **三级点云处理**: 地面检测（PeakScan）→ 墙体检测（BevEdLines）→ 聚类（PruneQt）
+- **三级点云处理**: 地面检测（PeakScan）→ 墙体检测（BevEdLines）→ 聚类（PruneQt + 自适应深度）
 - **墙体检测**: EDLines 锚点检测 + 链式追踪，二进制方向（无三角函数），~14ms/帧
 - **跟踪**: 匈牙利关联 + 9D CA 卡尔曼 + 点云投票 + 航迹评分 + 几何 fallback
-- **融合**: 2D YOLO 检测通过标定矩阵映射到 3D 点云，YOLO 帧间标签平滑
+- **融合**: 2D YOLO 检测通过标定矩阵映射到 3D 点云，投影 IoU ≥ 0.2 匹配
 
 ## 目录结构
 
@@ -78,14 +79,32 @@
 
 ## 文档
 
-项目详细设计文档位于 [`docs/`](docs/) 目录，以 [`docs/README.md`](docs/README.md) 为索引：
+全部设计文档位于 [`docs/`](docs/) 目录：
 
-| 类别 | 文档 |
+### 架构设计
+
+| 文档 | 说明 |
 |------|------|
-| 架构设计 | [bench_design.md](docs/bench_design.md), [color.md](docs/color.md), [kalman_guide.md](docs/kalman_guide.md), [wall_strategy_design.md](docs/wall_strategy_design.md), [ground_detection_conclusion.md](docs/ground_detection_conclusion.md) |
-| 精度评估 | [baseline_accuracy.md](docs/baseline_accuracy.md), [evaluation_workflow.md](docs/evaluation_workflow.md) |
-| 管线演化 | [pipeline_evolution.md](docs/pipeline_evolution.md) |
-| 流程图 | [flowcharts/frame.svg](docs/flowcharts/frame.svg) |
+| [bench_design.md](docs/bench_design.md) | Benchmark 管线设计规范（三级串联：地面→墙体→聚类） |
+| [color.md](docs/color.md) | Color 模块文档（YOLO ONNX 图像检测） |
+| [kalman_guide.md](docs/kalman_guide.md) | 卡尔曼滤波模块使用指南（9D CA 模型） |
+| [pruneqt.md](docs/pruneqt.md) | PruneQt 聚类 + 自适应深度设计文档 |
+| [ground_detection_conclusion.md](docs/ground_detection_conclusion.md) | 地面检测基准测试结论报告 |
+
+### 精度与评估
+
+| 文档 | 说明 |
+|------|------|
+| [baseline_accuracy.md](docs/baseline_accuracy.md) | 基线精度评估（408 帧，3 轮平均 F1=0.745） |
+| [evaluation_workflow.md](docs/evaluation_workflow.md) | 验证流程文档（管线运行→精度评估→可视化） |
+| [pipeline_evolution.md](docs/pipeline_evolution.md) | 点云处理管线演化记录（从 DBSCAN 到三级级联） |
+
+### 流程图
+
+| 文件 | 说明 |
+|------|------|
+| [flowcharts/frame.svg](docs/flowcharts/frame.svg) | 系统框架图 |
+| [flowcharts/bev_edlines.drawio](docs/flowcharts/bev_edlines.drawio) | EDLines 墙体检测流程图（Draw.io） |
 
 ## 核心模块说明
 
@@ -122,12 +141,14 @@ LiDAR 点云处理模块，核心为三级管线（地面 → 墙体 → 聚类�
   - 数据关联（匈牙利算法，IoU + 马氏距离 + 卡方门控）
   - 轨迹管理（创建、更新、删除、航迹评分 N≥3）
   - 点云投票（voxel occupancy → KDE 投票 → 置信度提升/衰减）
-  - 几何 fallback：盲区行人补充检测（recall 26.3% → 61.4%）
+  - 几何 fallback：盲区行人补充检测（recall +30pp）
 - **kalman**: 9D CA 卡尔曼 + 6D CV 备选（`kalman.rs` 模块根 + `kalman/` 子模块）
   - 恒加速度模型 `[x,y,z,vx,vy,vz,ax,ay,az,l,w,h]`
   - 距离自适应 / 置信度自适应测量噪声
   - Z 轴独立 EMA 跟踪（不纳入卡尔曼状态）
 - **hungarian.rs**: 匈牙利算法矩阵求解
+- **lifecycle.rs**: 分类状态机（Transition 过渡器管理 Static/Floating/Moving/Movable）
+- **trick.rs**: 几何形状行人判定（geo_promoter/geo_demoter 过渡器）
 - **output.rs**: 跟踪结果 `Target`（轨迹 ID、速度、动态/静态分类）
 
 ### 4. Utils 模块 (`src/utils/`)
@@ -151,9 +172,9 @@ LiDAR 点云处理模块，核心为三级管线（地面 → 墙体 → 聚类�
 2D-3D 融合模块：
 
 - 读取 `cld_buds_raw`（聚类结果）+ `clr_objs`（YOLO 检测）
-- 将 3D 簇投影到 2D，计算投影框与 YOLO 框的 IoU 匹配
+- 将 3D 簇投影到 2D，计算投影框与 YOLO 框的 IoU 匹配（阈值 0.2，可用 `FUSE_IOU` 环境变量覆盖）
 - 无 YOLO 时透传原始聚类结果
-- 有 YOLO 时执行投影匹配 + 合并 + 标签更新
+- 有 YOLO 时执行保守融合：同 YOLO 多 3D 簇合并，逐 3D 簇标签精炼
 
 ### 6. Optional 模块 (`src/optional/`)
 
