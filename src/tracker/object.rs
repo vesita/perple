@@ -36,8 +36,6 @@ pub(crate) struct TrackedObject {
     pub(crate) confidence: f32,
     pub(crate) kalman_filter: KalmanFilterCA,
     pub(crate) velocity_history: VecDeque<[f32; 3]>,
-    /// KF 原始速度历史（用于加速度观测，LV-DOT 风格）
-    pub(crate) kf_vel_history: VecDeque<[f64; 3]>,
     /// 新息门控阈值（从 config 传入）
     pub(crate) kf_gate_threshold: f64,
     pub(crate) classification: TargetClass,
@@ -63,8 +61,6 @@ pub(crate) struct TrackedObject {
     pub(crate) kf_avg_frames: usize,
     /// 1€ Filter 低通滤波质心（Option = 未初始化）
     pub(crate) centroid_lpf: Option<[f64; 3]>,
-    /// 上一帧速度大小（用于自适应截止频率）
-    pub(crate) centroid_prev_vel_mag: f64,
     /// EMA 平滑后的箱体（替代 fix_size 硬锁定）
     pub(crate) smoothed_box: Option<Box3D>,
     /// 速度 EMA 系数（0=自适应置信度）
@@ -77,8 +73,6 @@ pub(crate) struct TrackedObject {
     pub(crate) predicted_box: Option<Box3D>,
     /// 航迹分级状态
     pub(crate) status: TrackStatus,
-    /// 连续匹配帧数（用于 Tentative→Confirmed 晋级）
-    pub(crate) consecutive_matches: u32,
     /// 轨迹评分（match +bonus, miss -penalty, 用于生命周期决策）
     pub(crate) score: f64,
     /// 是否由几何 fallback 标记为 person
@@ -131,7 +125,6 @@ impl TrackedObject {
             confidence,
             kalman_filter,
             velocity_history: VecDeque::with_capacity(10),
-            kf_vel_history: VecDeque::with_capacity(16),
             classification: TargetClass::Floating,
             confirmed_moving: false,
             static_leaver: Transitioner::new_bool(static_leave_cooldown).with_retain(false),
@@ -144,14 +137,12 @@ impl TrackedObject {
             position_history: VecDeque::with_capacity(kf_avg_frames + 2),
             kf_avg_frames,
             centroid_lpf: None,
-            centroid_prev_vel_mag: 0.0,
             smoothed_box: None,
             vel_smoothing_alpha,
             z_ema: centroid[2] as f64,
             last_centroid: centroid,
             predicted_box: None,
             status: TrackStatus::Tentative,
-            consecutive_matches: 0,
             score: 0.0,
             geo_labeled: false,
             geo_promoter: Transitioner::new_bool(geo_promote_cooldown).with_retain(false),
@@ -234,25 +225,9 @@ impl TrackedObject {
         }
 
         // 限幅：速度 3.0 m/s
-        self.kalman_filter.clamp_state(3.0, 10.0, 0.05, 20.0);
-
-        // 记录 KF 原始速度（用于加速度观测）
-        let v = self.kalman_filter.get_velocity();
-        if self.kf_vel_history.len() >= 16 {
-            self.kf_vel_history.pop_front();
-        }
-        self.kf_vel_history.push_back([v.x, v.y, v.z]);
+        self.kalman_filter.clamp_state(3.0);
 
         // 记录平滑速度用于聚类
-        if self.velocity_history.len() >= 10 {
-            self.velocity_history.pop_front();
-        }
-        self.velocity_history.push_back([v.x as f32, v.y as f32, v.z as f32]);
-
-        // 连续匹配计数（生命周期晋级用）
-        self.consecutive_matches += 1;
-
-        self.appearance_count += 1;
         // 标签更新规则（用 match 显式枚举三种状态）：
         //   1. geo_labeled → trick 软标签，始终可被覆盖，避免误报锁死
         //   2. YOLO person + 非 person 检测 → 保留，防 YOLO 间歇性漏检导致闪烁
@@ -280,7 +255,6 @@ impl TrackedObject {
     /// 帧增长（未匹配时调用）
     pub(crate) fn on_missed(&mut self) {
         self.disappeared_count += 1;
-        self.consecutive_matches = 0;
     }
 
     /// 1€ Filter 质心低通滤波
@@ -303,7 +277,6 @@ impl TrackedObject {
             centroid[2] = (alpha * centroid[2] as f64 + (1.0 - alpha) * prev[2]) as f32;
         }
         self.centroid_lpf = Some([centroid[0] as f64, centroid[1] as f64, centroid[2] as f64]);
-        self.centroid_prev_vel_mag = vel_mag;
     }
 
     /// 获取 Kalman 估计速度（自适应 EMA 平滑）

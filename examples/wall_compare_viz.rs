@@ -108,7 +108,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ─── 三种墙体策略 ──────────────────────────────────────────────────
     let cfg = perple::config::fixif();
-    let mut strategies: Vec<Box<dyn WallPickStrategy>> = vec![
+    let strategies: Vec<Box<dyn WallPickStrategy>> = vec![
         Box::new(BevLsd::with_params(cfg.wall_distance, 20)
             .with_grad_threshold(0.08)
             .with_angle_tolerance(cfg.wall_angle_tolerance)

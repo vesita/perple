@@ -9,7 +9,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for stem in &stems {
         let path = format!("data/labeled/camera/image/{}.jpg", stem);
         let img = image::open(&path)?;
-        let (resized, msg) = scale_image(&img, 640, 640);
+        let (resized, _msg) = scale_image(&img, 640, 640);
         let arr = image_to_tensor(&resized, 640, 640);
         let tensor = to_input(&arr);
         let outputs = session.run(ort::inputs!["images" => tensor])?;

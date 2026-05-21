@@ -239,7 +239,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut aggregated: Vec<AggregatedResult> = Vec::new();
     for (lbl, results) in &sorted {
         let n = results.len() as f64;
-        let avg_wall: f64 = results.iter().map(|r| r.wall_pts as f64).sum::<f64>() / n;
+        let _avg_wall: f64 = results.iter().map(|r| r.wall_pts as f64).sum::<f64>() / n;
         let avg_clusters: f64 = results.iter().map(|r| r.n_clusters as f64).sum::<f64>() / n;
         let avg_cluster_pts: f64 = results.iter().map(|r| r.cluster_pts as f64).sum::<f64>() / n;
         let avg_noise: f64 = results.iter().map(|r| r.noise_pts as f64).sum::<f64>() / n;

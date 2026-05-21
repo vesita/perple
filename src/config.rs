@@ -26,7 +26,6 @@ pub struct Config {
     pub stream_capacity: usize,
     pub detections_capacity: usize,
     pub person_class_label: String,
-    pub points_capacity: usize,
     pub max_range: f32,
     pub min_range: f32,
 
@@ -41,11 +40,6 @@ pub struct Config {
     // 墙体检测参数
     pub wall_strategy: String,
     pub wall_distance: f32,
-    pub wall_iterations: usize,
-    pub wall_max_walls: usize,
-    pub wall_eps: f32,
-    pub wall_min_pts: usize,
-    pub wall_min_z_span: f32,
     pub wall_angle_tolerance: f32,
 
     // 地面检测参数
@@ -54,7 +48,6 @@ pub struct Config {
     pub ground_ransac_distance: f32,
     pub ground_ransac_iterations: usize,
     pub upside_down: bool,
-    pub has_ceiling: bool,
 
     // 模型路径配置
     pub model_path: String,
@@ -138,15 +131,11 @@ pub struct TrackerConfig {
     pub track_score_delete_threshold: f64,
     pub track_score_output_threshold: f64,
     pub track_score_max: f64,
-    // ─── 卡尔曼滤波器参数（9D CA 模型） ────────────────────────────────────
+    // ─── 卡尔曼滤波器参数（4D CV 模型） ────────────────────────────────────
     pub kf_process_noise_pos: f64,
     pub kf_process_noise_vel: f64,
-    pub kf_process_noise_acc: f64,
-    pub kf_process_noise_size: f64,
     pub kf_measurement_noise_pos: f64,
     pub kf_measurement_noise_vel: f64,
-    pub kf_measurement_noise_acc: f64,
-    pub kf_measurement_noise_size: f64,
     pub kf_initial_covariance_scale: f64,
     /// 新息门控阈值（马氏距离），超过则降级为位置-only 修正
     pub kf_gate_threshold: f64,
@@ -224,7 +213,6 @@ impl Config {
         update_field!(stream_capacity);
         update_field!(detections_capacity);
         update_field!(person_class_label);
-        update_field!(points_capacity);
         update_field!(max_range);
         update_field!(min_range);
         update_field!(default_input_width);
@@ -235,11 +223,6 @@ impl Config {
 
         update_field!(wall_strategy);
         update_field!(wall_distance);
-        update_field!(wall_iterations);
-        update_field!(wall_max_walls);
-        update_field!(wall_eps);
-        update_field!(wall_min_pts);
-        update_field!(wall_min_z_span);
         update_field!(wall_angle_tolerance);
 
         update_field!(ground_strategy);
@@ -247,7 +230,6 @@ impl Config {
         update_field!(ground_ransac_distance);
         update_field!(ground_ransac_iterations);
         update_field!(upside_down);
-        update_field!(has_ceiling);
 
         // 使用新的宏来更新cluster配置
         update_cluster_field!(merge_patience);
@@ -333,12 +315,8 @@ impl Config {
             update_tracker!(track_score_max);
             update_tracker!(kf_process_noise_pos);
             update_tracker!(kf_process_noise_vel);
-            update_tracker!(kf_process_noise_acc);
-            update_tracker!(kf_process_noise_size);
             update_tracker!(kf_measurement_noise_pos);
             update_tracker!(kf_measurement_noise_vel);
-            update_tracker!(kf_measurement_noise_acc);
-            update_tracker!(kf_measurement_noise_size);
             update_tracker!(kf_initial_covariance_scale);
             update_tracker!(kf_gate_threshold);
             update_tracker!(geo_pass_threshold);

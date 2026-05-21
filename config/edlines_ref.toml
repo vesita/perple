@@ -1,7 +1,6 @@
 stream_capacity = 1024
 detections_capacity = 16
 person_class_label = "person"
-points_capacity = 16384
 max_range = 10.0
 min_range = 0.10
 
@@ -20,16 +19,10 @@ ground_expand = 0.10       # 地面种子区域 Z 向扩展量（米），peak_z
 ground_ransac_distance = 0.3   # RANSAC 平面拟合内点距离阈值（米）
 ground_ransac_iterations = 50  # RANSAC 迭代次数
 upside_down = true         # 点云 Z 轴是否上下翻转（LiDAR 安装朝下时为 true）
-has_ceiling = false        # 是否有天花板（配合 [cluster].ceiling_filter 使用）
 
 # 墙体检测策略（用于追踪管线，bench 使用 config/bench/wall/*.toml）
 wall_strategy = "edlines_ref"   # 墙体检测策略: bev_lsd / bev_edlines / bev_hough / ...
 wall_distance = 0.08         # RansacL2Grid 距离阈值
-wall_iterations = 50         # RansacL2Grid RANSAC 迭代次数
-wall_max_walls = 30          # 最大墙体平面数（RansacL2Grid 每帧保留的墙面数上限）
-wall_eps = 0.20              # DbscanL2QtDif BFS 合并距离
-wall_min_pts = 16            # DbscanL2QtDif 叶节点最小点数（密度中心门槛）
-wall_min_z_span = 1.0        # 墙面最小 Z 跨度
 wall_angle_tolerance = 30.0  # BevLsd 区域生长角度容差（度）
 
 # 点云聚类参数
@@ -119,15 +112,11 @@ vel_smoothing_alpha = 0.25
 # 分类转换冷却帧数（Moving↔Movable 迟滞）
 class_cooldown_frames = 15
 
-# Kalman 滤波器 9D CA 模型参数（可通过 eval_ablation --tracker-toml 覆盖）
+# Kalman 滤波器 4D CV 模型参数（可通过 eval_ablation --tracker-toml 覆盖）
 kf_process_noise_pos = 0.1        # 位置过程噪声：预测位置不确定性
 kf_process_noise_vel = 0.05       # 速度过程噪声：允许速度变化（0.02→0.05 更灵活）
-kf_process_noise_acc = 1.0        # 加速度过程噪声（0.5→1.0 允许更大加速度变化）
-kf_process_noise_size = 0.01      # 尺寸过程噪声：尺寸变化慢
 kf_measurement_noise_pos = 0.3    # 位置测量噪声（0.2→0.3 降低对点云质心信任）
 kf_measurement_noise_vel = 0.8    # 速度测量噪声（0.1→0.8 速度由位置差推导不直接观测）
-kf_measurement_noise_acc = 2.0    # 加速度测量噪声（0.5→2.0 加速度由速度差推导极不可靠）
-kf_measurement_noise_size = 0.2   # 尺寸测量噪声（0.5→0.2 框尺寸相对可靠）
 kf_initial_covariance_scale = 1.0  # 初始协方差缩放（0.5→1.0 加快收敛）
 kf_gate_threshold = 3.5           # 新息门控：马氏距离超过此值用位置-only修正
 geo_pass_threshold = 6            # 几何后端连续通过帧数阈值

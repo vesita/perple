@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::time::{Instant, SystemTime};
 
 use crate::{
@@ -158,7 +158,7 @@ impl Tracker {
     }
 
     pub async fn run(&mut self) -> Result<(), TrackerError> {
-        let _t0 = Instant::now();
+        let t0 = Instant::now();
         let current_detections = {
             let mut tar3d_guard = self.tar3d.lock().unwrap();
             match tar3d_guard.read() {
@@ -186,7 +186,7 @@ impl Tracker {
         }
 
         let n_obj = self.tracked_objects.len();
-        let t_total = _t0.elapsed();
+        let t_total = t0.elapsed();
         if n_obj > 0 || t_total.as_millis() > 5 {
             log::debug!("[perf] {}obj total={:.1}ms", n_obj, t_total.as_secs_f64() * 1000.0);
         }
@@ -286,7 +286,7 @@ impl Tracker {
         }
 
         // ── 步骤 5: 未匹配轨迹标记丢失 ──
-        let matched_ids: std::collections::HashSet<usize> =
+        let matched_ids: HashSet<usize> =
             matches.iter().map(|(id, _)| *id).collect();
         for (id, obj) in &mut self.tracked_objects {
             if !matched_ids.contains(id) {
@@ -412,10 +412,8 @@ impl Tracker {
                 if obj.score < self.track_score_output_threshold {
                     continue;
                 }
-                let pos = obj.kalman_filter.get_position();
                 let vel = obj.smoothed_velocity();
                 let spd = obj.speed();
-                let z_out = obj.z_ema as f32;
 
                 let ref_box = if obj.disappeared_count > 0 {
                     obj.smoothed_box.as_ref()
@@ -425,12 +423,7 @@ impl Tracker {
                 } else {
                     obj.last_box.as_ref().cloned().unwrap_or_else(Box3D::empty_box)
                 };
-                let mut predicted_box = Box3D::from_position_and_angles(
-                    pos.x as f32, pos.y as f32, z_out,
-                    0.0, 0.0, 0.0,
-                    ref_box.length, ref_box.width, ref_box.height,
-                );
-                predicted_box.pose = ref_box.pose;
+                let predicted_box = ref_box.clone();
 
                 let class_str = match obj.classification {
                     TargetClass::Static => "static",

@@ -215,9 +215,6 @@ impl Cluster {
         }
         self.objects = new_objects;
     }
-
-    #[allow(unused)]
-    pub fn add_box3d(&mut self, _box3d: Box3D) {}
 }
 
 /// 将聚类索引结果转为 CldBud 向量（供 bench 等外部复用）。

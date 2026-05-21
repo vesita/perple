@@ -227,13 +227,6 @@ impl KalmanFilterCA {
         Ok(())
     }
 
-    pub fn adjust_noise_for_distance(&mut self, distance: f64) {
-        let scale = 1.0 + distance / 10.0;
-        let noise_pos = self.config.measurement_noise_pos * scale;
-        let noise_vel = self.config.measurement_noise_vel * scale.min(3.0);
-        self.observation_model = FullStateObservationModel4::new(noise_pos, noise_vel);
-    }
-
     pub fn adjust_noise_for_confidence(&mut self, distance: f64, confidence: f32) {
         let dist_scale = 1.0 + distance / 10.0;
         let conf_scale = 1.0 + (1.0 - confidence as f64) * 3.0;
@@ -243,7 +236,7 @@ impl KalmanFilterCA {
         self.observation_model = FullStateObservationModel4::new(noise_pos, noise_vel);
     }
 
-    pub fn clamp_state(&mut self, max_speed: f64, _max_accel: f64, _min_size: f64, _max_size: f64) {
+    pub fn clamp_state(&mut self, max_speed: f64) {
         let mut state = self.current_estimate.state().clone_owned();
         state[2] = state[2].clamp(-max_speed, max_speed);
         state[3] = state[3].clamp(-max_speed, max_speed);
