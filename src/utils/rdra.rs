@@ -31,7 +31,7 @@ impl FrameWriter {
             let _ = fs::create_dir_all(parent);
         }
         Ok(Self {
-            sql_writer: SqlWriter::new(&path)?,
+            sql_writer: SqlWriter::new(&path).map_err(|e| e.to_string())?,
             db_path: path,
             base_id: 0,
             point_counter: 0,
@@ -152,7 +152,7 @@ impl FrameWriter {
     ///
     /// 写入完成后调用，减小文件体积。
     pub fn save(&self) -> Result<(), String> {
-        self.sql_writer.save()
+        self.sql_writer.save().map_err(|e| e.to_string())
     }
 
     /// 将数据库复制到目标路径（先 VACUUM 再复制）。
@@ -167,7 +167,7 @@ impl FrameWriter {
     ///
     /// 使用 SQL ATTACH + INSERT-SELECT，避免 Rust 序列化开销。
     pub fn merge_from_db(target_path: impl AsRef<Path>, source_path: impl AsRef<Path>) -> Result<(), String> {
-        SqlWriter::merge_db(target_path.as_ref(), source_path.as_ref())
+        SqlWriter::merge_db(target_path.as_ref(), source_path.as_ref()).map_err(|e| e.to_string())
     }
 
     /// 清空所有帧数据。

@@ -1,6 +1,6 @@
 [package]
 name = "perple"
-version = "0.2.0"
+version = "1.0.0"
 edition = "2024"
 
 [dependencies]
@@ -13,8 +13,8 @@ nalgebra = { version = "0.34", features = ["std"] }
 toml = "1.1"
 serde = { version = "1.0", features = ["derive"] }
 tokio = { version = "1.52.1", features = ["full"] }
-redra_client = { path = "../redra/crates/redra_client" }
-expto = { path = "../redra/crates/expto" }
+redra_client = { git = "https://github.com/vesita/redra" }
+expto = { git = "https://github.com/vesita/redra" }
 log = "0.4"
 env_logger = "0.11"
 # 卡尔曼滤波库 (本地路径)
