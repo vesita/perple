@@ -85,7 +85,7 @@ def plot_main_metrics(results):
         stds  = [np.std(precisions), np.std(recalls), np.std(f1s)]
         colors = [C_BLUE, C_GREEN, C_RED]
 
-        bars = ax.bar(["Precision", "Recall", "F1"], means, yerr=stds,
+        bars = ax.bar(["精确率", "召回率", "F1"], means, yerr=stds,
                       capsize=4, color=colors, edgecolor="white", linewidth=0.5,
                       width=0.5, zorder=3,
                       error_kw={"linewidth": 1.2, "ecolor": C_DARK})
@@ -130,9 +130,9 @@ def plot_strategy_comparison():
     x = np.arange(len(names))
     width = 0.25
 
-    bars_p = ax.bar(x - width, precisions, width, label="Precision",
+    bars_p = ax.bar(x - width, precisions, width, label="精确率",
                     color=C_BLUE, edgecolor="white", linewidth=0.3, zorder=3)
-    bars_r = ax.bar(x, recalls, width, label="Recall",
+    bars_r = ax.bar(x, recalls, width, label="召回率",
                     color=C_GREEN, edgecolor="white", linewidth=0.3, zorder=3)
     bars_f = ax.bar(x + width, [f * 100 for f in f1s], width, label="F1×100",
                     color=C_RED, edgecolor="white", linewidth=0.3, zorder=3)
@@ -241,9 +241,9 @@ def plot_f1_threshold(pr_data):
         ax.plot(thr, f1, "-s", color=color, linewidth=2, markersize=4,
                 label="F1", zorder=4)
         ax.plot(thr, pr, "--^", color=color, linewidth=1, markersize=3,
-                alpha=0.6, label="Precision")
+                alpha=0.6, label="精确率")
         ax.plot(thr, re, "--v", color=C_GREEN, linewidth=1, markersize=3,
-                alpha=0.6, label="Recall")
+                alpha=0.6, label="召回率")
 
         bi = int(np.argmax(f1))
         ax.axvline(x=thr[bi], color=color, linestyle=":", alpha=0.4)
@@ -340,9 +340,9 @@ def plot_ablation_comparison():
                      ha="center", va="bottom")
 
     ax2.bar(x - width/2, precisions, width, color=C_BLUE, edgecolor="white",
-            label="Precision", zorder=3)
+            label="精确率", zorder=3)
     ax2.bar(x + width/2, recalls, width, color=C_GREEN, edgecolor="white",
-            label="Recall", zorder=3)
+            label="召回率", zorder=3)
     ax2.set_xticks(x)
     ax2.set_xticklabels(configs, fontsize=6.5, ha="center")
     ax2.set_ylabel("百分比 (%)")
@@ -448,7 +448,7 @@ def plot_detection_stats_from_jsonl(jsonl_path):
 
     ax = axes[2]
     cats = ["moving", "static", "movable", "floating"]
-    labels = ["Moving", "Static", "Movable", "Floating"]
+    labels = ["运动中", "静止", "可移动", "漂浮"]
     colors = [C_RED, C_BLUE, C_GREEN, C_YELLOW]
     bottom = np.zeros(len(fi))
     for cat, color, label in zip(cats, colors, labels):
@@ -529,8 +529,8 @@ def plot_stability_analysis(results):
         recalls = [r[key]["recall"] * 100 for r in results]
         f1s = [r[key]["f1"] * 100 for r in results]
 
-        ax.plot(runs, precisions, "-o", color=color, markersize=6, label="Precision")
-        ax.plot(runs, recalls, "-s", color=C_GREEN, markersize=6, label="Recall")
+        ax.plot(runs, precisions, "-o", color=color, markersize=6, label="精确率")
+        ax.plot(runs, recalls, "-s", color=C_GREEN, markersize=6, label="召回率")
         ax.plot(runs, f1s, "-^", color=C_ORANGE, markersize=6, label="F1")
         ax.set_xticks(runs)
         ax.set_xlabel("运行轮次")

@@ -102,7 +102,7 @@ def plot_trajectory(frames, tracks, output_path):
     ax.set_ylabel("Y (m)")
     ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1),
               framealpha=0.9, edgecolor="#ccc", fontsize=7,
-              title="Track ID", title_fontsize=8)
+              title="轨迹 ID", title_fontsize=8)
 
     savefig(fig, output_path)
     print(f"  [OK] 轨迹图 → {output_path}")
@@ -127,7 +127,7 @@ def plot_speed_curves(tracks, n_frames, output_path):
     if has_data:
         ax.set_xlabel("帧号")
         ax.set_ylabel("速度 (m/s)")
-        ax.legend(fontsize=7, loc="upper left", bbox_to_anchor=(1.02, 1), title="Track ID", title_fontsize=8)
+        ax.legend(fontsize=7, loc="upper left", bbox_to_anchor=(1.02, 1), title="轨迹 ID", title_fontsize=8)
         ax.set_xlim(0, n_frames)
         ax.set_ylim(bottom=0)
 
@@ -157,12 +157,13 @@ def plot_stats(frames, n_frames, output_path):
 
     ax = axes[2]
     cats = ["moving", "static", "movable", "floating"]
+    cat_labels = {"moving": "运动中", "static": "静止", "movable": "可移动", "floating": "漂浮"}
     colors_cat = [C_RED, C_BLUE, C_GREEN, C_YELLOW]
     bottom = np.zeros(len(fi))
     for cat, color in zip(cats, colors_cat):
         values = np.array([f["stats"].get(f"n_{cat}", 0) for f in frames])
         if values.sum() > 0:
-            ax.bar(fi, values, bottom=bottom, width=1.0, color=color, label=cat, alpha=0.8, edgecolor="none")
+            ax.bar(fi, values, bottom=bottom, width=1.0, color=color, label=cat_labels[cat], alpha=0.8, edgecolor="none")
             bottom += values
     ax.set_xlabel("帧号"); ax.set_ylabel("目标数")
     ax.legend(fontsize=7, loc="upper left"); ax.set_xlim(0, n_frames)

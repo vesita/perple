@@ -362,7 +362,7 @@ def run_benchmark():
     labels_map = {
         'raw_dbscan': 'Raw DBSCAN',
         'lvdot': 'Voxel+DBSCAN',
-        'prune_qt': 'Prune-QuadTree (Ours)',
+        'prune_qt': 'Prune-QuadTree (本文)',
     }
 
     # 图1: 逐帧耗时
@@ -378,9 +378,9 @@ def run_benchmark():
     ax.axhline(y=RUST_REF['lvdot']['median_ms'], color='#F39C12',
                linestyle='--', linewidth=1, alpha=0.6,
                label=f"LV-DOT Rust ref ({RUST_REF['lvdot']['median_ms']}ms)")
-    ax.set_xlabel('Frame', fontsize=12)
-    ax.set_ylabel('Time (ms)', fontsize=12)
-    ax.set_title('Per-frame Runtime Comparison', fontsize=14, fontweight='bold')
+    ax.set_xlabel('帧序号', fontsize=12)
+    ax.set_ylabel('耗时 (ms)', fontsize=12)
+    ax.set_title('逐帧耗时对比', fontsize=14, fontweight='bold')
     ax.legend(fontsize=10)
     ax.grid(True, alpha=0.3)
     ax.set_yscale('log')
@@ -388,22 +388,22 @@ def run_benchmark():
     # 图2: 降采样点数
     ax = axes[1]
     ax.plot(x, results['lvdot']['n_down'], color=colors['lvdot'],
-            label='Voxel downsample (LV-DOT)', linewidth=1.5, alpha=0.8)
+            label='体素降采样 (LV-DOT)', linewidth=1.5, alpha=0.8)
     ax.plot(x, results['prune_qt']['n_down'], color=colors['prune_qt'],
-            label='Quadtree centroids (Ours)', linewidth=1.5, alpha=0.8)
-    ax.set_xlabel('Frame', fontsize=12)
-    ax.set_ylabel('Downsampled Points', fontsize=12)
-    ax.set_title('Downsampled Point Count per Frame', fontsize=14, fontweight='bold')
+            label='四叉树质心 (本文)', linewidth=1.5, alpha=0.8)
+    ax.set_xlabel('帧序号', fontsize=12)
+    ax.set_ylabel('降采样点数', fontsize=12)
+    ax.set_title('逐帧降采样点数', fontsize=14, fontweight='bold')
     ax.legend(fontsize=11)
     ax.grid(True, alpha=0.3)
 
     # 图3: 原始点数
     ax = axes[2]
     ax.plot(x, results['raw_dbscan']['n_points'], color='#7F8C8D',
-            label='Input points (after ground removal)', linewidth=1.5, alpha=0.8)
-    ax.set_xlabel('Frame', fontsize=12)
-    ax.set_ylabel('Point Count', fontsize=12)
-    ax.set_title('Non-ground Points per Frame', fontsize=14, fontweight='bold')
+            label='输入点云 (去地面后)', linewidth=1.5, alpha=0.8)
+    ax.set_xlabel('帧序号', fontsize=12)
+    ax.set_ylabel('点数', fontsize=12)
+    ax.set_title('逐帧非地面点数', fontsize=14, fontweight='bold')
     ax.legend(fontsize=11)
     ax.grid(True, alpha=0.3)
 
@@ -414,7 +414,7 @@ def run_benchmark():
 
     # 图2: 柱状对比
     fig2, ax2 = plt.subplots(1, 1, figsize=(10, 6), dpi=150)
-    names_list = ['Raw DBSCAN', 'Voxel+DBSCAN\n(LV-DOT)', 'Prune-QuadTree\n(Ours-Python)']
+    names_list = ['Raw DBSCAN', 'Voxel+DBSCAN\n(LV-DOT)', 'Prune-QuadTree\n(本文-Python)']
     means_list = [stats['raw_dbscan']['mean'], stats['lvdot']['mean'], stats['prune_qt']['mean']]
     stds_list = [stats['raw_dbscan']['std'], stats['lvdot']['std'], stats['prune_qt']['std']]
     bar_colors = [colors['raw_dbscan'], colors['lvdot'], colors['prune_qt']]
@@ -430,8 +430,8 @@ def run_benchmark():
                 linestyle='--', linewidth=1.5, alpha=0.7,
                 label=f"PruneQt Rust: {RUST_REF['prune_qt']['median_ms']}ms")
     ax2.legend(fontsize=11)
-    ax2.set_ylabel('Average Time (ms)', fontsize=12)
-    ax2.set_title('Average Runtime per Frame (Python impl)', fontsize=14, fontweight='bold')
+    ax2.set_ylabel('平均耗时 (ms)', fontsize=12)
+    ax2.set_title('Python 实现逐帧平均耗时', fontsize=14, fontweight='bold')
     ax2.grid(True, alpha=0.3, axis='y')
     fig2.savefig(out_dir / "benchmark_bar.png", dpi=150, bbox_inches='tight')
     print(f"[OK] {out_dir / 'benchmark_bar.png'}")
@@ -442,10 +442,10 @@ def run_benchmark():
     ratio_labels = []
     if stats['raw_dbscan']['median'] > 0:
         ratios.append(stats['raw_dbscan']['median'] / stats['prune_qt']['median'])
-        ratio_labels.append('vs Raw DBSCAN')
+        ratio_labels.append('对比 Raw DBSCAN')
     if stats['lvdot']['median'] > 0:
         ratios.append(stats['lvdot']['median'] / stats['prune_qt']['median'])
-        ratio_labels.append('vs LV-DOT (Python)')
+        ratio_labels.append('对比 LV-DOT (Python)')
 
     fig3, ax3 = plt.subplots(1, 1, figsize=(8, 4), dpi=150)
     bars3 = ax3.barh(ratio_labels, ratios, color=['#3498DB', '#2ECC71'],
@@ -453,8 +453,8 @@ def run_benchmark():
     for bar, val in zip(bars3, ratios):
         ax3.text(bar.get_width() + 0.05, bar.get_y() + bar.get_height() / 2,
                  f'{val:.1f}x speedup', ha='left', va='center', fontsize=12, fontweight='bold')
-    ax3.set_xlabel('Speedup Ratio', fontsize=12)
-    ax3.set_title('Prune-QuadTree Speedup over Baselines', fontsize=14, fontweight='bold')
+    ax3.set_xlabel('加速比', fontsize=12)
+    ax3.set_title('剪叶聚类加速比', fontsize=14, fontweight='bold')
     ax3.grid(True, alpha=0.3, axis='x')
     ax3.set_xlim(0, max(ratios) * 1.5)
     fig3.savefig(out_dir / "speedup_ratio.png", dpi=150, bbox_inches='tight')

@@ -140,7 +140,7 @@ def plot_results(results: list[dict]):
             verticalalignment='top', horizontalalignment='right',
             bbox=dict(boxstyle='round,pad=0.4', facecolor='wheat', alpha=0.6))
 
-    ax.set_xlabel('Run', fontsize=14)
+    ax.set_xlabel('运行轮次', fontsize=14)
     ax.set_ylabel('耗时 (s)', fontsize=14)
     ax.set_title('管线处理耗时 (408 帧)', fontsize=16, fontweight='bold')
     ax.tick_params(labelsize=12)
@@ -167,7 +167,7 @@ def plot_results(results: list[dict]):
             verticalalignment='top', horizontalalignment='right',
             bbox=dict(boxstyle='round,pad=0.4', facecolor='wheat', alpha=0.6))
 
-    ax.set_xlabel('Run', fontsize=14)
+    ax.set_xlabel('运行轮次', fontsize=14)
     ax.set_ylabel('帧率 (FPS)', fontsize=14)
     ax.set_title('管线处理帧率', fontsize=16, fontweight='bold')
     ax.tick_params(labelsize=12)
@@ -196,7 +196,7 @@ def plot_results(results: list[dict]):
             verticalalignment='top', horizontalalignment='right',
             bbox=dict(boxstyle='round,pad=0.4', facecolor='wheat', alpha=0.6))
 
-    ax.set_xlabel('Run', fontsize=14)
+    ax.set_xlabel('运行轮次', fontsize=14)
     ax.set_ylabel('每帧耗时 (ms)', fontsize=14)
     ax.set_title('每帧处理耗时', fontsize=16, fontweight='bold')
     ax.tick_params(labelsize=12)
@@ -246,7 +246,7 @@ def print_summary(results: list[dict]):
     ms = [r['ms_per_frame'] for r in results]
 
     print("\n" + "=" * 60)
-    print("  20-RUN SPEED SUMMARY")
+    print("  20 次运行速度汇总")
     print("=" * 60)
     print(f"  {'指标':20s} {'均值':>8s} {'标准差':>8s} {'最小':>8s} {'最大':>8s}")
     print(f"  {'-'*48}")

@@ -54,7 +54,7 @@ def load_data(path=None):
 
 def plot_recall_bar(data):
     folds = data["folds"]
-    labels = [f"Fold {f['id']}\n({f['file_range']})" for f in folds]
+    labels = [f"第 {f['id']} 折\n({f['file_range']})" for f in folds]
     recalls = [f["recall_pct"] for f in folds]
     avg_val = data["avg_recall"]
 
@@ -81,7 +81,7 @@ def plot_recall_bar(data):
 
 def plot_recall_with_annotation(data):
     folds = data["folds"]
-    labels = [f"Fold {f['id']}" for f in folds]
+    labels = [f"第 {f['id']} 折" for f in folds]
     recalls = [f["recall_pct"] for f in folds]
     avg_person = [f["avg_person"] for f in folds]
     avg_val = data["avg_recall"]
@@ -124,7 +124,7 @@ def plot_detailed_table(data):
     col_labels = ["测试集", "文件范围", "帧数", "簇均值", "行人均", "有人帧"]
     rows = []
     for f in folds:
-        rows.append([f"Fold {f['id']}", f["file_range"], str(f["frames"]),
+        rows.append([f"第 {f['id']} 折", f["file_range"], str(f["frames"]),
                      f"{f['avg_clusters']:.1f}", f"{f['avg_person']:.1f}", f"{f['recall_pct']}%"])
     rows.append(["平均",
                  f"{folds[0]['file_range'].split('-')[0]}-{folds[-1]['file_range'].split('-')[1]}",

@@ -48,7 +48,7 @@ def prf1_chart(data):
     bev_p, bev_r, bev_f1 = _prf1(bev["tp"], bev["fp"], bev["fn"])
     ref_p, ref_r, ref_f1 = _prf1(ref["tp"], ref["fp"], ref["fn"])
 
-    metrics = ["Precision", "Recall", "F1"]
+    metrics = ["精确率", "召回率", "F1"]
     bev_vals = [bev_p * 100, bev_r * 100, bev_f1 * 100]
     ref_vals = [ref_p * 100, ref_r * 100, ref_f1 * 100]
 

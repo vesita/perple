@@ -193,7 +193,7 @@ def plot_classification_pie(stats, output_path):
     total = sum(c.values())
     if total == 0:
         return
-    labels = {"moving": "Moving", "static": "Static", "movable": "Movable", "floating": "Floating"}
+    labels = {"moving": "运动中", "static": "静止", "movable": "可移动", "floating": "漂浮"}
     colors = [C_RED, C_BLUE, C_GREEN, C_YELLOW]
     sizes = [c.get(k, 0) for k in labels]
 

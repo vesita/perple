@@ -47,7 +47,7 @@ def plot_pr_curve(points_person, points_all, output_path):
     r_p, p_p, ap_p = prep(points_person)
     ax.plot(r_p, p_p, "-o", color=C_BLUE, linewidth=1.8, markersize=5,
             markerfacecolor="white", markeredgecolor=C_BLUE,
-            markeredgewidth=1.2, zorder=3, label=f"Person 过滤 (AP={ap_p:.3f})")
+            markeredgewidth=1.2, zorder=3, label=f"行人过滤 (AP={ap_p:.3f})")
 
     if points_all:
         r_a, p_a, ap_a = prep(points_all)
@@ -91,7 +91,7 @@ def plot_f1_curve(points_person, points_all, output_path):
 
     ax1.plot(thr_p, f1_p, "-s", color=C_BLUE, linewidth=2, markersize=4,
              markerfacecolor="white", markeredgecolor=C_BLUE,
-             markeredgewidth=1.2, zorder=4, label="F1 (Person 过滤)")
+             markeredgewidth=1.2, zorder=4, label="F1 (行人过滤)")
     ax1.fill_between(thr_p, f1_p, alpha=0.08, color=C_BLUE)
     if thr_a:
         ax1.plot(thr_a, f1_a, "-s", color=C_RED, linewidth=2, markersize=4,
@@ -101,7 +101,7 @@ def plot_f1_curve(points_person, points_all, output_path):
 
     bi = int(np.argmax(f1_p))
     ax1.axvline(x=thr_p[bi], color=C_BLUE, linestyle=":", alpha=0.4, linewidth=0.8)
-    ax1.annotate(f"Person: 最佳 F1={f1_p[bi]:.4f} @ {thr_p[bi]:.2f}m",
+    ax1.annotate(f"行人: 最佳 F1={f1_p[bi]:.4f} @ {thr_p[bi]:.2f}m",
                  xy=(thr_p[bi], f1_p[bi]), fontsize=8, color=C_BLUE, fontweight="bold",
                  xytext=(15, -20), textcoords="offset points",
                  arrowprops=dict(arrowstyle="->", color=C_BLUE, alpha=0.6))
@@ -122,15 +122,15 @@ def plot_f1_curve(points_person, points_all, output_path):
 
     ax2 = ax1.twinx()
     ax2.plot(thr_p, pr_p, "--^", color=C_BLUE, linewidth=1.0, markersize=3,
-             alpha=0.5, label="Precision (Person)")
+             alpha=0.5, label="精确率 (行人)")
     ax2.plot(thr_p, re_p, "--v", color=C_GREEN, linewidth=1.0, markersize=3,
-             alpha=0.5, label="Recall (Person)")
+             alpha=0.5, label="召回率 (行人)")
     if thr_a:
         ax2.plot(thr_a, pr_a, "--^", color=C_RED, linewidth=1.0, markersize=3,
-                 alpha=0.4, label="Precision (全部)")
+                 alpha=0.4, label="精确率 (全部检测)")
         ax2.plot(thr_a, re_a, "--v", color="#E69D00", linewidth=1.0, markersize=3,
-                 alpha=0.4, label="Recall (全部)")
-    ax2.set_ylabel("Precision / Recall")
+                 alpha=0.4, label="召回率 (全部检测)")
+    ax2.set_ylabel("精确率 / 召回率")
     ax2.set_ylim(0, 1.0)
 
     l1, lb1 = ax1.get_legend_handles_labels()
